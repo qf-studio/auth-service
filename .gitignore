@@ -1,0 +1,47 @@
+# Navigator context markers
+.agent/.context-markers/
+
+# Keep the directory structure
+!.agent/.context-markers/.gitkeep
+
+# Navigator temporary files
+.agent/.nav-temp/
+
+# Go
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Secrets
+*.pem
+*.key
+*.crt
+!docker/certs/.gitkeep
+
+# Vendor (use go modules)
+vendor/

@@ -1,0 +1,14 @@
+{
+  "version": "6.2.1",
+  "project_name": "auth-service",
+  "tech_stack": "Go 1.24+, Gin, PostgreSQL, Redis, JWT (ES256/EdDSA)",
+  "project_management": "github",
+  "task_prefix": "TASK",
+  "team_chat": "none",
+  "auto_load_navigator": true,
+  "compact_strategy": "conservative",
+  "auto_update": {
+    "enabled": true,
+    "check_interval_hours": 1
+  }
+}
