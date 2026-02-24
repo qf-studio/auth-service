@@ -52,36 +52,60 @@
 ### Active Phase
 **Phase 1 — MVP**: First-party ecosystem authentication
 
-### Phase Overview
-```
-Phase 1 (MVP) — First-party ecosystem
-├── Users: register, login, JWT, refresh, password reset
-├── Systems: client credentials, API keys, DPoP-ready
-├── RBAC: roles in claims, middleware enforcement
-├── Security: NIST AAL2 baseline, rate limiting, audit
-├── Infra: dual-port API, PostgreSQL, Redis, Docker
-└── All clients are trusted (skip consent)
+### GitHub Issues (35 total)
 
-Phase 2 (Production) — Security depth + third-party
-├── MFA: TOTP + WebAuthn
-├── OAuth2/OIDC provider: consent flows, client registration
-├── Token Exchange (RFC 8693) for service chains
-├── DPoP, Casbin RBAC, API key management
-├── gRPC internal API, email integration
-└── Full audit logging
+**Phase 1 — MVP** (15 issues, label: `phase-1`):
+| # | Title | Depends On |
+|---|---|---|
+| #1 | Project scaffold: Go module, Docker, docker-compose | — |
+| #2 | Config management and structured logging | #1 |
+| #3 | Database layer: PostgreSQL, migrations, repositories | #1, #2 |
+| #4 | Domain types: User, Client, Token, Role | #1 |
+| #5 | JWT token system: creation, validation, JWKS | #2, #4 |
+| #6 | User registration with Argon2id password hashing | #3, #4 |
+| #7 | User login and token pair generation | #5, #6 |
+| #8 | Client credentials flow for systems and AI agents | #3, #4, #5 |
+| #9 | Basic RBAC middleware | #4, #5 |
+| #10 | Security middleware: rate limiting, headers, CORS | #2 |
+| #11 | Observability: health checks, metrics, correlation IDs | #2, #3 |
+| #12 | Public REST API: routes, validation, error responses | #5-#11 |
+| #13 | Admin API: separate port, management, introspection | #3, #5, #6, #8 |
+| #14 | Password reset flow | #2, #3, #6 |
+| #15 | Main server bootstrap and integration | #1-#14 |
 
-Phase 3 (Enterprise) — Scale + compliance
-├── Multi-tenancy (NID-based), SAML SSO
-├── RAR (RFC 9396), agent credential broker
-├── Webhooks, admin dashboard
-└── GDPR compliance
-```
+**Phase 2 — Production** (12 issues, label: `phase-2`):
+| # | Title |
+|---|---|
+| #16 | MFA: TOTP enrollment and verification |
+| #17 | WebAuthn / Passkeys support |
+| #18 | OAuth2 social login: Google, GitHub, Apple |
+| #19 | DPoP: demonstration of proof-of-possession |
+| #20 | Token exchange: RFC 8693 delegation chains |
+| #21 | Casbin RBAC: policy engine with PostgreSQL |
+| #22 | API key management |
+| #23 | Audit logging: NIST SP 800-53 compliant |
+| #24 | Session management |
+| #25 | gRPC internal API |
+| #26 | Email service integration |
+| #27 | OAuth2/OIDC provider: consent flows and discovery |
 
-### Completed Tasks
-- Research: email-service pattern extraction
-- Research: Ory Hydra architecture analysis
-- Research: NIST SP 800-63-4 requirements
-- Research: AI agent authentication patterns
+**Phase 3 — Enterprise** (8 issues, label: `phase-3`):
+| # | Title |
+|---|---|
+| #28 | Multi-tenancy: NID-based isolation |
+| #29 | RAR: rich authorization requests (RFC 9396) |
+| #30 | SAML SSO: enterprise IdP integration |
+| #31 | Webhooks: auth event notifications |
+| #32 | Admin dashboard API |
+| #33 | GDPR compliance: data export, deletion, consent |
+| #34 | Agent credential broker |
+| #35 | Advanced password policies |
+
+### Completed Research
+- email-service pattern extraction
+- Ory Hydra architecture analysis
+- NIST SP 800-63-4 requirements mapping
+- AI agent authentication patterns
 
 ---
 
