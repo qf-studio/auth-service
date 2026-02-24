@@ -54,7 +54,7 @@
 
 ### GitHub Issues (35 total)
 
-**Phase 1 — MVP** (15 issues, label: `phase-1`):
+**Phase 1 — MVP** (20 issues, label: `phase-1`):
 | # | Title | Depends On |
 |---|---|---|
 | #1 | Project scaffold: Go module, Docker, docker-compose | — |
@@ -72,8 +72,13 @@
 | #13 | Admin API: separate port, management, introspection | #3, #5, #6, #8 |
 | #14 | Password reset flow | #2, #3, #6 |
 | #15 | Main server bootstrap and integration | #1-#14 |
+| #36 | CI/CD pipeline: GitHub Actions | #1, #3 |
+| #37 | golangci-lint configuration | #1 |
+| #38 | Integration test infrastructure: testcontainers | #1, #3 |
+| #39 | OpenAPI specification and API documentation | #12, #13 |
+| #40 | Deployment strategy and infrastructure | #1, #36 |
 
-**Phase 2 — Production** (12 issues, label: `phase-2`):
+**Phase 2 — Production** (13 issues, label: `phase-2`):
 | # | Title |
 |---|---|
 | #16 | MFA: TOTP enrollment and verification |
@@ -88,6 +93,7 @@
 | #25 | gRPC internal API |
 | #26 | Email service integration |
 | #27 | OAuth2/OIDC provider: consent flows and discovery |
+| #41 | Load testing and benchmarking |
 
 **Phase 3 — Enterprise** (8 issues, label: `phase-3`):
 | # | Title |
