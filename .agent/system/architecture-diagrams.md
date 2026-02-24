@@ -274,6 +274,7 @@
 ```
 
 **Dependency rules:**
+
 - `domain` has ZERO external deps (stdlib + uuid only)
 - `config`, `logger` depend on nothing internal
 - `storage` depends on `domain` only
@@ -286,72 +287,72 @@
 
 ## 5. Database Schema (Phase 1)
 
-```
+```md
 ┌─────────────────────────────────────────┐
-│                 users                    │
+│ users │
 ├─────────────────────────────────────────┤
-│ id              UUID PK DEFAULT         │
-│                   gen_random_uuid()     │
-│ email           VARCHAR(255) UNIQUE     │
-│ password_hash   TEXT NOT NULL           │
-│ roles           TEXT[] DEFAULT '{user}' │
-│ status          VARCHAR(20) DEFAULT     │
-│                   'active'              │
-│ mfa_enabled     BOOLEAN DEFAULT false   │
-│ created_at      TIMESTAMPTZ            │
-│ updated_at      TIMESTAMPTZ            │
-│ last_login_at   TIMESTAMPTZ            │
-│ password_changed_at TIMESTAMPTZ        │
+│ id UUID PK DEFAULT │
+│ gen_random_uuid() │
+│ email VARCHAR(255) UNIQUE │
+│ password_hash TEXT NOT NULL │
+│ roles TEXT[] DEFAULT '{user}' │
+│ status VARCHAR(20) DEFAULT │
+│ 'active' │
+│ mfa_enabled BOOLEAN DEFAULT false │
+│ created_at TIMESTAMPTZ │
+│ updated_at TIMESTAMPTZ │
+│ last_login_at TIMESTAMPTZ │
+│ password_changed_at TIMESTAMPTZ │
 ├─────────────────────────────────────────┤
-│ idx_users_email    (email)              │
-│ idx_users_status   (status)             │
+│ idx_users_email (email) │
+│ idx_users_status (status) │
 └──────────────────┬──────────────────────┘
-                   │
-                   │ user_id FK
-                   ▼
+│
+│ user_id FK
+▼
 ┌─────────────────────────────────────────┐
-│            refresh_tokens                │
+│ refresh_tokens │
 ├─────────────────────────────────────────┤
-│ id              UUID PK                  │
-│ signature       TEXT UNIQUE NOT NULL     │
-│ user_id         UUID FK → users(id)     │
-│                   ON DELETE CASCADE      │
-│ client_id       UUID FK → clients(id)   │
-│                   ON DELETE CASCADE      │
-│ scopes          TEXT[] DEFAULT '{}'      │
-│ expires_at      TIMESTAMPTZ NOT NULL     │
-│ created_at      TIMESTAMPTZ             │
-│ revoked_at      TIMESTAMPTZ             │
+│ id UUID PK │
+│ signature TEXT UNIQUE NOT NULL │
+│ user_id UUID FK → users(id) │
+│ ON DELETE CASCADE │
+│ client_id UUID FK → clients(id) │
+│ ON DELETE CASCADE │
+│ scopes TEXT[] DEFAULT '{}' │
+│ expires_at TIMESTAMPTZ NOT NULL │
+│ created_at TIMESTAMPTZ │
+│ revoked_at TIMESTAMPTZ │
 ├─────────────────────────────────────────┤
-│ idx_refresh_tokens_user_id   (user_id)  │
+│ idx_refresh_tokens_user_id (user_id) │
 │ idx_refresh_tokens_signature (signature)│
-│ idx_refresh_tokens_expires   (expires)  │
+│ idx_refresh_tokens_expires (expires) │
 └─────────────────────────────────────────┘
-                   ▲
-                   │ client_id FK
-                   │
+▲
+│ client_id FK
+│
 ┌─────────────────────────────────────────┐
-│               clients                    │
+│ clients │
 ├─────────────────────────────────────────┤
-│ id              UUID PK                  │
-│ name            VARCHAR(255) NOT NULL    │
-│ client_type     VARCHAR(20) NOT NULL     │
-│                   'service' | 'agent'    │
-│ secret_hash     TEXT NOT NULL            │
-│ scopes          TEXT[] DEFAULT '{}'      │
-│ roles           TEXT[] DEFAULT           │
-│                   '{service}'            │
-│ owner           VARCHAR(255) NOT NULL    │
-│ skip_consent    BOOLEAN DEFAULT true     │
-│ access_token_ttl INTERVAL               │
-│ status          VARCHAR(20) DEFAULT     │
-│                   'active'              │
-│ created_at      TIMESTAMPTZ             │
-│ updated_at      TIMESTAMPTZ             │
-│ last_used_at    TIMESTAMPTZ             │
+│ id UUID PK │
+│ name VARCHAR(255) NOT NULL │
+│ client_type VARCHAR(20) NOT NULL │
+│ 'service' | 'agent' │
+│ secret_hash TEXT NOT NULL │
+│ scopes TEXT[] DEFAULT '{}' │
+│ roles TEXT[] DEFAULT │
+│ '{service}' │
+│ owner VARCHAR(255) NOT NULL │
+│ skip_consent BOOLEAN DEFAULT true │
+│ access_token_ttl INTERVAL │
+│ status VARCHAR(20) DEFAULT │
+│ 'active' │
+│ created_at TIMESTAMPTZ │
+│ updated_at TIMESTAMPTZ │
+│ last_used_at TIMESTAMPTZ │
 ├─────────────────────────────────────────┤
-│ idx_clients_name   (name)               │
-│ idx_clients_status (status)             │
+│ idx_clients_name (name) │
+│ idx_clients_status (status) │
 └─────────────────────────────────────────┘
 ```
 
@@ -420,55 +421,55 @@
 
 ## 7. Token Lifecycle
 
-```
-  ┌─────────────────────────────────────────────────────────────────┐
-  │                    ACCESS TOKEN (qf_at_)                        │
-  │                                                                 │
-  │  Created: on login / refresh / client_credentials               │
-  │  Format:  qf_at_ + ES256-signed JWT                            │
-  │  TTL:     15 min (users) / 5-15 min (systems, per-client)      │
-  │  Storage: NOT stored (verified by signature only)               │
-  │  Revoke:  jti added to Redis blocklist (TTL = token exp)        │
-  │  Verify:  any service with JWKS public key (no auth call)       │
-  │                                                                 │
-  │  Claims:                                                        │
-  │  ┌───────────────────────────────────────────────────────┐      │
-  │  │ sub: "user-uuid"          iss: "auth.quantflow.studio"│      │
-  │  │ aud: ["api.quantflow..."] exp: 1740000000             │      │
-  │  │ iat: 1739999100           jti: "unique-id"            │      │
-  │  │ client_id: "client-uuid"  client_type: "user|svc|agt" │      │
-  │  │ roles: ["admin","user"]   scopes: ["read","write"]    │      │
-  │  └───────────────────────────────────────────────────────┘      │
-  └─────────────────────────────────────────────────────────────────┘
+```md
+┌─────────────────────────────────────────────────────────────────┐
+│ ACCESS TOKEN (qf*at*) │
+│ │
+│ Created: on login / refresh / client*credentials │
+│ Format: qf_at* + ES256-signed JWT │
+│ TTL: 15 min (users) / 5-15 min (systems, per-client) │
+│ Storage: NOT stored (verified by signature only) │
+│ Revoke: jti added to Redis blocklist (TTL = token exp) │
+│ Verify: any service with JWKS public key (no auth call) │
+│ │
+│ Claims: │
+│ ┌───────────────────────────────────────────────────────┐ │
+│ │ sub: "user-uuid" iss: "auth.quantflow.studio"│ │
+│ │ aud: ["api.quantflow..."] exp: 1740000000 │ │
+│ │ iat: 1739999100 jti: "unique-id" │ │
+│ │ client_id: "client-uuid" client_type: "user|svc|agt" │ │
+│ │ roles: ["admin","user"] scopes: ["read","write"] │ │
+│ └───────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
 
-  ┌─────────────────────────────────────────────────────────────────┐
-  │                   REFRESH TOKEN (qf_rt_)                        │
-  │                                                                 │
-  │  Created: on login / refresh (rotation)                         │
-  │  Format:  qf_rt_ + <128-bit key> . <HMAC-SHA256 signature>     │
-  │  TTL:     14 days (users only, NO refresh for systems)          │
-  │  Storage: SIGNATURE ONLY in PostgreSQL (not full token)         │
-  │  Revoke:  set revoked_at in DB                                  │
-  │  Verify:  recompute HMAC, lookup sig in DB                      │
-  │                                                                 │
-  │  On use:  old token revoked → new pair issued (rotation)        │
-  │  On compromise: revoke-all by user_id                           │
-  └─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ REFRESH TOKEN (qf*rt*) │
+│ │
+│ Created: on login / refresh (rotation) │
+│ Format: qf*rt* + <128-bit key> . <HMAC-SHA256 signature> │
+│ TTL: 14 days (users only, NO refresh for systems) │
+│ Storage: SIGNATURE ONLY in PostgreSQL (not full token) │
+│ Revoke: set revoked_at in DB │
+│ Verify: recompute HMAC, lookup sig in DB │
+│ │
+│ On use: old token revoked → new pair issued (rotation) │
+│ On compromise: revoke-all by user_id │
+└─────────────────────────────────────────────────────────────────┘
 
-  ┌─────────────────────────────────────────────────────────────────┐
-  │                    REVOCATION FLOW                               │
-  │                                                                 │
-  │  Logout (single):                                               │
-  │    1. Add access jti → Redis blocklist (TTL = remaining exp)    │
-  │    2. Set refresh revoked_at → PostgreSQL                       │
-  │                                                                 │
-  │  Logout (all sessions):                                         │
-  │    1. Revoke ALL refresh tokens for user_id → PostgreSQL        │
-  │    2. (Access tokens expire naturally within 15 min)            │
-  │                                                                 │
-  │  Redis blocklist key: auth:revoked:<jti>                        │
-  │  Auto-cleanup: Redis TTL matches token expiration               │
-  └─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ REVOCATION FLOW │
+│ │
+│ Logout (single): │
+│ 1. Add access jti → Redis blocklist (TTL = remaining exp) │
+│ 2. Set refresh revoked_at → PostgreSQL │
+│ │
+│ Logout (all sessions): │
+│ 1. Revoke ALL refresh tokens for user_id → PostgreSQL │
+│ 2. (Access tokens expire naturally within 15 min) │
+│ │
+│ Redis blocklist key: auth:revoked:<jti> │
+│ Auto-cleanup: Redis TTL matches token expiration │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---

@@ -6,6 +6,7 @@
 
 ## Tech Stack
 
+```
 | Component | Choice | Version |
 |---|---|---|
 | Language | Go | 1.24+ |
@@ -20,10 +21,12 @@
 | Migrations | golang-migrate | latest |
 | Validation | go-playground/validator/v10 | latest |
 | Rate Limiting | golang.org/x/time/rate + Redis | latest |
+```
 
 ## Architecture Principles
 
 ### From Email-Service (Proven Patterns)
+
 - **Clean Architecture**: `cmd/` + `internal/` separation
 - **Interface-driven**: All major components behind interfaces
 - **Factory pattern**: For pluggable implementations
@@ -33,6 +36,7 @@
 - **Multi-stage Docker**: Alpine, non-root user, ca-certificates
 
 ### From Ory Hydra (Adopted Patterns)
+
 - **Dual-port API**: Public (4000) + Admin (4001) on separate ports
 - **Token signatures only**: Store `key.signature` in DB, not full tokens
 - **Token prefixes**: `qf_at_` (access), `qf_rt_` (refresh), `qf_ac_` (auth code)
@@ -41,6 +45,7 @@
 - **Challenge/verifier**: Encrypted flow state for OAuth2 redirects (Phase 2)
 
 ### Design Decisions
+
 - **Single service**: Not Hydra's multi-service model. Identity + token issuance in one deployable.
 - **Redis for ephemeral**: Sessions, token blocklist, rate limits, OTP codes. PostgreSQL for durable state.
 - **Stateless access, stateful refresh**: Access tokens verified by signature. Refresh tokens checked against Redis.
@@ -83,6 +88,7 @@ cmd/server/main.go
 ## API Surface
 
 ### Public API (Port 4000) — Internet-facing
+
 - `POST /auth/register` — User registration
 - `POST /auth/login` — User login → JWT pair
 - `POST /auth/token` — Token exchange / refresh
@@ -95,6 +101,7 @@ cmd/server/main.go
 - `GET /readiness` — Readiness probe
 
 ### Admin API (Port 4001) — Internal only
+
 - `GET/POST/PUT/DELETE /admin/users/{id}` — User management
 - `GET/POST/PUT/DELETE /admin/clients/{id}` — Client management
 - `POST /admin/token/introspect` — Token introspection

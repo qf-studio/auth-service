@@ -136,11 +136,13 @@ go build -o bin/auth-service cmd/server/main.go
 .agent/
 ├── DEVELOPMENT-README.md      # Navigator (always load first)
 ├── tasks/                     # Implementation plans
+│   └── TASK-00-research-and-plan.md  # Full research & architecture plan
 ├── system/                    # Architecture docs
-│   ├── project-architecture.md
-│   ├── security-profile.md
-│   ├── client-model.md
-│   └── tech-decisions.md
+│   ├── architecture-diagrams.md      # 8 visual diagrams
+│   ├── project-architecture.md       # Tech stack, patterns, API surface
+│   ├── security-profile.md           # NIST AAL2, crypto, audit
+│   ├── client-model.md              # Users vs Systems model
+│   └── tech-decisions.md            # Choices with rationale
 └── sops/                      # Standard Operating Procedures
     ├── integrations/
     ├── debugging/
