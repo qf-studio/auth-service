@@ -10,9 +10,10 @@
 ## Quick Start
 
 ### New to This Project?
-1. [Project Architecture](./system/project-architecture.md) - Tech stack, structure, patterns
-2. [Security Profile](./system/security-profile.md) - NIST SP 800-63-4, AAL2, crypto requirements
-3. [Client Model](./system/client-model.md) - Users vs Systems (incl. AI agents)
+1. [Architecture Diagrams](./system/architecture-diagrams.md) - Visual system overview, flows, schemas
+2. [Project Architecture](./system/project-architecture.md) - Tech stack, structure, patterns
+3. [Security Profile](./system/security-profile.md) - NIST SP 800-63-4, AAL2, crypto requirements
+4. [Client Model](./system/client-model.md) - Users vs Systems (incl. AI agents)
 
 ### Starting a Feature?
 1. Check [`tasks/`](#implementation-plans) for existing plans
@@ -34,6 +35,7 @@
 ├── DEVELOPMENT-README.md     <- You are here (navigator)
 ├── tasks/                    <- Implementation plans from tickets
 ├── system/                   <- Architecture & design docs
+│   ├── architecture-diagrams.md
 │   ├── project-architecture.md
 │   ├── security-profile.md
 │   ├── client-model.md

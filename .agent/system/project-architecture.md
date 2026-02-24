@@ -2,6 +2,8 @@
 
 **Updated**: 2026-02-24
 
+**See also**: [Architecture Diagrams](./architecture-diagrams.md) — system overview, auth flows, package graph, DB schema, deployment, token lifecycle, middleware stack
+
 ## Tech Stack
 
 | Component | Choice | Version |
