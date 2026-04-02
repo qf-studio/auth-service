@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"testing"
 	"time"
 
@@ -144,7 +143,6 @@ func TestLoad_MissingRequired(t *testing.T) {
 	// Clear any env that might leak from the test runner.
 	for k := range requiredEnv() {
 		t.Setenv(k, "")
-		os.Unsetenv(k)
 	}
 
 	_, err := Load()
