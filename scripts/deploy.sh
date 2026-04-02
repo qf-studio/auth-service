@@ -109,13 +109,13 @@ fi
 
 # Step 3: Run database migrations
 info "Step 3/5: Running database migrations..."
-# Start database services first if not running
-$COMPOSE_CMD up -d postgres redis
+# Start all services so auth-service container is running for exec
+$COMPOSE_CMD up -d
 info "Waiting for database to be ready..."
 sleep 5
 
-# Run migrations via the auth-service container
-$COMPOSE_CMD run --rm auth-service /app/auth-service migrate up 2>&1 || {
+# Run migrations via docker compose exec as specified
+$COMPOSE_CMD exec auth-service /app/auth-service migrate up 2>&1 || {
     info "Migration command not available, skipping (migrate binary may not be built yet)"
 }
 
