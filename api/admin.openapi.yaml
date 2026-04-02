@@ -1,0 +1,844 @@
+openapi: 3.1.0
+info:
+  title: Auth Service — Admin API
+  description: >
+    Internal administration API for the QuantFlow Studio auth service.
+    Provides user management, client management, token introspection,
+    and observability endpoints. Runs on port 4001, network-isolated
+    (not internet-facing).
+  version: 1.0.0
+  contact:
+    name: QuantFlow Studio
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:4001
+    description: Local development
+
+security:
+  - apiKeyAuth: []
+
+tags:
+  - name: health
+    description: Health probes
+  - name: users
+    description: User CRUD management
+  - name: clients
+    description: OAuth2 client management (services and AI agents)
+  - name: token
+    description: Token introspection
+  - name: metrics
+    description: Observability and metrics
+
+paths:
+  /health:
+    get:
+      operationId: adminGetHealth
+      summary: Admin health check
+      description: Returns admin service health status. No authentication required.
+      security: []
+      tags: [health]
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+
+  /admin/users:
+    get:
+      operationId: listUsers
+      summary: List users
+      description: >
+        Returns a paginated list of users. Supports filtering by email.
+      tags: [users]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+          description: Maximum number of users to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+          description: Number of users to skip
+        - name: email
+          in: query
+          schema:
+            type: string
+          description: Filter by email (exact match)
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponse"
+              example:
+                users:
+                  - id: 550e8400-e29b-41d4-a716-446655440000
+                    email: alice@example.com
+                    name: Alice Smith
+                    created_at: "2026-01-15T10:30:00Z"
+                    updated_at: "2026-02-20T14:00:00Z"
+                total: 42
+                limit: 20
+                offset: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createUser
+      summary: Create a user
+      description: >
+        Admin-initiated user creation. Bypasses email verification.
+      tags: [users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+            example:
+              email: bob@example.com
+              password: "admin-set-passphrase-123"
+              name: Bob Jones
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserInfo"
+              example:
+                id: 660e8400-e29b-41d4-a716-446655440001
+                email: bob@example.com
+                name: Bob Jones
+                created_at: "2026-04-02T12:00:00Z"
+                updated_at: "2026-04-02T12:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: Email already registered
+                code: BAD_REQUEST
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/UserId"
+
+    get:
+      operationId: getUser
+      summary: Get user by ID
+      description: Returns detailed user information including timestamps.
+      tags: [users]
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserInfo"
+              example:
+                id: 550e8400-e29b-41d4-a716-446655440000
+                email: alice@example.com
+                name: Alice Smith
+                created_at: "2026-01-15T10:30:00Z"
+                updated_at: "2026-02-20T14:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    put:
+      operationId: updateUser
+      summary: Update user
+      description: Updates user fields. At least one field must be provided.
+      tags: [users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+            example:
+              name: Alice Johnson
+              email: alice.johnson@example.com
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserInfo"
+              example:
+                id: 550e8400-e29b-41d4-a716-446655440000
+                email: alice.johnson@example.com
+                name: Alice Johnson
+                created_at: "2026-01-15T10:30:00Z"
+                updated_at: "2026-04-02T12:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteUser
+      summary: Delete user
+      description: >
+        Permanently deletes a user and revokes all their tokens.
+      tags: [users]
+      responses:
+        "204":
+          description: User deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/clients:
+    get:
+      operationId: listClients
+      summary: List OAuth2 clients
+      description: >
+        Returns a paginated list of registered OAuth2 clients
+        (services and AI agents).
+      tags: [clients]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Client list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientListResponse"
+              example:
+                clients:
+                  - id: svc_pipeline_runner
+                    name: Pipeline Runner
+                    type: service
+                    created_at: "2026-01-10T08:00:00Z"
+                    updated_at: "2026-01-10T08:00:00Z"
+                total: 5
+                limit: 20
+                offset: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createClient
+      summary: Register an OAuth2 client
+      description: >
+        Creates a new OAuth2 client. Returns the client secret only once
+        in the response — it cannot be retrieved again.
+      tags: [clients]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientRequest"
+            example:
+              id: svc_data_ingester
+              name: Data Ingester Service
+              type: service
+      responses:
+        "201":
+          description: Client created (secret returned only once)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientWithSecret"
+              example:
+                id: svc_data_ingester
+                name: Data Ingester Service
+                type: service
+                secret: "qf_cs_c2VjcmV0LWtleS1oZXJl..."
+                created_at: "2026-04-02T12:00:00Z"
+                updated_at: "2026-04-02T12:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Client ID already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: Client ID already exists
+                code: BAD_REQUEST
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/clients/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ClientId"
+
+    get:
+      operationId: getClient
+      summary: Get client by ID
+      description: Returns OAuth2 client details (secret is never included).
+      tags: [clients]
+      responses:
+        "200":
+          description: Client details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientInfo"
+              example:
+                id: svc_pipeline_runner
+                name: Pipeline Runner
+                type: service
+                created_at: "2026-01-10T08:00:00Z"
+                updated_at: "2026-01-10T08:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    put:
+      operationId: updateClient
+      summary: Update client
+      description: Updates OAuth2 client metadata. Cannot change the client secret.
+      tags: [clients]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClientRequest"
+            example:
+              name: Pipeline Runner v2
+      responses:
+        "200":
+          description: Client updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientInfo"
+              example:
+                id: svc_pipeline_runner
+                name: Pipeline Runner v2
+                type: service
+                created_at: "2026-01-10T08:00:00Z"
+                updated_at: "2026-04-02T12:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteClient
+      summary: Delete client
+      description: >
+        Permanently deletes an OAuth2 client and revokes all tokens
+        issued to it.
+      tags: [clients]
+      responses:
+        "204":
+          description: Client deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/token/introspect:
+    post:
+      operationId: introspectToken
+      summary: Introspect a token
+      description: >
+        Returns metadata about a token per RFC 7662. Returns `active: false`
+        for invalid, expired, or revoked tokens.
+      tags: [token]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IntrospectRequest"
+            example:
+              token: "qf_at_eyJhbGciOiJFUzI1NiIs..."
+      responses:
+        "200":
+          description: Token introspection result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntrospectResponse"
+              examples:
+                active:
+                  summary: Active token
+                  value:
+                    active: true
+                    sub: 550e8400-e29b-41d4-a716-446655440000
+                    client_id: ""
+                    token_type: access_token
+                    exp: 1743600000
+                    iat: 1743599100
+                    scope: ""
+                inactive:
+                  summary: Inactive/expired token
+                  value:
+                    active: false
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/metrics:
+    get:
+      operationId: getMetrics
+      summary: Service metrics (JSON)
+      description: >
+        Returns service metrics in JSON format for dashboards and
+        monitoring integrations.
+      tags: [metrics]
+      responses:
+        "200":
+          description: Metrics payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+              example:
+                uptime_seconds: 86400
+                active_sessions: 1234
+                total_requests: 567890
+                error_rate: 0.002
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/metrics/prometheus:
+    get:
+      operationId: getMetricsPrometheus
+      summary: Prometheus metrics
+      description: >
+        Returns service metrics in Prometheus text exposition format.
+      tags: [metrics]
+      responses:
+        "200":
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP auth_requests_total Total authentication requests
+                # TYPE auth_requests_total counter
+                auth_requests_total{method="login"} 12345
+                auth_requests_total{method="register"} 678
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Admin-Key
+      description: >
+        API key for admin access. The admin port (4001) is network-isolated
+        and should only be reachable from internal infrastructure.
+
+  parameters:
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: User UUID
+
+    ClientId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: OAuth2 client identifier
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+      required:
+        - status
+
+    AdminUserInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - name
+        - created_at
+        - updated_at
+
+    CreateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 15
+          description: Password meeting NIST SP 800-63-4 requirements
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+      required:
+        - email
+        - password
+        - name
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+      description: At least one field must be provided
+
+    UserListResponse:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminUserInfo"
+        total:
+          type: integer
+          description: Total number of users matching the query
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - users
+        - total
+        - limit
+        - offset
+
+    ClientInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Client identifier
+        name:
+          type: string
+        type:
+          type: string
+          enum: [service, agent]
+          description: "Client type: `service` for backend services, `agent` for AI agents"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - type
+        - created_at
+        - updated_at
+
+    ClientWithSecret:
+      description: >
+        Client details including the secret. The secret is only returned
+        once at creation time and cannot be retrieved again.
+      allOf:
+        - $ref: "#/components/schemas/ClientInfo"
+        - type: object
+          properties:
+            secret:
+              type: string
+              description: Client secret (shown only once)
+          required:
+            - secret
+
+    CreateClientRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Unique client identifier (e.g., `svc_pipeline_runner`)
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Human-readable client name
+        type:
+          type: string
+          enum: [service, agent]
+          description: "Client type: `service` or `agent`"
+      required:
+        - id
+        - name
+        - type
+
+    UpdateClientRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+      description: Fields to update
+
+    ClientListResponse:
+      type: object
+      properties:
+        clients:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClientInfo"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - clients
+        - total
+        - limit
+        - offset
+
+    IntrospectRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          description: The token to introspect
+      required:
+        - token
+
+    IntrospectResponse:
+      type: object
+      properties:
+        active:
+          type: boolean
+          description: Whether the token is currently valid
+        sub:
+          type: string
+          description: Subject (user ID or client ID)
+        client_id:
+          type: string
+          description: Client that the token was issued to
+        token_type:
+          type: string
+          enum: [access_token, refresh_token]
+        exp:
+          type: integer
+          description: Expiration time (Unix timestamp)
+        iat:
+          type: integer
+          description: Issued-at time (Unix timestamp)
+        scope:
+          type: string
+          description: Space-delimited scope string
+      required:
+        - active
+
+    MetricsResponse:
+      type: object
+      properties:
+        uptime_seconds:
+          type: integer
+        active_sessions:
+          type: integer
+        total_requests:
+          type: integer
+        error_rate:
+          type: number
+          format: double
+      additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      description: Standard error envelope for all API errors
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+          enum:
+            - VALIDATION_ERROR
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - NOT_FOUND
+            - RATE_LIMIT_EXCEEDED
+            - INTERNAL_ERROR
+            - BAD_REQUEST
+        details:
+          description: Additional error context
+      required:
+        - error
+        - code
+
+    ValidationErrorDetail:
+      type: object
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+      required:
+        - field
+        - message
+
+  responses:
+    BadRequest:
+      description: Invalid request body or parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: Invalid request body
+            code: BAD_REQUEST
+
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: Unauthorized
+            code: UNAUTHORIZED
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: Resource not found
+            code: NOT_FOUND
+
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorResponse"
+              - type: object
+                properties:
+                  details:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ValidationErrorDetail"
+          example:
+            error: Validation failed
+            code: VALIDATION_ERROR
+            details:
+              - field: email
+                message: must be a valid email address
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: Internal server error
+            code: INTERNAL_ERROR
