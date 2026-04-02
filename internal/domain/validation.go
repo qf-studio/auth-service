@@ -44,6 +44,26 @@ type PasswordResetConfirmRequest struct {
 	NewPassword string `json:"new_password" validate:"required,nist_password"`
 }
 
+// TokenRequest is the validated request body for the unified /auth/token endpoint.
+// It dispatches based on grant_type: "refresh_token" or "client_credentials".
+type TokenRequest struct {
+	GrantType    string `json:"grant_type"    validate:"required,oneof=refresh_token client_credentials"`
+	RefreshToken string `json:"refresh_token" validate:"required_if=GrantType refresh_token"`
+	ClientID     string `json:"client_id"     validate:"required_if=GrantType client_credentials"`
+	ClientSecret string `json:"client_secret" validate:"required_if=GrantType client_credentials"`
+}
+
+// RevokeRequest is the validated request body for token revocation.
+type RevokeRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
+// PasswordChangeRequest is the validated request body for changing a password (authenticated).
+type PasswordChangeRequest struct {
+	OldPassword string `json:"old_password" validate:"required"`
+	NewPassword string `json:"new_password" validate:"required,nist_password"`
+}
+
 // --- Validator setup ---
 
 // NewValidator creates a validator.Validate instance with custom NIST password validation registered.
@@ -116,6 +136,10 @@ func validationMessage(fe validator.FieldError) string {
 		return fmt.Sprintf("must be at least %s characters", fe.Param())
 	case "max":
 		return fmt.Sprintf("must be at most %s characters", fe.Param())
+	case "oneof":
+		return fmt.Sprintf("must be one of: %s", fe.Param())
+	case "required_if":
+		return fmt.Sprintf("%s is required for this grant type", strings.ToLower(fe.Field()))
 	default:
 		return fmt.Sprintf("failed validation: %s", fe.Tag())
 	}
