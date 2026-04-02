@@ -1,0 +1,39 @@
+openapi: "3.1.0"
+info:
+  title: Auth Service — Admin API
+  version: 0.1.0
+  description: >
+    Administrative endpoints for the QuantFlow Studio auth service.
+    Accessible only on the admin port (4001) via network-level isolation.
+  contact:
+    name: QuantFlow Studio
+    url: https://quantflow.studio
+  license:
+    name: Proprietary
+servers:
+  - url: http://localhost:4001
+    description: Local development (admin port)
+
+paths:
+  /admin/health:
+    get:
+      operationId: adminHealth
+      summary: Admin health check
+      tags: [Health]
+      responses:
+        "200":
+          description: Admin service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+      required: [status]
