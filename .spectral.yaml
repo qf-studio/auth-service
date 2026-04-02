@@ -1,0 +1,21 @@
+extends:
+  - spectral:oas
+
+rules:
+  # Require all operations to have operationId
+  operation-operationId: error
+
+  # Require all operations to have at least one tag
+  operation-tags: error
+
+  # Require info object to have contact
+  info-contact: warn
+
+  # Require all parameters to have descriptions
+  operation-parameters: error
+
+  # Require response bodies to have examples
+  oas3-valid-media-example: error
+
+  # Require descriptions on all schema properties
+  oas3-schema: error

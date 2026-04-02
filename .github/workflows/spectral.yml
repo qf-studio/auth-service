@@ -1,0 +1,27 @@
+name: OpenAPI Lint
+
+on:
+  pull_request:
+    paths:
+      - 'api/**'
+      - '.spectral.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'api/**'
+      - '.spectral.yaml'
+
+jobs:
+  spectral:
+    name: Spectral OpenAPI Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Spectral
+        uses: stoplightio/spectral-action@latest
+        with:
+          file_glob: 'api/*.openapi.yaml'
+          spectral_ruleset: '.spectral.yaml'
