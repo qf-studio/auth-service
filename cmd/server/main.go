@@ -13,10 +13,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
 	"github.com/qf-studio/auth-service/internal/storage"
+	"github.com/qf-studio/auth-service/internal/token"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -49,8 +51,17 @@ func main() {
 	}
 	defer func() { _ = redisClient.Close() }()
 
+	// ── Services ─────────────────────────────────────────────────────────
+	authSvc := auth.NewService(redisClient, log)
+	tokenSvc := token.NewService(log)
+
+	services := &api.Services{
+		Auth:  authSvc,
+		Token: tokenSvc,
+	}
+
 	// ── HTTP servers ──────────────────────────────────────────────────────
-	publicRouter := api.NewPublicRouter(&api.Services{}, nil)
+	publicRouter := api.NewPublicRouter(services, nil)
 	adminRouter := adminGinEngine()
 
 	publicSrv := &http.Server{
