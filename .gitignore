@@ -22,6 +22,8 @@ coverage.out
 .env
 .env.local
 .env.*.local
+.env.staging
+.env.production
 
 # IDE
 .idea/
@@ -33,6 +35,9 @@ coverage.out
 # OS
 .DS_Store
 Thumbs.db
+
+# Deploy state (rollback tracking)
+.deploy-state/
 
 # Docker
 docker-compose.override.yml
