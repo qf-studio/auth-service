@@ -54,9 +54,9 @@ type Services struct {
 
 // MiddlewareStack holds middleware handler functions used by the router.
 type MiddlewareStack struct {
-	CorrelationID gin.HandlerFunc
+	CorrelationID   gin.HandlerFunc
 	SecurityHeaders gin.HandlerFunc
-	RateLimit     gin.HandlerFunc
-	RequestSize   gin.HandlerFunc
-	Auth          gin.HandlerFunc
+	RateLimit       gin.HandlerFunc
+	RequestSize     gin.HandlerFunc
+	Auth            gin.HandlerFunc
 }

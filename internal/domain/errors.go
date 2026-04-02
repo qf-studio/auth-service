@@ -31,7 +31,7 @@ type ValidationErrorDetail struct {
 }
 
 // RespondWithError writes a structured JSON error response and aborts the Gin context.
-func RespondWithError(c *gin.Context, status int, code string, message string) {
+func RespondWithError(c *gin.Context, status int, code, message string) {
 	c.AbortWithStatusJSON(status, ErrorResponse{
 		Error: message,
 		Code:  code,

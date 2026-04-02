@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+
 	"github.com/qf-studio/auth-service/internal/domain"
 )
 
@@ -51,10 +52,8 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack) *gin.Engine {
 		auth.POST("/revoke", validateReq(v, &domain.RevokeRequest{}), tokenH.Revoke)
 
 		pw := auth.Group("/password")
-		{
-			pw.POST("/reset", validateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
-			pw.POST("/reset/confirm", validateReq(v, &domain.PasswordResetConfirmRequest{}), authH.ConfirmPasswordReset)
-		}
+		pw.POST("/reset", validateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
+		pw.POST("/reset/confirm", validateReq(v, &domain.PasswordResetConfirmRequest{}), authH.ConfirmPasswordReset)
 	}
 
 	// Protected auth routes (require auth middleware).
@@ -62,12 +61,10 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack) *gin.Engine {
 	if mw != nil && mw.Auth != nil {
 		protected.Use(mw.Auth)
 	}
-	{
-		protected.GET("/me", authH.Me)
-		protected.PUT("/me/password", validateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)
-		protected.POST("/logout", authH.Logout)
-		protected.POST("/logout/all", authH.LogoutAll)
-	}
+	protected.GET("/me", authH.Me)
+	protected.PUT("/me/password", validateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)
+	protected.POST("/logout", authH.Logout)
+	protected.POST("/logout/all", authH.LogoutAll)
 
 	return r
 }
