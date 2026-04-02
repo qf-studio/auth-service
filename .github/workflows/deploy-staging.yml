@@ -1,0 +1,71 @@
+name: Deploy Staging
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  DEPLOY_HOST: ${{ secrets.STAGING_HOST }}
+  DEPLOY_USER: ${{ secrets.STAGING_USER }}
+
+jobs:
+  deploy:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/auth-service
+            git fetch origin main
+            git checkout main
+            git pull origin main
+            chmod +x scripts/deploy.sh
+            ./scripts/deploy.sh staging
+
+      - name: Post-deploy health check
+        uses: appleboy/ssh-action@v1
+        id: health
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            for i in 1 2 3 4 5 6 7 8; do
+              if curl -sf --max-time 5 http://localhost:4000/health; then
+                echo "Health check passed on attempt $i"
+                exit 0
+              fi
+              echo "Attempt $i failed, waiting..."
+              sleep $((2 ** i))
+            done
+            echo "Health check failed after 8 attempts"
+            exit 1
+
+      - name: Auto-rollback on failure
+        if: failure() && steps.health.outcome == 'failure'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/auth-service
+            chmod +x scripts/rollback.sh
+            ./scripts/rollback.sh staging

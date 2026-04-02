@@ -1,0 +1,82 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm production deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  DEPLOY_HOST: ${{ secrets.PRODUCTION_HOST }}
+  DEPLOY_USER: ${{ secrets.PRODUCTION_USER }}
+
+jobs:
+  validate:
+    name: Validate Input
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        if: ${{ github.event.inputs.confirm != 'deploy' }}
+        run: |
+          echo "::error::Deployment not confirmed. You must type 'deploy' to proceed."
+          exit 1
+
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: validate
+    environment:
+      name: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            cd /opt/auth-service
+            git fetch origin main
+            git checkout main
+            git pull origin main
+            chmod +x scripts/deploy.sh
+            ./scripts/deploy.sh production
+
+      - name: Post-deploy health check
+        uses: appleboy/ssh-action@v1
+        id: health
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            for i in 1 2 3 4 5 6 7 8; do
+              if curl -sf --max-time 5 http://localhost:4000/health; then
+                echo "Health check passed on attempt $i"
+                exit 0
+              fi
+              echo "Attempt $i failed, waiting..."
+              sleep $((2 ** i))
+            done
+            echo "Health check failed after 8 attempts"
+            exit 1
+
+      - name: Auto-rollback on failure
+        if: failure() && steps.health.outcome == 'failure'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            cd /opt/auth-service
+            chmod +x scripts/rollback.sh
+            ./scripts/rollback.sh production
