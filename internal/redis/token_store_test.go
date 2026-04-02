@@ -10,8 +10,7 @@ import (
 )
 
 func TestTokenStore_StoreAndRetrieve(t *testing.T) {
-	mr, client := testRedisClient(t)
-	_ = mr
+	_, client := testRedisClient(t)
 	store := NewTokenStore(client)
 	ctx := context.Background()
 
