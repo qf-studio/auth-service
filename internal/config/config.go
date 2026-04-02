@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -93,226 +94,278 @@ type CORSConfig struct {
 	AllowedOrigins []string
 }
 
+// loader collects parsing state while reading environment variables.
+type loader struct {
+	missing []string
+}
+
+func (l *loader) requireStr(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		l.missing = append(l.missing, key)
+	}
+	return v
+}
+
+func (*loader) optStr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func (*loader) optInt(key string, fallback int) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid integer %q: %w", key, v, err)
+	}
+	return n, nil
+}
+
+func (*loader) optBool(key string, fallback bool) (bool, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s: invalid boolean %q: %w", key, v, err)
+	}
+	return b, nil
+}
+
 // Load parses all required environment variables into a Config struct.
 // It fails fast with a descriptive error listing every missing required variable.
 func Load() (*Config, error) {
-	var missing []string
+	l := &loader{}
 
-	requireStr := func(key string) string {
-		v := os.Getenv(key)
-		if v == "" {
-			missing = append(missing, key)
-		}
-		return v
-	}
-
-	optStr := func(key, fallback string) string {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-		return fallback
-	}
-
-	optInt := func(key string, fallback int) (int, error) {
-		v := os.Getenv(key)
-		if v == "" {
-			return fallback, nil
-		}
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return 0, fmt.Errorf("%s: invalid integer %q: %w", key, v, err)
-		}
-		return n, nil
-	}
-
-	optBool := func(key string, fallback bool) (bool, error) {
-		v := os.Getenv(key)
-		if v == "" {
-			return fallback, nil
-		}
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return false, fmt.Errorf("%s: invalid boolean %q: %w", key, v, err)
-		}
-		return b, nil
-	}
-
-	// ── App ──
-	appEnv := requireStr("APP_ENV")
-	logLevel := optStr("LOG_LEVEL", "info")
-
-	publicPort, err := optInt("PUBLIC_PORT", 4000)
+	app, err := loadApp(l)
 	if err != nil {
 		return nil, err
 	}
-	adminPort, err := optInt("ADMIN_PORT", 4001)
+	pg, err := loadPostgres(l)
 	if err != nil {
 		return nil, err
 	}
-
-	// ── Postgres ──
-	pgHost := requireStr("POSTGRES_HOST")
-	pgDB := requireStr("POSTGRES_DB")
-	pgUser := requireStr("POSTGRES_USER")
-	pgPassword := requireStr("POSTGRES_PASSWORD")
-	pgSSLMode := optStr("POSTGRES_SSLMODE", "disable")
-
-	pgPort, err := optInt("POSTGRES_PORT", 5432)
+	rds, err := loadRedis(l)
 	if err != nil {
 		return nil, err
 	}
-	pgMaxConns, err := optInt("POSTGRES_MAX_CONNS", 10)
+	jwt, err := loadJWT(l)
 	if err != nil {
 		return nil, err
 	}
-
-	// ── Redis ──
-	redisHost := requireStr("REDIS_HOST")
-	redisPassword := optStr("REDIS_PASSWORD", "")
-
-	redisPort, err := optInt("REDIS_PORT", 6379)
+	argon, err := loadArgon2(l)
 	if err != nil {
 		return nil, err
 	}
-	redisDB, err := optInt("REDIS_DB", 0)
+	rate, err := loadRateLimit(l)
 	if err != nil {
 		return nil, err
 	}
-
-	// ── JWT ──
-	jwtKeyPath := requireStr("JWT_PRIVATE_KEY_PATH")
-	jwtAlg := optStr("JWT_ALGORITHM", "ES256")
-
-	accessTTLStr := optStr("ACCESS_TOKEN_TTL", "15m")
-	accessTTL, err := parseDuration(accessTTLStr)
-	if err != nil {
-		return nil, fmt.Errorf("ACCESS_TOKEN_TTL: %w", err)
-	}
-
-	refreshTTLStr := optStr("REFRESH_TOKEN_TTL", "7d")
-	refreshTTL, err := parseDuration(refreshTTLStr)
-	if err != nil {
-		return nil, fmt.Errorf("REFRESH_TOKEN_TTL: %w", err)
-	}
-
-	secretsRaw := requireStr("SYSTEM_SECRETS")
-	var secrets []string
-	if secretsRaw != "" {
-		for _, s := range strings.Split(secretsRaw, ",") {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				secrets = append(secrets, s)
-			}
-		}
-	}
-
-	// ── Argon2 ──
-	pepper := requireStr("PASSWORD_PEPPER")
-
-	argonMem, err := optInt("ARGON2_MEMORY", 19456)
+	tls, err := loadTLS(l)
 	if err != nil {
 		return nil, err
 	}
-	argonTime, err := optInt("ARGON2_TIME", 2)
-	if err != nil {
-		return nil, err
-	}
-	argonPar, err := optInt("ARGON2_PARALLELISM", 1)
-	if err != nil {
-		return nil, err
+	cors := loadCORS(l)
+
+	if len(l.missing) > 0 {
+		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
 	}
 
-	// ── Rate Limiting ──
-	rps, err := optInt("RATE_LIMIT_RPS", 50)
-	if err != nil {
-		return nil, err
-	}
-	burst, err := optInt("RATE_LIMIT_BURST", 100)
-	if err != nil {
-		return nil, err
-	}
-
-	// ── TLS ──
-	tlsEnabled, err := optBool("TLS_ENABLED", false)
-	if err != nil {
-		return nil, err
-	}
-
-	// ── CORS ──
-	corsRaw := requireStr("CORS_ALLOWED_ORIGINS")
-	var origins []string
-	if corsRaw != "" {
-		for _, o := range strings.Split(corsRaw, ",") {
-			o = strings.TrimSpace(o)
-			if o != "" {
-				origins = append(origins, o)
-			}
-		}
-	}
-
-	// ── Fail fast on missing required vars ──
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
-	}
-
-	// ── Validate JWT algorithm ──
-	if jwtAlg != "ES256" && jwtAlg != "EdDSA" {
-		return nil, fmt.Errorf("JWT_ALGORITHM: unsupported algorithm %q (must be ES256 or EdDSA)", jwtAlg)
-	}
-
-	// ── Validate APP_ENV ──
-	switch appEnv {
-	case "development", "staging", "production":
-	default:
-		return nil, fmt.Errorf("APP_ENV: unsupported value %q (must be development, staging, or production)", appEnv)
+	if app.Env != "development" && app.Env != "staging" && app.Env != "production" {
+		return nil, fmt.Errorf("APP_ENV: unsupported value %q (must be development, staging, or production)", app.Env)
 	}
 
 	return &Config{
-		App: AppConfig{
-			Env:        appEnv,
-			PublicPort: publicPort,
-			AdminPort:  adminPort,
-			LogLevel:   logLevel,
-		},
-		Postgres: PostgresConfig{
-			Host:     pgHost,
-			Port:     pgPort,
-			DB:       pgDB,
-			User:     pgUser,
-			Password: pgPassword,
-			SSLMode:  pgSSLMode,
-			MaxConns: pgMaxConns,
-		},
-		Redis: RedisConfig{
-			Host:     redisHost,
-			Port:     redisPort,
-			Password: redisPassword,
-			DB:       redisDB,
-		},
-		JWT: JWTConfig{
-			PrivateKeyPath:  jwtKeyPath,
-			Algorithm:       jwtAlg,
-			AccessTokenTTL:  accessTTL,
-			RefreshTokenTTL: refreshTTL,
-			SystemSecrets:   secrets,
-		},
-		Argon2: Argon2Config{
-			Memory:      uint32(argonMem),
-			Time:        uint32(argonTime),
-			Parallelism: uint8(argonPar),
-			Pepper:      pepper,
-		},
-		Rate: RateLimitConfig{
-			RPS:   rps,
-			Burst: burst,
-		},
-		TLS: TLSConfig{
-			Enabled: tlsEnabled,
-		},
-		CORS: CORSConfig{
-			AllowedOrigins: origins,
-		},
+		App:      app,
+		Postgres: pg,
+		Redis:    rds,
+		JWT:      jwt,
+		Argon2:   argon,
+		Rate:     rate,
+		TLS:      tls,
+		CORS:     cors,
 	}, nil
+}
+
+func loadApp(l *loader) (AppConfig, error) {
+	appEnv := l.requireStr("APP_ENV")
+	logLevel := l.optStr("LOG_LEVEL", "info")
+
+	publicPort, err := l.optInt("PUBLIC_PORT", 4000)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	adminPort, err := l.optInt("ADMIN_PORT", 4001)
+	if err != nil {
+		return AppConfig{}, err
+	}
+
+	return AppConfig{
+		Env:        appEnv,
+		PublicPort: publicPort,
+		AdminPort:  adminPort,
+		LogLevel:   logLevel,
+	}, nil
+}
+
+func loadPostgres(l *loader) (PostgresConfig, error) {
+	pgHost := l.requireStr("POSTGRES_HOST")
+	pgDB := l.requireStr("POSTGRES_DB")
+	pgUser := l.requireStr("POSTGRES_USER")
+	pgPassword := l.requireStr("POSTGRES_PASSWORD")
+	pgSSLMode := l.optStr("POSTGRES_SSLMODE", "disable")
+
+	pgPort, err := l.optInt("POSTGRES_PORT", 5432)
+	if err != nil {
+		return PostgresConfig{}, err
+	}
+	pgMaxConns, err := l.optInt("POSTGRES_MAX_CONNS", 10)
+	if err != nil {
+		return PostgresConfig{}, err
+	}
+
+	return PostgresConfig{
+		Host:     pgHost,
+		Port:     pgPort,
+		DB:       pgDB,
+		User:     pgUser,
+		Password: pgPassword,
+		SSLMode:  pgSSLMode,
+		MaxConns: pgMaxConns,
+	}, nil
+}
+
+func loadRedis(l *loader) (RedisConfig, error) {
+	redisHost := l.requireStr("REDIS_HOST")
+	redisPassword := l.optStr("REDIS_PASSWORD", "")
+
+	redisPort, err := l.optInt("REDIS_PORT", 6379)
+	if err != nil {
+		return RedisConfig{}, err
+	}
+	redisDB, err := l.optInt("REDIS_DB", 0)
+	if err != nil {
+		return RedisConfig{}, err
+	}
+
+	return RedisConfig{
+		Host:     redisHost,
+		Port:     redisPort,
+		Password: redisPassword,
+		DB:       redisDB,
+	}, nil
+}
+
+func loadJWT(l *loader) (JWTConfig, error) {
+	jwtKeyPath := l.requireStr("JWT_PRIVATE_KEY_PATH")
+	jwtAlg := l.optStr("JWT_ALGORITHM", "ES256")
+
+	accessTTLStr := l.optStr("ACCESS_TOKEN_TTL", "15m")
+	accessTTL, err := parseDuration(accessTTLStr)
+	if err != nil {
+		return JWTConfig{}, fmt.Errorf("ACCESS_TOKEN_TTL: %w", err)
+	}
+
+	refreshTTLStr := l.optStr("REFRESH_TOKEN_TTL", "7d")
+	refreshTTL, err := parseDuration(refreshTTLStr)
+	if err != nil {
+		return JWTConfig{}, fmt.Errorf("REFRESH_TOKEN_TTL: %w", err)
+	}
+
+	secretsRaw := l.requireStr("SYSTEM_SECRETS")
+	secrets := splitCSV(secretsRaw)
+
+	if jwtAlg != "ES256" && jwtAlg != "EdDSA" {
+		return JWTConfig{}, fmt.Errorf("JWT_ALGORITHM: unsupported algorithm %q (must be ES256 or EdDSA)", jwtAlg)
+	}
+
+	return JWTConfig{
+		PrivateKeyPath:  jwtKeyPath,
+		Algorithm:       jwtAlg,
+		AccessTokenTTL:  accessTTL,
+		RefreshTokenTTL: refreshTTL,
+		SystemSecrets:   secrets,
+	}, nil
+}
+
+func loadArgon2(l *loader) (Argon2Config, error) {
+	pepper := l.requireStr("PASSWORD_PEPPER")
+
+	argonMem, err := l.optInt("ARGON2_MEMORY", 19456)
+	if err != nil {
+		return Argon2Config{}, err
+	}
+	argonTime, err := l.optInt("ARGON2_TIME", 2)
+	if err != nil {
+		return Argon2Config{}, err
+	}
+	argonPar, err := l.optInt("ARGON2_PARALLELISM", 1)
+	if err != nil {
+		return Argon2Config{}, err
+	}
+
+	if argonMem < 0 || argonMem > math.MaxUint32 {
+		return Argon2Config{}, fmt.Errorf("ARGON2_MEMORY: value %d out of uint32 range", argonMem)
+	}
+	if argonTime < 0 || argonTime > math.MaxUint32 {
+		return Argon2Config{}, fmt.Errorf("ARGON2_TIME: value %d out of uint32 range", argonTime)
+	}
+	if argonPar < 0 || argonPar > math.MaxUint8 {
+		return Argon2Config{}, fmt.Errorf("ARGON2_PARALLELISM: value %d out of uint8 range", argonPar)
+	}
+
+	return Argon2Config{
+		Memory:      uint32(argonMem),  //nolint:gosec // bounds checked above
+		Time:        uint32(argonTime), //nolint:gosec // bounds checked above
+		Parallelism: uint8(argonPar),   //nolint:gosec // bounds checked above
+		Pepper:      pepper,
+	}, nil
+}
+
+func loadRateLimit(l *loader) (RateLimitConfig, error) {
+	rps, err := l.optInt("RATE_LIMIT_RPS", 50)
+	if err != nil {
+		return RateLimitConfig{}, err
+	}
+	burst, err := l.optInt("RATE_LIMIT_BURST", 100)
+	if err != nil {
+		return RateLimitConfig{}, err
+	}
+	return RateLimitConfig{RPS: rps, Burst: burst}, nil
+}
+
+func loadTLS(l *loader) (TLSConfig, error) {
+	tlsEnabled, err := l.optBool("TLS_ENABLED", false)
+	if err != nil {
+		return TLSConfig{}, err
+	}
+	return TLSConfig{Enabled: tlsEnabled}, nil
+}
+
+func loadCORS(l *loader) CORSConfig {
+	corsRaw := l.requireStr("CORS_ALLOWED_ORIGINS")
+	return CORSConfig{AllowedOrigins: splitCSV(corsRaw)}
+}
+
+// splitCSV splits a comma-separated string, trims whitespace, and drops empty entries.
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // parseDuration extends time.ParseDuration to support "d" (days) suffix.

@@ -27,7 +27,7 @@ func New(level string) (*zap.Logger, error) {
 func MustNew(level string) *zap.Logger {
 	l, err := New(level)
 	if err != nil {
-		panic(fmt.Sprintf("failed to initialise logger: %v", err))
+		panic(fmt.Sprintf("failed to initialize logger: %v", err))
 	}
 	return l
 }

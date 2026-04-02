@@ -10,8 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
+
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
@@ -19,25 +23,29 @@ import (
 	"github.com/qf-studio/auth-service/internal/logger"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
-	"github.com/redis/go-redis/v9"
-	"go.uber.org/zap"
 )
 
 func main() {
-	// ── Logger — always first so subsequent errors are structured ──────────
 	log := logger.MustNew("info")
+
+	if err := run(log); err != nil {
+		log.Fatal("service failed", zap.Error(err))
+	}
+}
+
+func run(log *zap.Logger) error {
 	defer func() { _ = log.Sync() }()
 
 	// ── Config ────────────────────────────────────────────────────────────
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatal("config load failed", zap.Error(err))
+		return fmt.Errorf("config load failed: %w", err)
 	}
 
 	// Reinitialise logger at the configured log level.
 	log, err = logger.New(cfg.App.LogLevel)
 	if err != nil {
-		log.Fatal("logger reinit failed", zap.Error(err))
+		return fmt.Errorf("logger reinit failed: %w", err)
 	}
 
 	if cfg.App.Env != "development" {
@@ -47,7 +55,7 @@ func main() {
 	// ── Redis ─────────────────────────────────────────────────────────────
 	redisClient, err := storage.NewRedisClient(cfg.Redis.Addr(), cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {
-		log.Fatal("redis connection failed", zap.Error(err))
+		return fmt.Errorf("redis connection failed: %w", err)
 	}
 	defer func() { _ = redisClient.Close() }()
 
@@ -65,12 +73,14 @@ func main() {
 	adminRouter := adminGinEngine()
 
 	publicSrv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.App.PublicPort),
-		Handler: publicRouter,
+		Addr:              fmt.Sprintf(":%d", cfg.App.PublicPort),
+		Handler:           publicRouter,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	adminSrv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.App.AdminPort),
-		Handler: adminRouter,
+		Addr:              fmt.Sprintf(":%d", cfg.App.AdminPort),
+		Handler:           adminRouter,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	// Closers are released in order after HTTP drains: Redis first.
@@ -82,7 +92,7 @@ func main() {
 
 	srv := httpserver.New(log, []*http.Server{publicSrv, adminSrv}, closers)
 	if _, err := srv.Start(); err != nil {
-		log.Fatal("server start failed", zap.Error(err))
+		return fmt.Errorf("server start failed: %w", err)
 	}
 
 	log.Info("auth service started",
@@ -101,11 +111,10 @@ func main() {
 	defer cancel()
 
 	// Shutdown drains HTTP then calls redisCloser.Close().
-	// defer redisClient.Close() above runs last (logger.Sync already deferred).
 	srv.Shutdown(ctx)
 
 	log.Info("auth service stopped")
-	// Deferred logger.Sync() and redisClient.Close() execute here.
+	return nil
 }
 
 // adminGinEngine returns a minimal Gin engine for the admin port.
@@ -124,5 +133,5 @@ type redisCloser struct {
 	client *redis.Client
 }
 
-func (r *redisCloser) Name() string  { return "redis" }
-func (r *redisCloser) Close() error  { return r.client.Close() }
+func (r *redisCloser) Name() string { return "redis" }
+func (r *redisCloser) Close() error { return r.client.Close() }
