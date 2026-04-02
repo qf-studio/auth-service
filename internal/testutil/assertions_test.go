@@ -19,7 +19,7 @@ func TestAssertErrorCode(t *testing.T) {
 		Code:  domain.CodeNotFound,
 	}
 	data, _ := json.Marshal(resp)
-	rec.Code = 404
+	rec.WriteHeader(404)
 	_, _ = rec.Write(data)
 
 	// Should not fail
@@ -52,7 +52,7 @@ func TestAssertValidationError(t *testing.T) {
 		},
 	}
 	data, _ := json.Marshal(resp)
-	rec.Code = 422
+	rec.WriteHeader(422)
 	_, _ = rec.Write(data)
 
 	AssertValidationError(t, rec, "email")
