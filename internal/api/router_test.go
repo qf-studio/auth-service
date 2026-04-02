@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/qf-studio/auth-service/internal/api"
-	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/domain"
 )
 
 func init() {
@@ -23,14 +24,14 @@ func init() {
 // --- Mock services ---
 
 type mockAuthService struct {
-	registerFn            func(ctx context.Context, email, password, name string) (*api.UserInfo, error)
-	loginFn               func(ctx context.Context, email, password string) (*api.AuthResult, error)
-	resetPasswordFn       func(ctx context.Context, email string) error
+	registerFn             func(ctx context.Context, email, password, name string) (*api.UserInfo, error)
+	loginFn                func(ctx context.Context, email, password string) (*api.AuthResult, error)
+	resetPasswordFn        func(ctx context.Context, email string) error
 	confirmPasswordResetFn func(ctx context.Context, token, newPassword string) error
-	getMeFn               func(ctx context.Context, userID string) (*api.UserInfo, error)
-	changePasswordFn      func(ctx context.Context, userID, oldPassword, newPassword string) error
-	logoutFn              func(ctx context.Context, userID, token string) error
-	logoutAllFn           func(ctx context.Context, userID string) error
+	getMeFn                func(ctx context.Context, userID string) (*api.UserInfo, error)
+	changePasswordFn       func(ctx context.Context, userID, oldPassword, newPassword string) error
+	logoutFn               func(ctx context.Context, userID, token string) error
+	logoutAllFn            func(ctx context.Context, userID string) error
 }
 
 func (m *mockAuthService) Register(ctx context.Context, email, password, name string) (*api.UserInfo, error) {
@@ -167,7 +168,7 @@ func doRequest(router *gin.Engine, method, path string, body interface{}, header
 		req = httptest.NewRequest(method, path, jsonBody(body))
 		req.Header.Set("Content-Type", "application/json")
 	} else {
-		req = httptest.NewRequest(method, path, nil)
+		req = httptest.NewRequest(method, path, http.NoBody)
 	}
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
