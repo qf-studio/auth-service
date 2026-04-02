@@ -1,0 +1,64 @@
+{
+	# Global options
+	email {$TLS_EMAIL:admin@example.com}
+}
+
+# Public API — port 4000
+{$AUTH_PUBLIC_DOMAIN:auth.example.com} {
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		X-XSS-Protection "0"
+		-Server
+	}
+
+	reverse_proxy auth-service:4000 {
+		health_uri /health
+		health_interval 15s
+		health_timeout 5s
+	}
+
+	log {
+		output file /data/logs/public-access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		format json
+	}
+}
+
+# Admin API — port 4001 (restricted access)
+{$AUTH_ADMIN_DOMAIN:auth-admin.example.com} {
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		X-XSS-Protection "0"
+		-Server
+	}
+
+	# Restrict admin to allowed IP ranges
+	@blocked not remote_ip {$ADMIN_ALLOWED_IPS:10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}
+	respond @blocked 403
+
+	reverse_proxy auth-service:4001 {
+		health_uri /health
+		health_interval 15s
+		health_timeout 5s
+	}
+
+	log {
+		output file /data/logs/admin-access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		format json
+	}
+}
