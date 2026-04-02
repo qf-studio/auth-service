@@ -36,6 +36,9 @@ coverage.out
 .DS_Store
 Thumbs.db
 
+# Deploy state (rollback tracking)
+.deploy-state/
+
 # Docker
 docker-compose.override.yml
 
