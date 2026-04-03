@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/auth"
+	"github.com/qf-studio/auth-service/internal/client"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
@@ -60,9 +62,23 @@ func run(log *zap.Logger) error {
 	}
 	defer func() { _ = redisClient.Close() }()
 
+	// ── PostgreSQL ────────────────────────────────────────────────────────
+	pgPool, err := pgxpool.New(context.Background(), cfg.Postgres.DSN())
+	if err != nil {
+		return fmt.Errorf("postgres connection failed: %w", err)
+	}
+	defer pgPool.Close()
+
 	// ── Services ─────────────────────────────────────────────────────────
 	authSvc := auth.NewService(redisClient, log)
-	tokenSvc := token.NewService(log)
+
+	clientRepo := client.NewPostgresRepository(pgPool)
+	clientSvc := client.NewService(clientRepo, cfg.Argon2, log)
+
+	tokenSvc, err := token.NewService(clientSvc, cfg.JWT, log)
+	if err != nil {
+		return fmt.Errorf("token service init failed: %w", err)
+	}
 
 	services := &api.Services{
 		Auth:  authSvc,
