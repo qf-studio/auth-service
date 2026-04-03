@@ -22,6 +22,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
 	"github.com/qf-studio/auth-service/internal/middleware"
+	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
 )
@@ -60,12 +61,24 @@ func run(log *zap.Logger) error {
 	}
 	defer func() { _ = redisClient.Close() }()
 
+	// ── PostgreSQL ────────────────────────────────────────────────────────
+	pgPool, err := storage.NewPostgresPool(cfg.Postgres.DSN(), cfg.Postgres.MaxConns)
+	if err != nil {
+		return fmt.Errorf("postgres connection failed: %w", err)
+	}
+	defer pgPool.Close()
+
+	// ── Repositories ─────────────────────────────────────────────────────
+	userRepo := storage.NewPostgresUserRepository(pgPool)
+	refreshTokenRepo := storage.NewPostgresRefreshTokenRepository(pgPool)
+
 	// ── Services ─────────────────────────────────────────────────────────
-	authSvc := auth.NewService(redisClient, log)
+	hasher := password.New([]byte(cfg.Argon2.Pepper))
 	tokenSvc, err := token.NewService(cfg.JWT, redisClient, log)
 	if err != nil {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
+	authSvc := auth.NewService(redisClient, log, userRepo, refreshTokenRepo, tokenSvc, hasher)
 
 	services := &api.Services{
 		Auth:  authSvc,
