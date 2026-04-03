@@ -53,7 +53,10 @@ type Services struct {
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.
+// CORS is applied first at the engine level so preflight OPTIONS requests
+// are handled before any other middleware rejects them.
 type MiddlewareStack struct {
+	CORS            gin.HandlerFunc
 	CorrelationID   gin.HandlerFunc
 	SecurityHeaders gin.HandlerFunc
 	RateLimit       gin.HandlerFunc

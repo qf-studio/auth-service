@@ -16,7 +16,12 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack) *gin.Engine {
 	r.Use(gin.Recovery())
 
 	// Global middleware in specified order.
+	// CORS is applied first at engine level so preflight OPTIONS are handled
+	// before rate limiting or security checks reject the request.
 	if mw != nil {
+		if mw.CORS != nil {
+			r.Use(mw.CORS)
+		}
 		if mw.CorrelationID != nil {
 			r.Use(mw.CorrelationID)
 		}

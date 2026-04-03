@@ -21,6 +21,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
+	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
 )
@@ -68,8 +69,19 @@ func run(log *zap.Logger) error {
 		Token: tokenSvc,
 	}
 
+	// ── Middleware ─────────────────────────────────────────────────────────
+	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
+
+	mw := &api.MiddlewareStack{
+		CORS:            middleware.CORS(cfg.CORS),
+		CorrelationID:   middleware.CorrelationID(),
+		SecurityHeaders: middleware.SecurityHeaders(),
+		RateLimit:       rateLimiter.Handler(),
+		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
+	}
+
 	// ── HTTP servers ──────────────────────────────────────────────────────
-	publicRouter := api.NewPublicRouter(services, nil)
+	publicRouter := api.NewPublicRouter(services, mw)
 	adminRouter := adminGinEngine()
 
 	publicSrv := &http.Server{
