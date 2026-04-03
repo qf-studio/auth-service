@@ -81,7 +81,7 @@ func run(log *zap.Logger) error {
 	if err != nil {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
-	authSvc := auth.NewService(redisClient, log, userRepo, refreshTokenRepo, tokenSvc, hasher)
+	authSvc := auth.NewService(redisClient, log, userRepo, refreshTokenRepo, tokenSvc, hasher, nil)
 
 	services := &api.Services{
 		Auth:  authSvc,

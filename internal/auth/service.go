@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
@@ -46,6 +47,7 @@ type Service struct {
 	tokens    storage.RefreshTokenRepository
 	issuer    TokenIssuer
 	hasher    password.Hasher
+	breaches  BreachChecker
 }
 
 // NewService creates a new auth Service.
@@ -56,25 +58,58 @@ func NewService(
 	tokens storage.RefreshTokenRepository,
 	issuer TokenIssuer,
 	hasher password.Hasher,
+	breaches BreachChecker,
 ) *Service {
 	return &Service{
-		redis:  redisClient,
-		logger: logger,
-		users:  users,
-		tokens: tokens,
-		issuer: issuer,
-		hasher: hasher,
+		redis:    redisClient,
+		logger:   logger,
+		users:    users,
+		tokens:   tokens,
+		issuer:   issuer,
+		hasher:   hasher,
+		breaches: breaches,
 	}
 }
 
-// Register creates a new user account.
-// Stub: full implementation depends on PostgreSQL user repository (future issue).
-func (s *Service) Register(_ context.Context, email, _, name string) (*api.UserInfo, error) {
-	// TODO(GH-XX): wire PostgreSQL user repository for persistence.
+// Register creates a new user account after validating password policy.
+func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.UserInfo, error) {
+	// Validate password against NIST SP 800-63-4 policy.
+	policyErrs, err := ValidatePasswordPolicy(ctx, pwd, s.breaches)
+	if err != nil {
+		s.logger.Error("breach check failed during registration", zap.Error(err))
+		return nil, fmt.Errorf("password policy check: %w", err)
+	}
+	if len(policyErrs) > 0 {
+		return nil, fmt.Errorf("%s: %w", policyErrs[0].Message, api.ErrConflict)
+	}
+
+	hash, err := s.hasher.Hash(pwd)
+	if err != nil {
+		s.logger.Error("failed to hash password", zap.Error(err))
+		return nil, fmt.Errorf("hash password: %w", err)
+	}
+
+	user := &domain.User{
+		ID:           uuid.New().String(),
+		Email:        email,
+		PasswordHash: hash,
+		Name:         name,
+		Roles:        []string{"user"},
+	}
+
+	created, err := s.users.Create(ctx, user)
+	if err != nil {
+		if errors.Is(err, storage.ErrDuplicateEmail) {
+			return nil, fmt.Errorf("email already in use: %w", api.ErrConflict)
+		}
+		s.logger.Error("failed to create user", zap.Error(err))
+		return nil, fmt.Errorf("create user: %w", err)
+	}
+
 	return &api.UserInfo{
-		ID:    "stub-user-id",
-		Email: email,
-		Name:  name,
+		ID:    created.ID,
+		Email: created.Email,
+		Name:  created.Name,
 	}, nil
 }
 

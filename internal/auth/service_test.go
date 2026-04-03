@@ -21,10 +21,14 @@ import (
 type mockUserRepository struct {
 	findByEmailFn   func(ctx context.Context, email string) (*domain.User, error)
 	updateLastLogin func(ctx context.Context, userID string, ts time.Time) error
+	createFn        func(ctx context.Context, user *domain.User) (*domain.User, error)
 }
 
-func (m *mockUserRepository) Create(_ context.Context, _ *domain.User) (*domain.User, error) {
-	return nil, fmt.Errorf("not implemented")
+func (m *mockUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
+	if m.createFn != nil {
+		return m.createFn(ctx, user)
+	}
+	return user, nil
 }
 
 func (m *mockUserRepository) FindByID(_ context.Context, _ string) (*domain.User, error) {
@@ -97,10 +101,14 @@ func (m *mockTokenIssuer) Revoke(ctx context.Context, token string) error {
 }
 
 type mockHasher struct {
+	hashFn   func(password string) (string, error)
 	verifyFn func(password, hash string) (bool, error)
 }
 
-func (m *mockHasher) Hash(_ string) (string, error) {
+func (m *mockHasher) Hash(password string) (string, error) {
+	if m.hashFn != nil {
+		return m.hashFn(password)
+	}
 	return "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g", nil
 }
 
@@ -115,10 +123,17 @@ func (m *mockHasher) Verify(password, hash string) (bool, error) {
 
 // newUnitService creates a Service with a nil Redis client for pure unit tests
 // that don't exercise password-reset (Redis-dependent) code paths.
-func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher) *Service {
+// An optional BreachChecker can be passed; if omitted a safe no-op checker is used.
+func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher, checkers ...BreachChecker) *Service {
 	t.Helper()
 	logger, _ := zap.NewDevelopment()
-	return NewService(nil, logger, users, tokens, issuer, hasher)
+	var checker BreachChecker
+	if len(checkers) > 0 {
+		checker = checkers[0]
+	} else {
+		checker = &mockBreachChecker{}
+	}
+	return NewService(nil, logger, users, tokens, issuer, hasher, checker)
 }
 
 // newRedisClient creates a Redis client for integration tests (password reset).
@@ -154,7 +169,7 @@ func newIntegrationService(t *testing.T) *Service {
 	t.Helper()
 	client := newRedisClient(t)
 	logger, _ := zap.NewDevelopment()
-	return NewService(client, logger, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	return NewService(client, logger, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
 }
 
 // ── Login Tests ──────────────────────────────────────────────────────────────
@@ -562,13 +577,158 @@ func TestGenerateResetToken_Uniqueness(t *testing.T) {
 	}
 }
 
-func TestRegister_ReturnsStub(t *testing.T) {
-	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
-	user, err := svc.Register(context.Background(), "test@example.com", "password123456789", "Test")
+func TestRegister(t *testing.T) {
+	tests := []struct {
+		name      string
+		email     string
+		password  string
+		userName  string
+		users     *mockUserRepository
+		hasher    *mockHasher
+		checker   BreachChecker
+		wantErr   bool
+		errTarget error
+	}{
+		{
+			name:     "success",
+			email:    "test@example.com",
+			password: "a-very-secure-password",
+			userName: "Test User",
+			users:    &mockUserRepository{},
+			hasher:   &mockHasher{},
+			checker:  &mockBreachChecker{},
+			wantErr:  false,
+		},
+		{
+			name:     "password too short",
+			email:    "test@example.com",
+			password: "short",
+			userName: "Test User",
+			users:    &mockUserRepository{},
+			hasher:   &mockHasher{},
+			checker:  &mockBreachChecker{},
+			wantErr:  true,
+		},
+		{
+			name:     "breached password rejected",
+			email:    "test@example.com",
+			password: "a-very-secure-password",
+			userName: "Test User",
+			users:    &mockUserRepository{},
+			hasher:   &mockHasher{},
+			checker: &mockBreachChecker{
+				isBreachedFn: func(_ context.Context, _ string) (bool, error) {
+					return true, nil
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "duplicate email returns conflict",
+			email:    "existing@example.com",
+			password: "a-very-secure-password",
+			userName: "Test User",
+			users: &mockUserRepository{
+				createFn: func(_ context.Context, _ *domain.User) (*domain.User, error) {
+					return nil, storage.ErrDuplicateEmail
+				},
+			},
+			hasher:    &mockHasher{},
+			checker:   &mockBreachChecker{},
+			wantErr:   true,
+			errTarget: api.ErrConflict,
+		},
+		{
+			name:     "hash failure propagates",
+			email:    "test@example.com",
+			password: "a-very-secure-password",
+			userName: "Test User",
+			users:    &mockUserRepository{},
+			hasher: &mockHasher{
+				hashFn: func(_ string) (string, error) {
+					return "", fmt.Errorf("hash error")
+				},
+			},
+			checker: &mockBreachChecker{},
+			wantErr: true,
+		},
+		{
+			name:     "repository error propagates",
+			email:    "test@example.com",
+			password: "a-very-secure-password",
+			userName: "Test User",
+			users: &mockUserRepository{
+				createFn: func(_ context.Context, _ *domain.User) (*domain.User, error) {
+					return nil, fmt.Errorf("db connection lost")
+				},
+			},
+			hasher:  &mockHasher{},
+			checker: &mockBreachChecker{},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newUnitService(t, tt.users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, tt.hasher, tt.checker)
+			result, err := svc.Register(context.Background(), tt.email, tt.password, tt.userName)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errTarget != nil {
+					assert.ErrorIs(t, err, tt.errTarget)
+				}
+				assert.Nil(t, result)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				assert.Equal(t, tt.email, result.Email)
+				assert.Equal(t, tt.userName, result.Name)
+				assert.NotEmpty(t, result.ID)
+			}
+		})
+	}
+}
+
+func TestRegister_AssignsDefaultRole(t *testing.T) {
+	var createdUser *domain.User
+	users := &mockUserRepository{
+		createFn: func(_ context.Context, user *domain.User) (*domain.User, error) {
+			createdUser = user
+			return user, nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	_, err := svc.Register(context.Background(), "test@example.com", "a-very-secure-password", "Test")
 	require.NoError(t, err)
-	assert.Equal(t, "test@example.com", user.Email)
-	assert.Equal(t, "Test", user.Name)
-	assert.NotEmpty(t, user.ID)
+	require.NotNil(t, createdUser)
+	assert.Equal(t, []string{"user"}, createdUser.Roles)
+}
+
+func TestRegister_HashesPassword(t *testing.T) {
+	var createdUser *domain.User
+	users := &mockUserRepository{
+		createFn: func(_ context.Context, user *domain.User) (*domain.User, error) {
+			createdUser = user
+			return user, nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	_, err := svc.Register(context.Background(), "test@example.com", "a-very-secure-password", "Test")
+	require.NoError(t, err)
+	require.NotNil(t, createdUser)
+	assert.NotEqual(t, "a-very-secure-password", createdUser.PasswordHash, "password should be hashed")
+	assert.Contains(t, createdUser.PasswordHash, "$argon2id$", "hash should be argon2id format")
+}
+
+func TestRegister_DoesNotReturnPasswordHash(t *testing.T) {
+	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	result, err := svc.Register(context.Background(), "test@example.com", "a-very-secure-password", "Test")
+	require.NoError(t, err)
+	// api.UserInfo has no PasswordHash field — this test verifies the return type is correct.
+	assert.Equal(t, "test@example.com", result.Email)
+	assert.Equal(t, "Test", result.Name)
 }
 
 func TestGetMe_ReturnsStub(t *testing.T) {
