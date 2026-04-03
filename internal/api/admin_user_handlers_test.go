@@ -346,6 +346,39 @@ func TestAdminUnlockUser_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// --- Update User Validation ---
+
+func TestAdminUpdateUser_InvalidJSON(t *testing.T) {
+	r := newAdminUserRouter(&mockAdminUserService{})
+	w := doRequest(r, http.MethodPatch, "/admin/users/user-42", nil)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// --- Lock User InvalidJSON ---
+
+func TestAdminLockUser_InvalidJSON(t *testing.T) {
+	r := newAdminUserRouter(&mockAdminUserService{})
+	w := doRequest(r, http.MethodPost, "/admin/users/user-42/lock", nil)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// --- List Users with negative page ---
+
+func TestAdminListUsers_NegativePage(t *testing.T) {
+	svc := &mockAdminUserService{
+		listUsersFn: func(_ context.Context, page, perPage int, _ bool) (*api.AdminUserList, error) {
+			assert.Equal(t, 1, page) // Clamped to 1
+			return &api.AdminUserList{Users: []api.AdminUser{}, Total: 0, Page: page, PerPage: perPage}, nil
+		},
+	}
+	r := newAdminUserRouter(svc)
+	w := doRequest(r, http.MethodGet, "/admin/users?page=-1", nil)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 // --- Admin Health ---
 
 func TestAdminHealth(t *testing.T) {
