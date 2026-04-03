@@ -409,3 +409,14 @@ func TestLoad_InvalidLockoutDuration(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "RATE_LIMIT_LOCKOUT_DURATION")
 }
+
+func BenchmarkLoad(b *testing.B) {
+	env := requiredEnv()
+	for k, v := range env {
+		b.Setenv(k, v)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = Load()
+	}
+}
