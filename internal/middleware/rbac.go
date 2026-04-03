@@ -89,7 +89,7 @@ func RequireScopes(scopes ...string) gin.HandlerFunc {
 // ANY of the specified types (any-of semantics). Returns 403 Forbidden if the
 // client type does not match.
 // Returns 401 Unauthorized if AuthMiddleware has not populated claims.
-func RequireClientType(types ...string) gin.HandlerFunc {
+func RequireClientType(types ...domain.ClientType) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, err := GetClaims(c)
 		if err != nil {

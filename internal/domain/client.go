@@ -10,21 +10,15 @@ import (
 type ClientType string
 
 const (
+	ClientTypeUser    ClientType = "user"
 	ClientTypeService ClientType = "service"
 	ClientTypeAgent   ClientType = "agent"
 )
 
-// ValidClientTypes enumerates all accepted ClientType values.
-var ValidClientTypes = []ClientType{ClientTypeService, ClientTypeAgent}
-
 // IsValid returns true if the ClientType is a recognised value.
+// It delegates to ValidClientTypes (defined in admin.go) for a single source of truth.
 func (ct ClientType) IsValid() bool {
-	for _, v := range ValidClientTypes {
-		if ct == v {
-			return true
-		}
-	}
-	return false
+	return ValidClientTypes[string(ct)]
 }
 
 // Client status constants.

@@ -1,12 +1,5 @@
 package domain
 
-// Client type constants for use in TokenClaims.ClientType.
-const (
-	ClientTypeUser    = "user"
-	ClientTypeService = "service"
-	ClientTypeAgent   = "agent"
-)
-
 // TokenClaims holds the parsed and validated claims from an access token.
 // It is populated by AuthMiddleware and stored in the Gin context under
 // the key "claims". Handlers retrieve it via middleware.GetClaims.
@@ -24,9 +17,9 @@ type TokenClaims struct {
 	// all required scopes must be present.
 	Scopes []string
 
-	// ClientType identifies the kind of entity that owns this token:
-	// "user", "service", or "agent".
-	ClientType string
+	// ClientType identifies the kind of entity that owns this token.
+	// See ClientTypeUser, ClientTypeService, ClientTypeAgent in client.go.
+	ClientType ClientType
 
 	// TokenID is the unique identifier (jti) used for revocation checks
 	// against the Redis blocklist.

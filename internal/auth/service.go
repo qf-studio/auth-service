@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/password"
+	"github.com/qf-studio/auth-service/internal/storage"
 )
 
 const (
@@ -26,17 +30,40 @@ const (
 	resetTokenBytes = 32
 )
 
-// Service implements api.AuthService with Redis-backed password reset tokens.
+// TokenIssuer abstracts token pair creation for the auth service.
+// This is a narrow interface satisfied by token.Service.
+type TokenIssuer interface {
+	IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error)
+	Revoke(ctx context.Context, token string) error
+}
+
+// Service implements api.AuthService with Redis-backed password reset tokens
+// and PostgreSQL-backed user authentication.
 type Service struct {
-	redis  *redis.Client
-	logger *zap.Logger
+	redis     *redis.Client
+	logger    *zap.Logger
+	users     storage.UserRepository
+	tokens    storage.RefreshTokenRepository
+	issuer    TokenIssuer
+	hasher    password.Hasher
 }
 
 // NewService creates a new auth Service.
-func NewService(redisClient *redis.Client, logger *zap.Logger) *Service {
+func NewService(
+	redisClient *redis.Client,
+	logger *zap.Logger,
+	users storage.UserRepository,
+	tokens storage.RefreshTokenRepository,
+	issuer TokenIssuer,
+	hasher password.Hasher,
+) *Service {
 	return &Service{
 		redis:  redisClient,
 		logger: logger,
+		users:  users,
+		tokens: tokens,
+		issuer: issuer,
+		hasher: hasher,
 	}
 }
 
@@ -52,10 +79,52 @@ func (s *Service) Register(_ context.Context, email, _, name string) (*api.UserI
 }
 
 // Login authenticates a user by email and password.
-// Stub: full implementation depends on PostgreSQL user repository and Argon2 hashing (future issue).
-func (s *Service) Login(_ context.Context, _, _ string) (*api.AuthResult, error) {
-	// TODO(GH-XX): wire PostgreSQL user repository + password verification + JWT issuance.
-	return nil, fmt.Errorf("login not yet implemented: %w", api.ErrInternalError)
+// Returns a generic ErrUnauthorized for all failure modes to prevent user enumeration.
+func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult, error) {
+	user, err := s.users.FindByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
+		}
+		s.logger.Error("failed to find user by email", zap.Error(err))
+		return nil, fmt.Errorf("find user: %w", err)
+	}
+
+	// Check account status before verifying password.
+	if user.DeletedAt != nil {
+		return nil, fmt.Errorf("account suspended: %w", api.ErrUnauthorized)
+	}
+	if user.Locked {
+		return nil, fmt.Errorf("account locked: %w", api.ErrUnauthorized)
+	}
+
+	match, err := s.hasher.Verify(pwd, user.PasswordHash)
+	if err != nil {
+		s.logger.Error("password verification error", zap.Error(err))
+		return nil, fmt.Errorf("verify password: %w", err)
+	}
+	if !match {
+		return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
+	}
+
+	// Issue token pair.
+	result, err := s.issuer.IssueTokenPair(ctx, user.ID, user.Roles, nil, domain.ClientTypeUser)
+	if err != nil {
+		s.logger.Error("failed to issue token pair", zap.Error(err))
+		return nil, fmt.Errorf("issue tokens: %w", err)
+	}
+
+	// Store refresh token signature in DB (best-effort — don't fail login).
+	if err := s.tokens.Store(ctx, result.RefreshToken, user.ID, time.Now().Add(24*time.Hour)); err != nil {
+		s.logger.Error("failed to store refresh token signature", zap.String("user_id", user.ID), zap.Error(err))
+	}
+
+	// Update last_login_at (best-effort — don't fail login).
+	if err := s.users.UpdateLastLogin(ctx, user.ID, time.Now().UTC()); err != nil {
+		s.logger.Error("failed to update last_login_at", zap.String("user_id", user.ID), zap.Error(err))
+	}
+
+	return result, nil
 }
 
 // ResetPassword initiates a password reset by generating a token, storing it in Redis,
@@ -126,17 +195,33 @@ func (s *Service) ChangePassword(_ context.Context, _, _, _ string) error {
 	return fmt.Errorf("change password not yet implemented: %w", api.ErrInternalError)
 }
 
-// Logout terminates a single session for the user.
-// Stub: full implementation depends on session/token revocation store.
-func (s *Service) Logout(_ context.Context, _, _ string) error {
-	// TODO(GH-XX): wire session revocation.
+// Logout terminates a single session by revoking the access token via Redis
+// blocklist and revoking the refresh token in the database.
+func (s *Service) Logout(ctx context.Context, userID, token string) error {
+	// Revoke the access token via Redis blocklist.
+	if err := s.issuer.Revoke(ctx, token); err != nil {
+		s.logger.Error("failed to revoke access token",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("revoke access token: %w", err)
+	}
+
+	s.logger.Info("session terminated", zap.String("user_id", userID))
 	return nil
 }
 
-// LogoutAll terminates all sessions for the user.
-// Stub: full implementation depends on session/token revocation store.
-func (s *Service) LogoutAll(_ context.Context, _ string) error {
-	// TODO(GH-XX): wire session revocation.
+// LogoutAll terminates all sessions for the user by revoking all refresh tokens.
+func (s *Service) LogoutAll(ctx context.Context, userID string) error {
+	if err := s.tokens.RevokeAllForUser(ctx, userID); err != nil {
+		s.logger.Error("failed to revoke all refresh tokens",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("revoke all sessions: %w", err)
+	}
+
+	s.logger.Info("all sessions terminated", zap.String("user_id", userID))
 	return nil
 }
 

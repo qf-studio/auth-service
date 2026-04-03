@@ -205,43 +205,43 @@ func TestRequireClientType(t *testing.T) {
 	tests := []struct {
 		name       string
 		claims     *domain.TokenClaims
-		allowed    []string
+		allowed    []domain.ClientType
 		wantStatus int
 	}{
 		{
 			name:       "user client type allowed",
 			claims:     &domain.TokenClaims{ClientType: domain.ClientTypeUser},
-			allowed:    []string{domain.ClientTypeUser},
+			allowed:    []domain.ClientType{domain.ClientTypeUser},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "service client type allowed",
 			claims:     &domain.TokenClaims{ClientType: domain.ClientTypeService},
-			allowed:    []string{domain.ClientTypeService},
+			allowed:    []domain.ClientType{domain.ClientTypeService},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "agent client type allowed among multiple",
 			claims:     &domain.TokenClaims{ClientType: domain.ClientTypeAgent},
-			allowed:    []string{domain.ClientTypeService, domain.ClientTypeAgent},
+			allowed:    []domain.ClientType{domain.ClientTypeService, domain.ClientTypeAgent},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "user type rejected from service-only route",
 			claims:     &domain.TokenClaims{ClientType: domain.ClientTypeUser},
-			allowed:    []string{domain.ClientTypeService},
+			allowed:    []domain.ClientType{domain.ClientTypeService},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "unknown client type rejected",
-			claims:     &domain.TokenClaims{ClientType: "unknown"},
-			allowed:    []string{domain.ClientTypeUser, domain.ClientTypeService, domain.ClientTypeAgent},
+			claims:     &domain.TokenClaims{ClientType: domain.ClientType("unknown")},
+			allowed:    []domain.ClientType{domain.ClientTypeUser, domain.ClientTypeService, domain.ClientTypeAgent},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "no claims returns 401",
 			claims:     nil,
-			allowed:    []string{domain.ClientTypeUser},
+			allowed:    []domain.ClientType{domain.ClientTypeUser},
 			wantStatus: http.StatusUnauthorized,
 		},
 	}
