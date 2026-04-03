@@ -13,6 +13,7 @@ import (
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/middleware"
 )
 
@@ -43,7 +44,7 @@ func newIntegrationRouter(
 	mw := &api.MiddlewareStack{
 		Auth: middleware.AuthMiddleware(validator),
 	}
-	return api.NewPublicRouter(svc, mw)
+	return api.NewPublicRouter(svc, mw, health.NewService())
 }
 
 // TestProtectedRoutes_RequireAuth verifies that all protected endpoints

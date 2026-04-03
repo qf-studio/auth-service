@@ -7,11 +7,12 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // NewPublicRouter creates a *gin.Engine with the full public API route tree.
-// Middleware stack order: correlation ID → security headers → rate limit → request size → routes.
-func NewPublicRouter(svc *Services, mw *MiddlewareStack) *gin.Engine {
+// Middleware stack order: correlation ID → security headers → rate limit → request size → metrics → routes.
+func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Service) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -34,6 +35,9 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack) *gin.Engine {
 		if mw.RequestSize != nil {
 			r.Use(mw.RequestSize)
 		}
+		if mw.Metrics != nil {
+			r.Use(mw.Metrics)
+		}
 	}
 
 	v := domain.NewValidator()
@@ -41,9 +45,10 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack) *gin.Engine {
 	tokenH := NewTokenHandlers(svc.Token)
 
 	// Health probes (no middleware beyond global).
-	r.GET("/health", healthHandler)
-	r.GET("/liveness", healthHandler)
-	r.GET("/readiness", healthHandler)
+	hh := newHealthHandlers(healthSvc)
+	r.GET("/health", hh.health)
+	r.GET("/liveness", hh.liveness)
+	r.GET("/readiness", hh.readiness)
 
 	// JWKS endpoint (public, no auth).
 	r.GET("/.well-known/jwks.json", tokenH.JWKS)
@@ -97,6 +102,34 @@ func validateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
 	}
 }
 
-func healthHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+// healthHandlers wraps a health.Service to provide HTTP handler methods.
+type healthHandlers struct {
+	svc *health.Service
+}
+
+func newHealthHandlers(svc *health.Service) *healthHandlers {
+	return &healthHandlers{svc: svc}
+}
+
+func (h *healthHandlers) health(c *gin.Context) {
+	resp := h.svc.Health(c.Request.Context())
+	status := http.StatusOK
+	if resp.Status == health.StatusUnhealthy {
+		status = http.StatusServiceUnavailable
+	}
+	c.JSON(status, resp.ToMarshalable())
+}
+
+func (h *healthHandlers) liveness(c *gin.Context) {
+	resp := h.svc.Liveness()
+	c.JSON(http.StatusOK, resp.ToMarshalable())
+}
+
+func (h *healthHandlers) readiness(c *gin.Context) {
+	resp := h.svc.Readiness(c.Request.Context())
+	status := http.StatusOK
+	if resp.Status != health.StatusHealthy {
+		status = http.StatusServiceUnavailable
+	}
+	c.JSON(status, resp.ToMarshalable())
 }

@@ -19,8 +19,10 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
+	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
+	"github.com/qf-studio/auth-service/internal/metrics"
 	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
@@ -72,16 +74,26 @@ func run(log *zap.Logger) error {
 		Token: tokenSvc,
 	}
 
+	// ── Health ─────────────────────────────────────────────────────────────
+	healthCheckers := []health.Checker{
+		health.NewRedisChecker(redisClient),
+	}
+	healthSvc := health.NewService(healthCheckers...)
+
+	// ── Metrics ───────────────────────────────────────────────────────────
+	metricsCollector := metrics.New()
+
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
 
 	mw := &api.MiddlewareStack{
 		CORS:            middleware.CORS(cfg.CORS),
-		CorrelationID:   middleware.CorrelationID(),
+		CorrelationID:   middleware.CorrelationID(log),
 		SecurityHeaders: middleware.SecurityHeaders(),
 		RateLimit:       rateLimiter.Handler(),
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
 		Auth:            middleware.AuthMiddleware(tokenSvc),
+		Metrics:         metricsCollector.Middleware(),
 	}
 
 	// ── Admin services ────────────────────────────────────────────────────
@@ -89,9 +101,14 @@ func run(log *zap.Logger) error {
 	// For now, nil services are guarded by NewAdminRouter's nil checks.
 	adminServices := &api.AdminServices{}
 
+	adminDeps := &api.AdminDeps{
+		Health:  healthSvc,
+		Metrics: metricsCollector,
+	}
+
 	// ── HTTP servers ──────────────────────────────────────────────────────
-	publicRouter := api.NewPublicRouter(services, mw)
-	adminRouter := api.NewAdminRouter(adminServices)
+	publicRouter := api.NewPublicRouter(services, mw, healthSvc)
+	adminRouter := api.NewAdminRouter(adminServices, adminDeps)
 
 	publicSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.App.PublicPort),

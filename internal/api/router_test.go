@@ -15,6 +15,7 @@ import (
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/health"
 )
 
 func init() {
@@ -154,7 +155,7 @@ func newTestRouter(authSvc api.AuthService, tokenSvc api.TokenService) *gin.Engi
 		c.Next()
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
-	return api.NewPublicRouter(svc, mw)
+	return api.NewPublicRouter(svc, mw, health.NewService())
 }
 
 func jsonBody(v interface{}) *bytes.Buffer {
@@ -187,9 +188,9 @@ func TestHealthEndpoints(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			w := doRequest(router, http.MethodGet, path, nil)
 			assert.Equal(t, http.StatusOK, w.Code)
-			var resp map[string]string
+			var resp map[string]interface{}
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-			assert.Equal(t, "ok", resp["status"])
+			assert.Equal(t, "healthy", resp["status"])
 		})
 	}
 }
@@ -602,7 +603,7 @@ func TestMiddlewareOrdering(t *testing.T) {
 	}
 
 	svc := &api.Services{Auth: &mockAuthService{}, Token: &mockTokenService{}}
-	router := api.NewPublicRouter(svc, mw)
+	router := api.NewPublicRouter(svc, mw, health.NewService())
 
 	w := doRequest(router, http.MethodGet, "/health", nil)
 	require.Equal(t, http.StatusOK, w.Code)

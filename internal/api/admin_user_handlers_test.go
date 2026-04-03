@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // --- Mock AdminUserService ---
@@ -91,7 +92,7 @@ func (m *mockAdminUserService) UnlockUser(ctx context.Context, userID string) (*
 
 func newAdminUserRouter(userSvc api.AdminUserService) *gin.Engine {
 	svc := &api.AdminServices{Users: userSvc}
-	return api.NewAdminRouter(svc)
+	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
 }
 
 // --- List Users ---
@@ -353,9 +354,9 @@ func TestAdminHealth(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "ok", resp["status"])
+	assert.Equal(t, "healthy", resp["status"])
 }
 
 // --- Correlation ID ---
