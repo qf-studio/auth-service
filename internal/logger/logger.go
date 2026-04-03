@@ -15,32 +15,45 @@ var (
 	once     sync.Once
 )
 
-// Init initializes the package-level singleton logger based on the environment.
+// New creates a new *zap.Logger configured for the given environment.
 //
 //   - "production" / "staging": JSON encoder, InfoLevel, ISO 8601 timestamps.
-//   - "development": console encoder, DebugLevel.
+//   - "development": console encoder, DebugLevel, ISO 8601 timestamps.
 //
-// Any other value returns an error without initializing the logger.
+// Any other value returns an error.
+func New(environment string) (*zap.Logger, error) {
+	var cfg zap.Config
+	switch environment {
+	case "production", "staging":
+		cfg = zap.NewProductionConfig()
+		cfg.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+		cfg.EncoderConfig.TimeKey = "timestamp"
+		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	case "development":
+		cfg = zap.NewDevelopmentConfig()
+		cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	default:
+		return nil, fmt.Errorf("unsupported environment %q: must be development, staging, or production", environment)
+	}
+	return cfg.Build()
+}
+
+// MustNew calls New and panics if logger creation fails.
+func MustNew(environment string) *zap.Logger {
+	l, err := New(environment)
+	if err != nil {
+		panic(fmt.Sprintf("logger.MustNew: %v", err))
+	}
+	return l
+}
+
+// Init initializes the package-level singleton logger based on the environment.
 // Calling Init more than once is safe but has no effect after the first call.
 func Init(environment string) error {
 	var initErr error
 	once.Do(func() {
-		var cfg zap.Config
-		switch environment {
-		case "production", "staging":
-			cfg = zap.NewProductionConfig()
-			cfg.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
-			cfg.EncoderConfig.TimeKey = "timestamp"
-			cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-		case "development":
-			cfg = zap.NewDevelopmentConfig()
-			cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
-			cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-		default:
-			initErr = fmt.Errorf("unsupported environment %q: must be development, staging, or production", environment)
-			return
-		}
-		instance, initErr = cfg.Build()
+		instance, initErr = New(environment)
 	})
 	return initErr
 }

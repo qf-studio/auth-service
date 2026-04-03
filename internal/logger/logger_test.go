@@ -141,6 +141,75 @@ func TestConvenienceFunctions(t *testing.T) {
 	assert.Equal(t, "warn message", logs.All()[3].Message)
 }
 
+func TestNew(t *testing.T) {
+	tests := []struct {
+		name        string
+		environment string
+		wantErr     bool
+		errContains string
+		debugOn     bool
+	}{
+		{
+			name:        "production returns JSON/Info logger",
+			environment: "production",
+			debugOn:     false,
+		},
+		{
+			name:        "staging returns JSON/Info logger",
+			environment: "staging",
+			debugOn:     false,
+		},
+		{
+			name:        "development returns console/Debug logger",
+			environment: "development",
+			debugOn:     true,
+		},
+		{
+			name:        "invalid environment returns error",
+			environment: "invalid",
+			wantErr:     true,
+			errContains: "unsupported environment",
+		},
+		{
+			name:        "empty environment returns error",
+			environment: "",
+			wantErr:     true,
+			errContains: "unsupported environment",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, err := New(tt.environment)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Nil(t, log)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, log)
+			assert.Equal(t, tt.debugOn, log.Core().Enabled(zapcore.DebugLevel))
+			assert.True(t, log.Core().Enabled(zapcore.InfoLevel))
+		})
+	}
+}
+
+func TestMustNew_Valid(t *testing.T) {
+	assert.NotPanics(t, func() {
+		log := MustNew("production")
+		require.NotNil(t, log)
+	})
+}
+
+func TestMustNew_Panics(t *testing.T) {
+	assert.PanicsWithValue(t, `logger.MustNew: unsupported environment "bogus": must be development, staging, or production`, func() {
+		MustNew("bogus")
+	})
+}
+
 func TestConvenienceFunctions_BeforeInit(t *testing.T) {
 	resetForTesting()
 
