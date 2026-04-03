@@ -96,6 +96,17 @@ func (m *mockTokenIssuer) Revoke(ctx context.Context, token string) error {
 	return nil
 }
 
+type mockBreachChecker struct {
+	isBreachedFn func(ctx context.Context, password string) (bool, error)
+}
+
+func (m *mockBreachChecker) IsBreached(ctx context.Context, password string) (bool, error) {
+	if m.isBreachedFn != nil {
+		return m.isBreachedFn(ctx, password)
+	}
+	return false, nil
+}
+
 type mockHasher struct {
 	verifyFn func(password, hash string) (bool, error)
 }
@@ -118,7 +129,7 @@ func (m *mockHasher) Verify(password, hash string) (bool, error) {
 func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher) *Service {
 	t.Helper()
 	logger, _ := zap.NewDevelopment()
-	return NewService(nil, logger, users, tokens, issuer, hasher)
+	return NewService(nil, logger, users, tokens, issuer, hasher, &mockBreachChecker{})
 }
 
 // newRedisClient creates a Redis client for integration tests (password reset).
@@ -154,7 +165,7 @@ func newIntegrationService(t *testing.T) *Service {
 	t.Helper()
 	client := newRedisClient(t)
 	logger, _ := zap.NewDevelopment()
-	return NewService(client, logger, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	return NewService(client, logger, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
 }
 
 // ── Login Tests ──────────────────────────────────────────────────────────────
