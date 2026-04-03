@@ -16,7 +16,9 @@ import (
 
 // ClientRepository defines persistence operations for OAuth2 client management.
 type ClientRepository interface {
-	List(ctx context.Context, limit, offset int, includeRevoked bool) ([]*domain.Client, int, error)
+	// List returns a paginated list of clients. clientType filters by type (empty = all).
+	// When includeRevoked is false, revoked clients are excluded.
+	List(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.Client, error)
 	FindByName(ctx context.Context, name string) (*domain.Client, error)
 	Create(ctx context.Context, client *domain.Client) (*domain.Client, error)
@@ -55,22 +57,40 @@ func scanClient(row pgx.Row) (*domain.Client, error) {
 	return c, nil
 }
 
-// List returns a paginated list of clients. When includeRevoked is false,
-// revoked clients are excluded.
-func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, includeRevoked bool) ([]*domain.Client, int, error) {
-	whereClause := ""
+// List returns a paginated list of clients. clientType filters by type (empty = all).
+// When includeRevoked is false, revoked clients are excluded.
+func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error) {
+	conditions := []string{}
+	args := []interface{}{}
+
 	if !includeRevoked {
-		whereClause = "WHERE status != 'revoked'"
+		conditions = append(conditions, "status != 'revoked'")
+	}
+	if clientType != "" {
+		args = append(args, clientType)
+		conditions = append(conditions, fmt.Sprintf("client_type = $%d", len(args)))
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + conditions[0]
+		for _, c := range conditions[1:] {
+			whereClause += " AND " + c
+		}
 	}
 
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM clients %s`, whereClause)
 	var total int
-	if err := r.pool.QueryRow(ctx, countQuery).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count clients: %w", err)
 	}
 
-	query := fmt.Sprintf(`SELECT %s FROM clients %s ORDER BY created_at DESC LIMIT $1 OFFSET $2`, clientColumns, whereClause)
-	rows, err := r.pool.Query(ctx, query, limit, offset)
+	// Pagination params follow any filter params.
+	paginationOffset := len(args)
+	args = append(args, limit, offset)
+	query := fmt.Sprintf(`SELECT %s FROM clients %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
+		clientColumns, whereClause, paginationOffset+1, paginationOffset+2)
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list clients: %w", err)
 	}

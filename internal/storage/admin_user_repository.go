@@ -15,7 +15,10 @@ import (
 
 // AdminUserRepository defines persistence operations for admin user management.
 type AdminUserRepository interface {
-	List(ctx context.Context, limit, offset int, includeDeleted bool) ([]*domain.User, int, error)
+	// List returns a paginated list of users, filtered by status.
+	// Valid status values: "" (all non-deleted), "active" (non-locked, non-deleted),
+	// "locked" (locked, non-deleted), "deleted" (soft-deleted only).
+	List(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error)
 	FindByID(ctx context.Context, id string) (*domain.User, error)
 	Create(ctx context.Context, user *domain.User) (*domain.User, error)
 	Update(ctx context.Context, user *domain.User) (*domain.User, error)
@@ -52,10 +55,18 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 	return u, nil
 }
 
-// List returns a paginated list of users. When includeDeleted is false, soft-deleted users are excluded.
-func (r *PostgresAdminUserRepository) List(ctx context.Context, limit, offset int, includeDeleted bool) ([]*domain.User, int, error) {
-	whereClause := ""
-	if !includeDeleted {
+// List returns a paginated list of users filtered by status.
+// Status values: "" (all non-deleted), "active", "locked", "deleted".
+func (r *PostgresAdminUserRepository) List(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error) {
+	var whereClause string
+	switch status {
+	case "active":
+		whereClause = "WHERE deleted_at IS NULL AND locked = false"
+	case "locked":
+		whereClause = "WHERE deleted_at IS NULL AND locked = true"
+	case "deleted":
+		whereClause = "WHERE deleted_at IS NOT NULL"
+	default:
 		whereClause = "WHERE deleted_at IS NULL"
 	}
 

@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // TokenClaims holds the parsed and validated claims from an access token.
 // It is populated by AuthMiddleware and stored in the Gin context under
 // the key "claims". Handlers retrieve it via middleware.GetClaims.
@@ -24,4 +26,12 @@ type TokenClaims struct {
 	// TokenID is the unique identifier (jti) used for revocation checks
 	// against the Redis blocklist.
 	TokenID string
+
+	// ExpiresAt is the token expiration time from the JWT exp claim.
+	// Zero value means not set (e.g., when parsing non-JWT tokens).
+	ExpiresAt time.Time
+
+	// IssuedAt is the token issuance time from the JWT iat claim.
+	// Zero value means not set.
+	IssuedAt time.Time
 }
