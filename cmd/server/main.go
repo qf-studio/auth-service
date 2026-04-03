@@ -78,6 +78,7 @@ func run(log *zap.Logger) error {
 		SecurityHeaders: middleware.SecurityHeaders(),
 		RateLimit:       rateLimiter.Handler(),
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
+		Auth:            middleware.AuthMiddleware(tokenSvc),
 	}
 
 	// ── HTTP servers ──────────────────────────────────────────────────────
