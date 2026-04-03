@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
+	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
 )
@@ -68,9 +71,22 @@ func run(log *zap.Logger) error {
 		Token: tokenSvc,
 	}
 
+	// ── Middleware ────────────────────────────────────────────────────────
+	healthHandler := middleware.NewHealthHandler(
+		middleware.NewRedisHealthChecker(redisClient),
+	)
+	metrics := middleware.NewMetricsCollector(prometheus.DefaultRegisterer)
+
+	mw := &api.MiddlewareStack{
+		CorrelationID: middleware.CorrelationID(),
+		HealthCheck:   healthHandler.Health,
+		Liveness:      healthHandler.Liveness,
+		Readiness:     healthHandler.Readiness,
+	}
+
 	// ── HTTP servers ──────────────────────────────────────────────────────
-	publicRouter := api.NewPublicRouter(services, nil)
-	adminRouter := adminGinEngine()
+	publicRouter := api.NewPublicRouter(services, mw)
+	adminRouter := adminGinEngine(metrics)
 
 	publicSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.App.PublicPort),
@@ -119,12 +135,14 @@ func run(log *zap.Logger) error {
 
 // adminGinEngine returns a minimal Gin engine for the admin port.
 // Full admin routes will be wired up in a later issue.
-func adminGinEngine() *gin.Engine {
+func adminGinEngine(metrics *middleware.MetricsCollector) *gin.Engine {
+	_ = metrics // metrics registered on prometheus.DefaultRegisterer; promhttp reads from it.
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	r.GET("/metrics/prometheus", gin.WrapH(promhttp.Handler()))
 	return r
 }
 

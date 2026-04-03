@@ -59,4 +59,9 @@ type MiddlewareStack struct {
 	RateLimit       gin.HandlerFunc
 	RequestSize     gin.HandlerFunc
 	Auth            gin.HandlerFunc
+
+	// Health probe handlers wired from middleware.HealthHandler.
+	HealthCheck gin.HandlerFunc
+	Liveness    gin.HandlerFunc
+	Readiness   gin.HandlerFunc
 }

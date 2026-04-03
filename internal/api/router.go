@@ -36,9 +36,21 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack) *gin.Engine {
 	tokenH := NewTokenHandlers(svc.Token)
 
 	// Health probes (no middleware beyond global).
-	r.GET("/health", healthHandler)
-	r.GET("/liveness", healthHandler)
-	r.GET("/readiness", healthHandler)
+	if mw != nil && mw.HealthCheck != nil {
+		r.GET("/health", mw.HealthCheck)
+	} else {
+		r.GET("/health", fallbackHealthHandler)
+	}
+	if mw != nil && mw.Liveness != nil {
+		r.GET("/liveness", mw.Liveness)
+	} else {
+		r.GET("/liveness", fallbackHealthHandler)
+	}
+	if mw != nil && mw.Readiness != nil {
+		r.GET("/readiness", mw.Readiness)
+	} else {
+		r.GET("/readiness", fallbackHealthHandler)
+	}
 
 	// JWKS endpoint (public, no auth).
 	r.GET("/.well-known/jwks.json", tokenH.JWKS)
@@ -92,6 +104,6 @@ func validateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
 	}
 }
 
-func healthHandler(c *gin.Context) {
+func fallbackHealthHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
