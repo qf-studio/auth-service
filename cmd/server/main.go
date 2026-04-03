@@ -80,9 +80,14 @@ func run(log *zap.Logger) error {
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
 	}
 
+	// ── Admin services ────────────────────────────────────────────────────
+	// Admin service implementations will be wired here as they are built.
+	// For now, nil services are guarded by NewAdminRouter's nil checks.
+	adminServices := &api.AdminServices{}
+
 	// ── HTTP servers ──────────────────────────────────────────────────────
 	publicRouter := api.NewPublicRouter(services, mw)
-	adminRouter := adminGinEngine()
+	adminRouter := api.NewAdminRouter(adminServices)
 
 	publicSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.App.PublicPort),
@@ -127,17 +132,6 @@ func run(log *zap.Logger) error {
 
 	log.Info("auth service stopped")
 	return nil
-}
-
-// adminGinEngine returns a minimal Gin engine for the admin port.
-// Full admin routes will be wired up in a later issue.
-func adminGinEngine() *gin.Engine {
-	r := gin.New()
-	r.Use(gin.Recovery())
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
-	return r
 }
 
 // redisCloser adapts *redis.Client to the httpserver.Closer interface.
