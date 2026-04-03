@@ -11,14 +11,15 @@ import (
 
 // Config holds all configuration for the auth service, parsed from environment variables.
 type Config struct {
-	App      AppConfig
-	Postgres PostgresConfig
-	Redis    RedisConfig
-	JWT      JWTConfig
-	Argon2   Argon2Config
-	Rate     RateLimitConfig
-	TLS      TLSConfig
-	CORS     CORSConfig
+	App          AppConfig
+	Postgres     PostgresConfig
+	Redis        RedisConfig
+	JWT          JWTConfig
+	Argon2       Argon2Config
+	Rate         RateLimitConfig
+	TLS          TLSConfig
+	CORS         CORSConfig
+	RequestLimit RequestLimitConfig
 }
 
 // AppConfig holds server-level settings.
@@ -80,8 +81,11 @@ type Argon2Config struct {
 
 // RateLimitConfig holds rate limiting parameters.
 type RateLimitConfig struct {
-	RPS   int
-	Burst int
+	RPS                     int
+	Burst                   int
+	ProgressiveDelayAfter   int           // number of failed attempts before progressive delay kicks in
+	LockoutDuration         time.Duration // duration to lock out after MaxFailedAttempts
+	MaxFailedAttempts       int           // failed attempts before lockout
 }
 
 // TLSConfig holds TLS settings.
@@ -91,7 +95,18 @@ type TLSConfig struct {
 
 // CORSConfig holds CORS settings.
 type CORSConfig struct {
-	AllowedOrigins []string
+	AllowedOrigins   []string
+	AllowedMethods   []string
+	AllowedHeaders   []string
+	ExposeHeaders    []string
+	AllowCredentials bool
+	MaxAge           time.Duration
+}
+
+// RequestLimitConfig holds request size and timeout limits.
+type RequestLimitConfig struct {
+	MaxBodySize    int64         // bytes
+	RequestTimeout time.Duration
 }
 
 // loader collects parsing state while reading environment variables.
@@ -171,7 +186,14 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cors := loadCORS(l)
+	cors, err := loadCORS(l)
+	if err != nil {
+		return nil, err
+	}
+	reqLimit, err := loadRequestLimit(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -182,14 +204,15 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		App:      app,
-		Postgres: pg,
-		Redis:    rds,
-		JWT:      jwt,
-		Argon2:   argon,
-		Rate:     rate,
-		TLS:      tls,
-		CORS:     cors,
+		App:          app,
+		Postgres:     pg,
+		Redis:        rds,
+		JWT:          jwt,
+		Argon2:       argon,
+		Rate:         rate,
+		TLS:          tls,
+		CORS:         cors,
+		RequestLimit: reqLimit,
 	}, nil
 }
 
@@ -337,7 +360,28 @@ func loadRateLimit(l *loader) (RateLimitConfig, error) {
 	if err != nil {
 		return RateLimitConfig{}, err
 	}
-	return RateLimitConfig{RPS: rps, Burst: burst}, nil
+	progressiveDelayAfter, err := l.optInt("RATE_LIMIT_PROGRESSIVE_DELAY_AFTER", 5)
+	if err != nil {
+		return RateLimitConfig{}, err
+	}
+	maxFailedAttempts, err := l.optInt("RATE_LIMIT_MAX_FAILED_ATTEMPTS", 10)
+	if err != nil {
+		return RateLimitConfig{}, err
+	}
+
+	lockoutDurStr := l.optStr("RATE_LIMIT_LOCKOUT_DURATION", "15m")
+	lockoutDur, err := parseDuration(lockoutDurStr)
+	if err != nil {
+		return RateLimitConfig{}, fmt.Errorf("RATE_LIMIT_LOCKOUT_DURATION: %w", err)
+	}
+
+	return RateLimitConfig{
+		RPS:                   rps,
+		Burst:                 burst,
+		ProgressiveDelayAfter: progressiveDelayAfter,
+		LockoutDuration:       lockoutDur,
+		MaxFailedAttempts:     maxFailedAttempts,
+	}, nil
 }
 
 func loadTLS(l *loader) (TLSConfig, error) {
@@ -348,9 +392,49 @@ func loadTLS(l *loader) (TLSConfig, error) {
 	return TLSConfig{Enabled: tlsEnabled}, nil
 }
 
-func loadCORS(l *loader) CORSConfig {
+func loadCORS(l *loader) (CORSConfig, error) {
 	corsRaw := l.requireStr("CORS_ALLOWED_ORIGINS")
-	return CORSConfig{AllowedOrigins: splitCSV(corsRaw)}
+	allowedMethods := l.optStr("CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+	allowedHeaders := l.optStr("CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Request-ID")
+	exposeHeaders := l.optStr("CORS_EXPOSE_HEADERS", "X-Request-ID")
+
+	allowCredentials, err := l.optBool("CORS_ALLOW_CREDENTIALS", false)
+	if err != nil {
+		return CORSConfig{}, err
+	}
+
+	maxAgeStr := l.optStr("CORS_MAX_AGE", "12h")
+	maxAge, err := parseDuration(maxAgeStr)
+	if err != nil {
+		return CORSConfig{}, fmt.Errorf("CORS_MAX_AGE: %w", err)
+	}
+
+	return CORSConfig{
+		AllowedOrigins:   splitCSV(corsRaw),
+		AllowedMethods:   splitCSV(allowedMethods),
+		AllowedHeaders:   splitCSV(allowedHeaders),
+		ExposeHeaders:    splitCSV(exposeHeaders),
+		AllowCredentials: allowCredentials,
+		MaxAge:           maxAge,
+	}, nil
+}
+
+func loadRequestLimit(l *loader) (RequestLimitConfig, error) {
+	maxBodySize, err := l.optInt("REQUEST_MAX_BODY_SIZE", 1<<20) // 1 MiB default
+	if err != nil {
+		return RequestLimitConfig{}, err
+	}
+
+	requestTimeoutStr := l.optStr("REQUEST_TIMEOUT", "30s")
+	requestTimeout, err := parseDuration(requestTimeoutStr)
+	if err != nil {
+		return RequestLimitConfig{}, fmt.Errorf("REQUEST_TIMEOUT: %w", err)
+	}
+
+	return RequestLimitConfig{
+		MaxBodySize:    int64(maxBodySize), //nolint:gosec // non-negative validated by optInt
+		RequestTimeout: requestTimeout,
+	}, nil
 }
 
 // splitCSV splits a comma-separated string, trims whitespace, and drops empty entries.
