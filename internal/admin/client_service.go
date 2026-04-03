@@ -43,10 +43,10 @@ func NewClientService(repo storage.ClientRepository, hasher password.Hasher, log
 }
 
 // ListClients returns a paginated list of OAuth2 clients.
-func (s *ClientService) ListClients(ctx context.Context, page, perPage int, includeDeleted bool) (*api.AdminClientList, error) {
+func (s *ClientService) ListClients(ctx context.Context, page, perPage int, clientType string, includeRevoked bool) (*api.AdminClientList, error) {
 	offset := (page - 1) * perPage
 
-	clients, total, err := s.repo.List(ctx, perPage, offset, includeDeleted)
+	clients, total, err := s.repo.List(ctx, perPage, offset, clientType, includeRevoked)
 	if err != nil {
 		s.logger.Error("list clients failed", zap.Error(err))
 		return nil, fmt.Errorf("list clients: %w", api.ErrInternalError)

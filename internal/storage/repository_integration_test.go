@@ -364,7 +364,7 @@ func TestPostgresAdminUserRepository_List(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	users, total, err := repo.List(ctx, 10, 0, false)
+	users, total, err := repo.List(ctx, 10, 0, "")
 	require.NoError(t, err)
 	assert.Equal(t, 3, total)
 	assert.Len(t, users, 3)
@@ -381,18 +381,18 @@ func TestPostgresAdminUserRepository_List_Pagination(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	users, total, err := repo.List(ctx, 2, 0, false)
+	users, total, err := repo.List(ctx, 2, 0, "")
 	require.NoError(t, err)
 	assert.Equal(t, 5, total)
 	assert.Len(t, users, 2)
 
-	users, total, err = repo.List(ctx, 2, 4, false)
+	users, total, err = repo.List(ctx, 2, 4, "")
 	require.NoError(t, err)
 	assert.Equal(t, 5, total)
 	assert.Len(t, users, 1)
 }
 
-func TestPostgresAdminUserRepository_List_IncludeDeleted(t *testing.T) {
+func TestPostgresAdminUserRepository_List_StatusFilter(t *testing.T) {
 	pool := testPool(t)
 	repo := storage.NewPostgresAdminUserRepository(pool)
 	userRepo := storage.NewPostgresUserRepository(pool)
@@ -405,14 +405,14 @@ func TestPostgresAdminUserRepository_List_IncludeDeleted(t *testing.T) {
 	err = repo.SoftDelete(ctx, u.ID)
 	require.NoError(t, err)
 
-	// Without includeDeleted, should be empty.
-	users, total, err := repo.List(ctx, 10, 0, false)
+	// Default status (empty) excludes deleted.
+	users, total, err := repo.List(ctx, 10, 0, "")
 	require.NoError(t, err)
 	assert.Equal(t, 0, total)
 	assert.Empty(t, users)
 
-	// With includeDeleted, should find the deleted user.
-	users, total, err = repo.List(ctx, 10, 0, true)
+	// Status "deleted" returns only deleted users.
+	users, total, err = repo.List(ctx, 10, 0, "deleted")
 	require.NoError(t, err)
 	assert.Equal(t, 1, total)
 	assert.Len(t, users, 1)
@@ -726,7 +726,7 @@ func TestPostgresClientRepository_List(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	clients, total, err := repo.List(ctx, 10, 0, false)
+	clients, total, err := repo.List(ctx, 10, 0, "", false)
 	require.NoError(t, err)
 	assert.Equal(t, 3, total)
 	assert.Len(t, clients, 3)
@@ -742,7 +742,7 @@ func TestPostgresClientRepository_List_Pagination(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	clients, total, err := repo.List(ctx, 2, 0, false)
+	clients, total, err := repo.List(ctx, 2, 0, "", false)
 	require.NoError(t, err)
 	assert.Equal(t, 5, total)
 	assert.Len(t, clients, 2)
@@ -761,13 +761,13 @@ func TestPostgresClientRepository_List_IncludeRevoked(t *testing.T) {
 	require.NoError(t, err)
 
 	// Without includeRevoked.
-	clients, total, err := repo.List(ctx, 10, 0, false)
+	clients, total, err := repo.List(ctx, 10, 0, "", false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, total)
 	assert.Empty(t, clients)
 
 	// With includeRevoked.
-	clients, total, err = repo.List(ctx, 10, 0, true)
+	clients, total, err = repo.List(ctx, 10, 0, "", true)
 	require.NoError(t, err)
 	assert.Equal(t, 1, total)
 	assert.Len(t, clients, 1)

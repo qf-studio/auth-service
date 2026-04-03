@@ -19,7 +19,7 @@ import (
 // --- Mock AdminUserService ---
 
 type mockAdminUserService struct {
-	listUsersFn  func(ctx context.Context, page, perPage int, includeDeleted bool) (*api.AdminUserList, error)
+	listUsersFn  func(ctx context.Context, page, perPage int, status string) (*api.AdminUserList, error)
 	getUserFn    func(ctx context.Context, userID string) (*api.AdminUser, error)
 	createUserFn func(ctx context.Context, req *api.CreateUserRequest) (*api.AdminUser, error)
 	updateUserFn func(ctx context.Context, userID string, req *api.UpdateUserRequest) (*api.AdminUser, error)
@@ -28,9 +28,9 @@ type mockAdminUserService struct {
 	unlockUserFn func(ctx context.Context, userID string) (*api.AdminUser, error)
 }
 
-func (m *mockAdminUserService) ListUsers(ctx context.Context, page, perPage int, includeDeleted bool) (*api.AdminUserList, error) {
+func (m *mockAdminUserService) ListUsers(ctx context.Context, page, perPage int, status string) (*api.AdminUserList, error) {
 	if m.listUsersFn != nil {
-		return m.listUsersFn(ctx, page, perPage, includeDeleted)
+		return m.listUsersFn(ctx, page, perPage, status)
 	}
 	return &api.AdminUserList{
 		Users:   []api.AdminUser{{ID: "u1", Email: "a@b.com", Name: "Alice", Roles: []string{"user"}, CreatedAt: time.Now(), UpdatedAt: time.Now()}},
@@ -113,15 +113,15 @@ func TestAdminListUsers_Success(t *testing.T) {
 
 func TestAdminListUsers_Pagination(t *testing.T) {
 	svc := &mockAdminUserService{
-		listUsersFn: func(_ context.Context, page, perPage int, includeDeleted bool) (*api.AdminUserList, error) {
+		listUsersFn: func(_ context.Context, page, perPage int, status string) (*api.AdminUserList, error) {
 			assert.Equal(t, 2, page)
 			assert.Equal(t, 10, perPage)
-			assert.True(t, includeDeleted)
+			assert.Equal(t, "deleted", status)
 			return &api.AdminUserList{Users: []api.AdminUser{}, Total: 25, Page: page, PerPage: perPage}, nil
 		},
 	}
 	r := newAdminUserRouter(svc)
-	w := doRequest(r, http.MethodGet, "/admin/users?page=2&per_page=10&include_deleted=true", nil)
+	w := doRequest(r, http.MethodGet, "/admin/users?page=2&per_page=10&status=deleted", nil)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -134,7 +134,7 @@ func TestAdminListUsers_Pagination(t *testing.T) {
 
 func TestAdminListUsers_ServiceError(t *testing.T) {
 	svc := &mockAdminUserService{
-		listUsersFn: func(_ context.Context, _, _ int, _ bool) (*api.AdminUserList, error) {
+		listUsersFn: func(_ context.Context, _, _ int, _ string) (*api.AdminUserList, error) {
 			return nil, fmt.Errorf("db down: %w", api.ErrInternalError)
 		},
 	}
@@ -368,7 +368,7 @@ func TestAdminLockUser_InvalidJSON(t *testing.T) {
 
 func TestAdminListUsers_NegativePage(t *testing.T) {
 	svc := &mockAdminUserService{
-		listUsersFn: func(_ context.Context, page, perPage int, _ bool) (*api.AdminUserList, error) {
+		listUsersFn: func(_ context.Context, page, perPage int, _ string) (*api.AdminUserList, error) {
 			assert.Equal(t, 1, page) // Clamped to 1
 			return &api.AdminUserList{Users: []api.AdminUser{}, Total: 0, Page: page, PerPage: perPage}, nil
 		},

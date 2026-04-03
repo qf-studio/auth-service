@@ -18,7 +18,7 @@ import (
 // --- Mock AdminUserRepository ---
 
 type mockAdminUserRepo struct {
-	listFn       func(ctx context.Context, limit, offset int, includeDeleted bool) ([]*domain.User, int, error)
+	listFn       func(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error)
 	findByIDFn   func(ctx context.Context, id string) (*domain.User, error)
 	createFn     func(ctx context.Context, user *domain.User) (*domain.User, error)
 	updateFn     func(ctx context.Context, user *domain.User) (*domain.User, error)
@@ -27,9 +27,9 @@ type mockAdminUserRepo struct {
 	unlockFn     func(ctx context.Context, id string) (*domain.User, error)
 }
 
-func (m *mockAdminUserRepo) List(ctx context.Context, limit, offset int, includeDeleted bool) ([]*domain.User, int, error) {
+func (m *mockAdminUserRepo) List(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error) {
 	if m.listFn != nil {
-		return m.listFn(ctx, limit, offset, includeDeleted)
+		return m.listFn(ctx, limit, offset, status)
 	}
 	return []*domain.User{testUser()}, 1, nil
 }
@@ -130,16 +130,16 @@ func newTestUserService(repo *mockAdminUserRepo) *UserService {
 
 func TestUserService_ListUsers(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		listFn: func(_ context.Context, limit, offset int, includeDeleted bool) ([]*domain.User, int, error) {
+		listFn: func(_ context.Context, limit, offset int, status string) ([]*domain.User, int, error) {
 			assert.Equal(t, 20, limit)
 			assert.Equal(t, 0, offset)
-			assert.False(t, includeDeleted)
+			assert.Equal(t, "", status)
 			return []*domain.User{testUser()}, 1, nil
 		},
 	}
 	svc := newTestUserService(repo)
 
-	result, err := svc.ListUsers(context.Background(), 1, 20, false)
+	result, err := svc.ListUsers(context.Background(), 1, 20, "")
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Total)
 	assert.Len(t, result.Users, 1)
@@ -149,7 +149,7 @@ func TestUserService_ListUsers(t *testing.T) {
 
 func TestUserService_ListUsers_Pagination(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		listFn: func(_ context.Context, limit, offset int, _ bool) ([]*domain.User, int, error) {
+		listFn: func(_ context.Context, limit, offset int, _ string) ([]*domain.User, int, error) {
 			assert.Equal(t, 10, limit)
 			assert.Equal(t, 20, offset) // page 3 * perPage 10 - 10 = 20
 			return []*domain.User{}, 50, nil
@@ -157,7 +157,7 @@ func TestUserService_ListUsers_Pagination(t *testing.T) {
 	}
 	svc := newTestUserService(repo)
 
-	result, err := svc.ListUsers(context.Background(), 3, 10, false)
+	result, err := svc.ListUsers(context.Background(), 3, 10, "")
 	require.NoError(t, err)
 	assert.Equal(t, 50, result.Total)
 	assert.Equal(t, 3, result.Page)
@@ -165,13 +165,13 @@ func TestUserService_ListUsers_Pagination(t *testing.T) {
 
 func TestUserService_ListUsers_Error(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		listFn: func(_ context.Context, _, _ int, _ bool) ([]*domain.User, int, error) {
+		listFn: func(_ context.Context, _, _ int, _ string) ([]*domain.User, int, error) {
 			return nil, 0, fmt.Errorf("db error")
 		},
 	}
 	svc := newTestUserService(repo)
 
-	_, err := svc.ListUsers(context.Background(), 1, 20, false)
+	_, err := svc.ListUsers(context.Background(), 1, 20, "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrInternalError)
 }

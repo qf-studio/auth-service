@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -20,12 +19,12 @@ func NewAdminUserHandlers(users AdminUserService) *AdminUserHandlers {
 }
 
 // List handles GET /admin/users.
-// Query params: page (default 1), per_page (default 20), include_deleted (default false).
+// Query params: page (default 1), per_page (default 20), status (active|locked|deleted, default empty = all non-deleted).
 func (h *AdminUserHandlers) List(c *gin.Context) {
 	page, perPage := parsePagination(c)
-	includeDeleted, _ := strconv.ParseBool(c.DefaultQuery("include_deleted", "false"))
+	status := c.DefaultQuery("status", "")
 
-	result, err := h.users.ListUsers(c.Request.Context(), page, perPage, includeDeleted)
+	result, err := h.users.ListUsers(c.Request.Context(), page, perPage, status)
 	if err != nil {
 		handleServiceError(c, err)
 		return
