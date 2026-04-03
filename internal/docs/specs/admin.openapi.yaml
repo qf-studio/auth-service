@@ -1,10 +1,11 @@
 openapi: "3.1.0"
 info:
   title: Auth Service — Admin API
-  version: 0.1.0
+  version: 0.2.0
   description: >
     Administrative endpoints for the QuantFlow Studio auth service.
     Accessible only on the admin port (4001) via network-level isolation.
+    No bearer-token auth required — access is controlled at the network layer.
   contact:
     name: QuantFlow Studio
     url: https://quantflow.studio
@@ -13,6 +14,18 @@ info:
 servers:
   - url: http://localhost:4001
     description: Local development (admin port)
+
+tags:
+  - name: Health
+    description: Service health and readiness probes
+  - name: Users
+    description: User account management
+  - name: Clients
+    description: OAuth2 client (service/agent) management
+  - name: Tokens
+    description: Token introspection and administrative revocation
+  - name: Metrics
+    description: Prometheus metrics
 
 paths:
   /admin/health:
@@ -28,8 +41,417 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
 
+  # ── User Management ──────────────────────────────────────────────
+
+  /admin/users:
+    get:
+      operationId: listUsers
+      summary: List users with pagination
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Paginated list of users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListUsersResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createUser
+      summary: Create a new user account
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/UserID"
+
+    get:
+      operationId: getUser
+      summary: Get user by ID
+      tags: [Users]
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    put:
+      operationId: updateUser
+      summary: Update user attributes
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteUser
+      summary: Soft-delete a user account
+      description: >
+        Marks the user as deleted. The user record is retained for audit
+        purposes but the account can no longer authenticate.
+      tags: [Users]
+      responses:
+        "204":
+          description: User soft-deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/users/{id}/lock:
+    parameters:
+      - $ref: "#/components/parameters/UserID"
+
+    post:
+      operationId: lockUser
+      summary: Lock a user account
+      description: >
+        Prevents the user from authenticating. Active tokens remain valid
+        until they expire but no new tokens can be issued.
+      tags: [Users]
+      responses:
+        "204":
+          description: User locked
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/users/{id}/unlock:
+    parameters:
+      - $ref: "#/components/parameters/UserID"
+
+    post:
+      operationId: unlockUser
+      summary: Unlock a user account
+      tags: [Users]
+      responses:
+        "204":
+          description: User unlocked
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Client Management ────────────────────────────────────────────
+
+  /admin/clients:
+    get:
+      operationId: listClients
+      summary: List OAuth2 clients with pagination
+      tags: [Clients]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Paginated list of clients
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListClientsResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createClient
+      summary: Register a new OAuth2 client
+      tags: [Clients]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientRequest"
+      responses:
+        "201":
+          description: Client created (includes plaintext secret — shown only once)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminClientResponseWithSecret"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/clients/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ClientID"
+
+    get:
+      operationId: getClient
+      summary: Get client by ID
+      tags: [Clients]
+      responses:
+        "200":
+          description: Client details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminClientResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    put:
+      operationId: updateClient
+      summary: Update client attributes
+      tags: [Clients]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClientRequest"
+      responses:
+        "200":
+          description: Client updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminClientResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteClient
+      summary: Delete an OAuth2 client
+      description: >
+        Removes the client. All tokens issued to this client are
+        immediately revoked.
+      tags: [Clients]
+      responses:
+        "204":
+          description: Client deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/clients/{id}/rotate-secret:
+    parameters:
+      - $ref: "#/components/parameters/ClientID"
+
+    post:
+      operationId: rotateClientSecret
+      summary: Rotate a client secret
+      description: >
+        Generates a new secret for the client and invalidates the old one.
+        The new plaintext secret is returned only once.
+      tags: [Clients]
+      responses:
+        "200":
+          description: Secret rotated (new plaintext secret — shown only once)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminClientResponseWithSecret"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Token Management ─────────────────────────────────────────────
+
+  /admin/tokens/introspect:
+    post:
+      operationId: introspectToken
+      summary: Introspect a token (RFC 7662)
+      description: >
+        Returns metadata about a token including whether it is currently
+        active, its subject, scopes, client, and expiration. Conforms to
+        RFC 7662 (OAuth 2.0 Token Introspection).
+      tags: [Tokens]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IntrospectTokenRequest"
+      responses:
+        "200":
+          description: Introspection result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntrospectionResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /admin/tokens/revoke:
+    post:
+      operationId: adminRevokeToken
+      summary: Administratively revoke a token
+      description: >
+        Adds the token's JTI to the blocklist, preventing further use.
+        Works for both access and refresh tokens.
+      tags: [Tokens]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminRevokeTokenRequest"
+      responses:
+        "204":
+          description: Token revoked
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ── Metrics ──────────────────────────────────────────────────────
+
+  /admin/metrics:
+    get:
+      operationId: getMetrics
+      summary: Prometheus metrics (JSON)
+      tags: [Metrics]
+      responses:
+        "200":
+          description: Metrics payload
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/metrics/prometheus:
+    get:
+      operationId: getMetricsPrometheus
+      summary: Prometheus metrics (text exposition format)
+      tags: [Metrics]
+      responses:
+        "200":
+          description: Prometheus text format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
 components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of items to return (1–100)
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    Offset:
+      name: offset
+      in: query
+      description: Number of items to skip for pagination
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+    UserID:
+      name: id
+      in: path
+      required: true
+      description: User UUID
+      schema:
+        type: string
+        format: uuid
+
+    ClientID:
+      name: id
+      in: path
+      required: true
+      description: Client UUID
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
   schemas:
+    # ── Shared ───────────────────────────────────────────────────
+
     HealthResponse:
       type: object
       properties:
@@ -37,3 +459,338 @@ components:
           type: string
           example: ok
       required: [status]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+          enum:
+            - VALIDATION_ERROR
+            - NOT_FOUND
+            - BAD_REQUEST
+            - INTERNAL_ERROR
+        details:
+          type: object
+          description: Additional error context (e.g. field-level validation errors)
+      required: [error, code]
+
+    ValidationErrorDetail:
+      type: object
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+      required: [field, message]
+
+    PaginationMeta:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Total number of matching records
+          example: 142
+        limit:
+          type: integer
+          description: Page size used
+          example: 20
+        offset:
+          type: integer
+          description: Offset used
+          example: 0
+      required: [total, limit, offset]
+
+    # ── User Schemas ─────────────────────────────────────────────
+
+    CreateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 15
+          description: NIST-compliant password (15-character minimum, no composition rules)
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [admin, user]
+          default: [user]
+      required: [email, password, name]
+
+    UpdateUserRequest:
+      type: object
+      description: All fields are optional — only provided fields are updated.
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [admin, user]
+        status:
+          type: string
+          enum: [active, suspended]
+
+    AdminUserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [active, suspended, locked, deleted]
+        mfa_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_login_at:
+          type: string
+          format: date-time
+          nullable: true
+        password_changed_at:
+          type: string
+          format: date-time
+      required: [id, email, name, roles, status, mfa_enabled, created_at, updated_at]
+
+    ListUsersResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminUserResponse"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [data, pagination]
+
+    # ── Client Schemas ───────────────────────────────────────────
+
+    CreateClientRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Human-readable client name
+        client_type:
+          type: string
+          enum: [service, agent]
+        scopes:
+          type: array
+          items:
+            type: string
+          description: Allowed OAuth2 scopes
+        owner:
+          type: string
+          description: Owning entity or team
+        token_endpoint_auth_method:
+          type: string
+          enum: [client_secret_basic, client_secret_post]
+          default: client_secret_basic
+        access_token_ttl_seconds:
+          type: integer
+          minimum: 300
+          maximum: 900
+          default: 300
+          description: Access token lifetime in seconds (5–15 minutes)
+      required: [name, client_type, scopes, owner]
+
+    UpdateClientRequest:
+      type: object
+      description: All fields are optional — only provided fields are updated.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        scopes:
+          type: array
+          items:
+            type: string
+        owner:
+          type: string
+        token_endpoint_auth_method:
+          type: string
+          enum: [client_secret_basic, client_secret_post]
+        access_token_ttl_seconds:
+          type: integer
+          minimum: 300
+          maximum: 900
+        status:
+          type: string
+          enum: [active, suspended]
+
+    AdminClientResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        client_type:
+          type: string
+          enum: [service, agent]
+        scopes:
+          type: array
+          items:
+            type: string
+        roles:
+          type: array
+          items:
+            type: string
+        owner:
+          type: string
+        token_endpoint_auth_method:
+          type: string
+        access_token_ttl_seconds:
+          type: integer
+        skip_consent:
+          type: boolean
+        status:
+          type: string
+          enum: [active, suspended, revoked]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - name
+        - client_type
+        - scopes
+        - roles
+        - owner
+        - token_endpoint_auth_method
+        - access_token_ttl_seconds
+        - skip_consent
+        - status
+        - created_at
+        - updated_at
+
+    AdminClientResponseWithSecret:
+      description: >
+        Returned only on client creation and secret rotation.
+        The plaintext client_secret is shown exactly once.
+      allOf:
+        - $ref: "#/components/schemas/AdminClientResponse"
+        - type: object
+          properties:
+            client_secret:
+              type: string
+              description: Plaintext client secret — displayed only once
+          required: [client_secret]
+
+    ListClientsResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminClientResponse"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [data, pagination]
+
+    # ── Token Schemas ────────────────────────────────────────────
+
+    IntrospectTokenRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          description: The token string to introspect
+      required: [token]
+
+    IntrospectionResponse:
+      type: object
+      description: >
+        RFC 7662 Token Introspection response. The "active" field is
+        always present. All other fields are included only when active is true.
+      properties:
+        active:
+          type: boolean
+          description: Whether the token is currently valid and not revoked
+        scope:
+          type: string
+          description: Space-separated list of scopes
+          example: "read:users write:tokens"
+        client_id:
+          type: string
+          description: Client identifier the token was issued to
+        username:
+          type: string
+          description: Human-readable identifier of the resource owner
+        token_type:
+          type: string
+          description: Type of the token (e.g. Bearer)
+          example: Bearer
+        exp:
+          type: integer
+          description: Token expiration (Unix timestamp)
+        iat:
+          type: integer
+          description: Token issued-at (Unix timestamp)
+        nbf:
+          type: integer
+          description: Token not-before (Unix timestamp)
+        sub:
+          type: string
+          description: Subject (user ID or client ID)
+        aud:
+          type: string
+          description: Audience
+        iss:
+          type: string
+          description: Issuer
+        jti:
+          type: string
+          description: Unique token identifier
+      required: [active]
+
+    AdminRevokeTokenRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          description: The token string to revoke
+      required: [token]
