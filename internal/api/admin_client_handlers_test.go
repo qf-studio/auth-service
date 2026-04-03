@@ -308,3 +308,51 @@ func TestAdminRotateSecret_NotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+// --- Update Client Validation ---
+
+func TestAdminUpdateClient_InvalidJSON(t *testing.T) {
+	r := newAdminClientRouter(&mockAdminClientService{})
+	w := doRequest(r, http.MethodPatch, "/admin/clients/client-1", nil)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// --- Create Client InvalidJSON ---
+
+func TestAdminCreateClient_InvalidJSON(t *testing.T) {
+	r := newAdminClientRouter(&mockAdminClientService{})
+	w := doRequest(r, http.MethodPost, "/admin/clients", nil)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// --- Delete Client Already Deleted ---
+
+func TestAdminDeleteClient_AlreadyDeleted(t *testing.T) {
+	svc := &mockAdminClientService{
+		deleteClientFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("client already deleted: %w", api.ErrConflict)
+		},
+	}
+	r := newAdminClientRouter(svc)
+	w := doRequest(r, http.MethodDelete, "/admin/clients/deleted-client", nil)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+// --- List Clients with per_page capped ---
+
+func TestAdminListClients_PerPageCapped(t *testing.T) {
+	svc := &mockAdminClientService{
+		listClientsFn: func(_ context.Context, page, perPage int, _ bool) (*api.AdminClientList, error) {
+			assert.Equal(t, 1, page)
+			assert.Equal(t, 100, perPage) // Capped at 100
+			return &api.AdminClientList{Clients: []api.AdminClient{}, Total: 0, Page: page, PerPage: perPage}, nil
+		},
+	}
+	r := newAdminClientRouter(svc)
+	w := doRequest(r, http.MethodGet, "/admin/clients?per_page=999", nil)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/qf-studio/auth-service/internal/admin"
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
@@ -109,10 +110,20 @@ func run(log *zap.Logger) error {
 		Metrics:         metricsCollector.Middleware(),
 	}
 
+	// ── Repositories (admin) ─────────────────────────────────────────────
+	adminUserRepo := storage.NewPostgresAdminUserRepository(pgPool)
+	clientRepo := storage.NewPostgresClientRepository(pgPool)
+
 	// ── Admin services ────────────────────────────────────────────────────
-	// Admin service implementations will be wired here as they are built.
-	// For now, nil services are guarded by NewAdminRouter's nil checks.
-	adminServices := &api.AdminServices{}
+	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log)
+	adminClientSvc := admin.NewClientService(clientRepo, hasher, log)
+	adminTokenSvc := admin.NewTokenService(tokenSvc, "auth-service", log)
+
+	adminServices := &api.AdminServices{
+		Users:   adminUserSvc,
+		Clients: adminClientSvc,
+		Tokens:  adminTokenSvc,
+	}
 
 	adminDeps := &api.AdminDeps{
 		Health:  healthSvc,

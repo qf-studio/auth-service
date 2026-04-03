@@ -26,4 +26,10 @@ var (
 
 	// ErrTokenExpired indicates the refresh token has expired.
 	ErrTokenExpired = errors.New("token expired")
+
+	// ErrAlreadyDeleted indicates the entity has already been soft-deleted.
+	ErrAlreadyDeleted = errors.New("already deleted")
+
+	// ErrDuplicateClient indicates a client with the given name already exists.
+	ErrDuplicateClient = errors.New("duplicate client name")
 )
