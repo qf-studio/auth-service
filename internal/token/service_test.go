@@ -56,7 +56,7 @@ func TestClientCredentials_Success_ServiceType(t *testing.T) {
 	}
 	svc := newTestService(t, mock)
 
-	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret")
+	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret", nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -86,7 +86,7 @@ func TestClientCredentials_Success_AgentType(t *testing.T) {
 	}
 	svc := newTestService(t, mock)
 
-	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret")
+	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret", nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, int(defaultAgentTTL.Seconds()), result.ExpiresIn)
@@ -111,7 +111,7 @@ func TestClientCredentials_CustomTTL(t *testing.T) {
 	}
 	svc := newTestService(t, mock)
 
-	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret")
+	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret", nil)
 	require.NoError(t, err)
 	assert.Equal(t, customTTL, result.ExpiresIn)
 }
@@ -120,7 +120,7 @@ func TestClientCredentials_InvalidClientID(t *testing.T) {
 	mock := &mockClientAuthenticator{}
 	svc := newTestService(t, mock)
 
-	_, err := svc.ClientCredentials(context.Background(), "not-a-uuid", "secret")
+	_, err := svc.ClientCredentials(context.Background(), "not-a-uuid", "secret", nil)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, api.ErrUnauthorized))
 }
@@ -131,7 +131,7 @@ func TestClientCredentials_AuthenticationFailure(t *testing.T) {
 	}
 	svc := newTestService(t, mock)
 
-	_, err := svc.ClientCredentials(context.Background(), uuid.New().String(), "wrong-secret")
+	_, err := svc.ClientCredentials(context.Background(), uuid.New().String(), "wrong-secret", nil)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, api.ErrUnauthorized))
 }
@@ -149,9 +149,67 @@ func TestClientCredentials_NoRefreshToken(t *testing.T) {
 	}
 	svc := newTestService(t, mock)
 
-	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret")
+	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret", nil)
 	require.NoError(t, err)
 	assert.Empty(t, result.RefreshToken, "client_credentials grant MUST NOT return a refresh token")
+}
+
+func TestClientCredentials_RequestedScopesSubset(t *testing.T) {
+	clientID := uuid.New()
+	mock := &mockClientAuthenticator{
+		client: &domain.Client{
+			ID:         clientID,
+			Name:       "scoped-service",
+			ClientType: domain.ClientTypeService,
+			Scopes:     []string{"read", "write", "admin"},
+			Status:     domain.ClientStatusActive,
+		},
+	}
+	svc := newTestService(t, mock)
+
+	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret", []string{"read", "write"})
+	require.NoError(t, err)
+
+	claims := parseTokenClaims(t, svc, result.AccessToken)
+	assert.Equal(t, "read write", claims["scope"], "granted scopes should match requested subset")
+}
+
+func TestClientCredentials_RequestedScopesNotAllowed(t *testing.T) {
+	clientID := uuid.New()
+	mock := &mockClientAuthenticator{
+		client: &domain.Client{
+			ID:         clientID,
+			Name:       "restricted-service",
+			ClientType: domain.ClientTypeService,
+			Scopes:     []string{"read"},
+			Status:     domain.ClientStatusActive,
+		},
+	}
+	svc := newTestService(t, mock)
+
+	_, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret", []string{"read", "delete"})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, api.ErrForbidden))
+}
+
+func TestClientCredentials_NoRequestedScopesGrantsAll(t *testing.T) {
+	clientID := uuid.New()
+	mock := &mockClientAuthenticator{
+		client: &domain.Client{
+			ID:         clientID,
+			Name:       "full-scope-service",
+			ClientType: domain.ClientTypeService,
+			Scopes:     []string{"read", "write"},
+			Status:     domain.ClientStatusActive,
+		},
+	}
+	svc := newTestService(t, mock)
+
+	result, err := svc.ClientCredentials(context.Background(), clientID.String(), "secret", nil)
+	require.NoError(t, err)
+
+	claims := parseTokenClaims(t, svc, result.AccessToken)
+	assert.Equal(t, "read write", claims["scope"], "nil requested scopes should grant all client scopes")
 }
 
 func TestValidateScopes(t *testing.T) {

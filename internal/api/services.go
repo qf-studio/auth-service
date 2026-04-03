@@ -41,7 +41,7 @@ type AuthService interface {
 // TokenService defines the operations for token management.
 type TokenService interface {
 	Refresh(ctx context.Context, refreshToken string) (*AuthResult, error)
-	ClientCredentials(ctx context.Context, clientID, clientSecret string) (*AuthResult, error)
+	ClientCredentials(ctx context.Context, clientID, clientSecret string, requestedScopes []string) (*AuthResult, error)
 	Revoke(ctx context.Context, token string) error
 	JWKS(ctx context.Context) (*JWKSResponse, error)
 }

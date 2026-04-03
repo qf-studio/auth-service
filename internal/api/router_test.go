@@ -97,7 +97,7 @@ func (m *mockAuthService) LogoutAll(ctx context.Context, userID string) error {
 
 type mockTokenService struct {
 	refreshFn           func(ctx context.Context, refreshToken string) (*api.AuthResult, error)
-	clientCredentialsFn func(ctx context.Context, clientID, clientSecret string) (*api.AuthResult, error)
+	clientCredentialsFn func(ctx context.Context, clientID, clientSecret string, requestedScopes []string) (*api.AuthResult, error)
 	revokeFn            func(ctx context.Context, token string) error
 	jwksFn              func(ctx context.Context) (*api.JWKSResponse, error)
 }
@@ -114,9 +114,9 @@ func (m *mockTokenService) Refresh(ctx context.Context, refreshToken string) (*a
 	}, nil
 }
 
-func (m *mockTokenService) ClientCredentials(ctx context.Context, clientID, clientSecret string) (*api.AuthResult, error) {
+func (m *mockTokenService) ClientCredentials(ctx context.Context, clientID, clientSecret string, requestedScopes []string) (*api.AuthResult, error) {
 	if m.clientCredentialsFn != nil {
-		return m.clientCredentialsFn(ctx, clientID, clientSecret)
+		return m.clientCredentialsFn(ctx, clientID, clientSecret, requestedScopes)
 	}
 	return &api.AuthResult{
 		AccessToken: "qf_at_client",
@@ -371,6 +371,34 @@ func TestToken_ClientCredentialsGrant(t *testing.T) {
 	var resp api.AuthResult
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "qf_at_client", resp.AccessToken)
+}
+
+func TestToken_ClientCredentialsWithScope(t *testing.T) {
+	tokenSvc := &mockTokenService{
+		clientCredentialsFn: func(_ context.Context, clientID, clientSecret string, requestedScopes []string) (*api.AuthResult, error) {
+			assert.Equal(t, []string{"read", "write"}, requestedScopes)
+			return &api.AuthResult{
+				AccessToken: "qf_at_scoped",
+				TokenType:   "Bearer",
+				ExpiresIn:   900,
+			}, nil
+		},
+	}
+	router := newTestRouter(&mockAuthService{}, tokenSvc)
+
+	body := map[string]string{
+		"grant_type":    "client_credentials",
+		"client_id":     "svc-agent-1",
+		"client_secret": "secret-value",
+		"scope":         "read write",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/token", body)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.AuthResult
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "qf_at_scoped", resp.AccessToken)
 }
 
 func TestToken_InvalidGrantType(t *testing.T) {

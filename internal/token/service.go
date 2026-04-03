@@ -71,7 +71,7 @@ func (s *Service) Refresh(_ context.Context, _ string) (*api.AuthResult, error) 
 // ClientCredentials issues an access token for service-to-service authentication.
 // It authenticates the client, validates requested scopes, and returns a JWT
 // with a client_type claim. No refresh token is issued for this grant type.
-func (s *Service) ClientCredentials(ctx context.Context, clientID, clientSecret string) (*api.AuthResult, error) {
+func (s *Service) ClientCredentials(ctx context.Context, clientID, clientSecret string, requestedScopes []string) (*api.AuthResult, error) {
 	id, err := uuid.Parse(clientID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client_id: %w", api.ErrUnauthorized)
@@ -82,13 +82,23 @@ func (s *Service) ClientCredentials(ctx context.Context, clientID, clientSecret 
 		return nil, fmt.Errorf("client authentication failed: %w", api.ErrUnauthorized)
 	}
 
+	// If specific scopes are requested, validate they are a subset of allowed scopes.
+	// Otherwise, grant all scopes the client is allowed.
+	grantedScopes := client.Scopes
+	if len(requestedScopes) > 0 {
+		if err := ValidateScopes(requestedScopes, client.Scopes); err != nil {
+			return nil, err
+		}
+		grantedScopes = requestedScopes
+	}
+
 	ttl := clientTTL(client)
 	now := time.Now().UTC()
 
 	claims := jwt.MapClaims{
 		"sub":         client.ID.String(),
 		"client_type": string(client.ClientType),
-		"scope":       strings.Join(client.Scopes, " "),
+		"scope":       strings.Join(grantedScopes, " "),
 		"iat":         jwt.NewNumericDate(now),
 		"exp":         jwt.NewNumericDate(now.Add(ttl)),
 		"jti":         accessTokenPrefix + uuid.New().String(),

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -29,7 +30,11 @@ func (h *TokenHandlers) Token(c *gin.Context) {
 	case "refresh_token":
 		result, err = h.token.Refresh(c.Request.Context(), req.RefreshToken)
 	case "client_credentials":
-		result, err = h.token.ClientCredentials(c.Request.Context(), req.ClientID, req.ClientSecret)
+		var scopes []string
+		if req.Scope != "" {
+			scopes = strings.Fields(req.Scope)
+		}
+		result, err = h.token.ClientCredentials(c.Request.Context(), req.ClientID, req.ClientSecret, scopes)
 	default:
 		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "unsupported grant_type")
 		return

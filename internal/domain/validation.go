@@ -51,6 +51,7 @@ type TokenRequest struct {
 	RefreshToken string `json:"refresh_token" validate:"required_if=GrantType refresh_token"`
 	ClientID     string `json:"client_id"     validate:"required_if=GrantType client_credentials"`
 	ClientSecret string `json:"client_secret" validate:"required_if=GrantType client_credentials"`
+	Scope        string `json:"scope"         validate:"omitempty"`
 }
 
 // RevokeRequest is the validated request body for token revocation.
