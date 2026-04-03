@@ -15,6 +15,7 @@ import (
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -46,6 +47,7 @@ type Service struct {
 	tokens    storage.RefreshTokenRepository
 	issuer    TokenIssuer
 	hasher    password.Hasher
+	breaches  hibp.BreachChecker
 }
 
 // NewService creates a new auth Service.
@@ -56,14 +58,16 @@ func NewService(
 	tokens storage.RefreshTokenRepository,
 	issuer TokenIssuer,
 	hasher password.Hasher,
+	breaches hibp.BreachChecker,
 ) *Service {
 	return &Service{
-		redis:  redisClient,
-		logger: logger,
-		users:  users,
-		tokens: tokens,
-		issuer: issuer,
-		hasher: hasher,
+		redis:    redisClient,
+		logger:   logger,
+		users:    users,
+		tokens:   tokens,
+		issuer:   issuer,
+		hasher:   hasher,
+		breaches: breaches,
 	}
 }
 

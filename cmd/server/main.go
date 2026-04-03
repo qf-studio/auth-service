@@ -19,6 +19,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/admin"
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/auth"
+	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -81,7 +82,8 @@ func run(log *zap.Logger) error {
 	if err != nil {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
-	authSvc := auth.NewService(redisClient, log, userRepo, refreshTokenRepo, tokenSvc, hasher)
+	hibpClient := hibp.NewClient(http.DefaultClient)
+	authSvc := auth.NewService(redisClient, log, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
 
 	services := &api.Services{
 		Auth:  authSvc,
