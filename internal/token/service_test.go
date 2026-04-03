@@ -492,15 +492,14 @@ func TestJWKS_EdDSA(t *testing.T) {
 	assert.NotEmpty(t, keyMap["x"])
 }
 
-// ── ClientCredentials (stub) ─────────────────────────────────────────────────
+// ── ClientCredentials ─────────────────────────────────────────────────────────
 
-func TestClientCredentials_ReturnsNotImplemented(t *testing.T) {
+func TestClientCredentials_NoAuthenticator(t *testing.T) {
 	svc, _ := newES256Service(t)
-	ctx := context.Background()
 
-	_, err := svc.ClientCredentials(ctx, "client-id", "client-secret")
+	_, err := svc.ClientCredentials(context.Background(), "client-id", "client-secret")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented")
+	assert.Contains(t, err.Error(), "client authenticator not configured")
 }
 
 // ── NewServiceFromKey validation ─────────────────────────────────────────────

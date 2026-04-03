@@ -59,6 +59,7 @@ type Service struct {
 	privateKey    crypto.Signer
 	publicKey     crypto.PublicKey
 	signingMethod jwt.SigningMethod
+	clientAuth    api.ClientAuthenticator
 }
 
 // NewService creates a new token Service, loading the private key from the
@@ -103,9 +104,15 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 	}, nil
 }
 
+// SetClientAuthenticator wires the client credentials authenticator into the token service.
+// Must be called after both the token service and client service are constructed.
+func (s *Service) SetClientAuthenticator(auth api.ClientAuthenticator) {
+	s.clientAuth = auth
+}
+
 // IssueTokenPair generates an access/refresh token pair for the given subject.
 func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType string) (*api.AuthResult, error) {
-	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType)
+	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, s.cfg.AccessTokenTTL)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
 	}
@@ -138,11 +145,29 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (*api.Aut
 	return s.IssueTokenPair(ctx, subject, nil, nil, domain.ClientTypeUser)
 }
 
-// ClientCredentials issues an access token for service-to-service authentication.
-// Stub: client verification depends on client repository (future issue).
-func (s *Service) ClientCredentials(_ context.Context, _, _ string) (*api.AuthResult, error) {
-	// TODO(GH-XX): implement client credentials grant with client repository lookup.
-	return nil, fmt.Errorf("client credentials not yet implemented: %w", api.ErrInternalError)
+// IssueAccessTokenOnly issues a single access token with a caller-specified TTL.
+// No refresh token is issued; the returned AuthResult has an empty RefreshToken field.
+func (s *Service) IssueAccessTokenOnly(_ context.Context, subject string, scopes []string, clientType string, ttl time.Duration) (*api.AuthResult, error) {
+	accessToken, err := s.issueAccessToken(subject, nil, scopes, clientType, ttl)
+	if err != nil {
+		return nil, fmt.Errorf("issue access token: %w", err)
+	}
+	return &api.AuthResult{
+		AccessToken:  accessToken,
+		RefreshToken: "",
+		TokenType:    "Bearer",
+		ExpiresIn:    int(ttl.Seconds()),
+	}, nil
+}
+
+// ClientCredentials delegates the client credentials grant to the configured
+// ClientAuthenticator (the client service). Returns ErrInternalError if the
+// authenticator has not been wired via SetClientAuthenticator.
+func (s *Service) ClientCredentials(ctx context.Context, clientID, clientSecret string) (*api.AuthResult, error) {
+	if s.clientAuth == nil {
+		return nil, fmt.Errorf("client authenticator not configured: %w", api.ErrInternalError)
+	}
+	return s.clientAuth.ClientCredentialsGrant(ctx, clientID, clientSecret)
 }
 
 // Revoke invalidates a token by adding its JTI to the Redis blocklist.
@@ -232,7 +257,7 @@ func (c *customClaims) GetJTI() (string, error) {
 	return c.ID, nil
 }
 
-func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType string) (string, error) {
+func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType string, ttl time.Duration) (string, error) {
 	jti, err := generateRandomID(jtiBytes)
 	if err != nil {
 		return "", fmt.Errorf("generate jti: %w", err)
@@ -244,7 +269,7 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 			Subject:   subject,
 			Issuer:    issuer,
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(s.cfg.AccessTokenTTL)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 			ID:        jti,
 		},
 		Roles:      roles,

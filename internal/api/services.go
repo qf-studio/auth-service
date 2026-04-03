@@ -46,6 +46,12 @@ type TokenService interface {
 	JWKS(ctx context.Context) (*JWKSResponse, error)
 }
 
+// ClientAuthenticator performs the OAuth2 client credentials grant.
+// Implemented by the client service and injected into the token service.
+type ClientAuthenticator interface {
+	ClientCredentialsGrant(ctx context.Context, clientID, clientSecret string) (*AuthResult, error)
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth  AuthService

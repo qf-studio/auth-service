@@ -7,24 +7,12 @@ import (
 )
 
 // ClientType represents the kind of OAuth2 client.
+// Constants "service" and "agent" are defined in claims.go alongside "user".
 type ClientType string
-
-const (
-	ClientTypeService ClientType = "service"
-	ClientTypeAgent   ClientType = "agent"
-)
-
-// ValidClientTypes enumerates all accepted ClientType values.
-var ValidClientTypes = []ClientType{ClientTypeService, ClientTypeAgent}
 
 // IsValid returns true if the ClientType is a recognised value.
 func (ct ClientType) IsValid() bool {
-	for _, v := range ValidClientTypes {
-		if ct == v {
-			return true
-		}
-	}
-	return false
+	return ValidClientTypes[string(ct)]
 }
 
 // Client status constants.

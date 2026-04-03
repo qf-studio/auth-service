@@ -26,4 +26,7 @@ var (
 
 	// ErrTokenExpired indicates the refresh token has expired.
 	ErrTokenExpired = errors.New("token expired")
+
+	// ErrDuplicateClient indicates a client with the given name already exists.
+	ErrDuplicateClient = errors.New("duplicate client")
 )

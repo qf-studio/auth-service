@@ -18,6 +18,7 @@ import (
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/auth"
+	"github.com/qf-studio/auth-service/internal/client"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -62,12 +63,23 @@ func run(log *zap.Logger) error {
 	}
 	defer func() { _ = redisClient.Close() }()
 
+	// ── PostgreSQL ────────────────────────────────────────────────────────
+	pgPool, err := storage.NewPostgresPool(cfg.Postgres.DSN(), cfg.Postgres.MaxConns)
+	if err != nil {
+		return fmt.Errorf("postgres connection failed: %w", err)
+	}
+	defer pgPool.Close()
+
 	// ── Services ─────────────────────────────────────────────────────────
 	authSvc := auth.NewService(redisClient, log)
 	tokenSvc, err := token.NewService(cfg.JWT, redisClient, log)
 	if err != nil {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
+
+	clientRepo := storage.NewPostgresClientRepository(pgPool)
+	clientSvc := client.NewService(clientRepo, tokenSvc, log)
+	tokenSvc.SetClientAuthenticator(clientSvc)
 
 	services := &api.Services{
 		Auth:  authSvc,
@@ -77,6 +89,7 @@ func run(log *zap.Logger) error {
 	// ── Health ─────────────────────────────────────────────────────────────
 	healthCheckers := []health.Checker{
 		health.NewRedisChecker(redisClient),
+		health.NewPostgresChecker(pgPool),
 	}
 	healthSvc := health.NewService(healthCheckers...)
 
@@ -97,9 +110,9 @@ func run(log *zap.Logger) error {
 	}
 
 	// ── Admin services ────────────────────────────────────────────────────
-	// Admin service implementations will be wired here as they are built.
-	// For now, nil services are guarded by NewAdminRouter's nil checks.
-	adminServices := &api.AdminServices{}
+	adminServices := &api.AdminServices{
+		Clients: clientSvc,
+	}
 
 	adminDeps := &api.AdminDeps{
 		Health:  healthSvc,
