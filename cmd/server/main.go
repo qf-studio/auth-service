@@ -32,27 +32,24 @@ import (
 )
 
 func main() {
-	log := logger.MustNew("info")
+	// Load config first so we can initialise the logger at the correct level.
+	cfg, err := config.Load()
+	if err != nil {
+		panic(fmt.Sprintf("config load failed: %v", err))
+	}
 
-	if err := run(log); err != nil {
+	if err := logger.Init(cfg.App.Env); err != nil {
+		panic(fmt.Sprintf("logger init failed: %v", err))
+	}
+	log := logger.GetLogger()
+
+	if err := run(log, cfg); err != nil {
 		log.Fatal("service failed", zap.Error(err))
 	}
 }
 
-func run(log *zap.Logger) error {
+func run(log *zap.Logger, cfg *config.Config) error {
 	defer func() { _ = log.Sync() }()
-
-	// ── Config ────────────────────────────────────────────────────────────
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("config load failed: %w", err)
-	}
-
-	// Reinitialise logger at the configured log level.
-	log, err = logger.New(cfg.App.LogLevel)
-	if err != nil {
-		return fmt.Errorf("logger reinit failed: %w", err)
-	}
 
 	if cfg.App.Env != "development" {
 		gin.SetMode(gin.ReleaseMode)
