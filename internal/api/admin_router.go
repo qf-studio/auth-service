@@ -8,26 +8,43 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/health"
+	"github.com/qf-studio/auth-service/internal/metrics"
 	"github.com/qf-studio/auth-service/internal/middleware"
 )
 
 // adminValidator is the shared validator instance for admin request structs.
 var adminValidator = validator.New()
 
+// AdminDeps holds infrastructure dependencies for the admin router.
+type AdminDeps struct {
+	Health  *health.Service
+	Metrics *metrics.Collector
+}
+
 // NewAdminRouter creates a *gin.Engine with the admin API route tree.
 // Only correlation ID middleware is applied (no auth, no rate limiting).
 // The admin port is protected at the network level.
-func NewAdminRouter(svc *AdminServices) *gin.Engine {
+func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(middleware.CorrelationID())
 
-	// Health probe.
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
+	// Health probe with dependency checks.
+	hh := newHealthHandlers(deps.Health)
+	r.GET("/health", hh.health)
 
 	admin := r.Group("/admin")
+
+	// Metrics endpoints.
+	if deps.Metrics != nil {
+		admin.GET("/metrics", func(c *gin.Context) {
+			c.JSON(http.StatusOK, deps.Metrics.JSONExport())
+		})
+		admin.GET("/metrics/prometheus", func(c *gin.Context) {
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(deps.Metrics.PrometheusExport()))
+		})
+	}
 
 	// User management.
 	if svc.Users != nil {

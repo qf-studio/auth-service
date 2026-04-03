@@ -62,4 +62,5 @@ type MiddlewareStack struct {
 	RateLimit       gin.HandlerFunc
 	RequestSize     gin.HandlerFunc
 	Auth            gin.HandlerFunc
+	Metrics         gin.HandlerFunc
 }

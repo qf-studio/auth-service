@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // --- Mock AdminClientService ---
@@ -103,7 +104,7 @@ func (m *mockAdminClientService) RotateSecret(ctx context.Context, clientID stri
 
 func newAdminClientRouter(clientSvc api.AdminClientService) *gin.Engine {
 	svc := &api.AdminServices{Clients: clientSvc}
-	return api.NewAdminRouter(svc)
+	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
 }
 
 // --- List Clients ---
