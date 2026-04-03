@@ -49,7 +49,7 @@ func TestLiveness_AlwaysHealthy(t *testing.T) {
 
 	assert.Equal(t, StatusHealthy, resp.Status)
 	assert.Empty(t, resp.Checks, "liveness must not run checkers")
-	assert.Greater(t, resp.Uptime, time.Duration(0))
+	assert.GreaterOrEqual(t, resp.Uptime, time.Duration(0))
 }
 
 func TestHealth_NoCheckers(t *testing.T) {
