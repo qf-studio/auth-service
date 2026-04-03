@@ -213,7 +213,9 @@ func (s *ClientService) RotateSecret(ctx context.Context, clientID string) (*api
 		return nil, fmt.Errorf("rotate secret: %w", api.ErrInternalError)
 	}
 
-	if err := s.repo.UpdateSecretHash(ctx, id, hash); err != nil {
+	graceEnd := time.Now().UTC().Add(gracePeriodDuration)
+
+	if err := s.repo.RotateSecret(ctx, id, hash, graceEnd); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("client %s: %w", clientID, api.ErrNotFound)
 		}
@@ -227,8 +229,6 @@ func (s *ClientService) RotateSecret(ctx context.Context, clientID string) (*api
 		s.logger.Error("re-read client after rotation failed", zap.String("client_id", clientID), zap.Error(err))
 		return nil, fmt.Errorf("rotate secret: %w", api.ErrInternalError)
 	}
-
-	graceEnd := time.Now().UTC().Add(gracePeriodDuration)
 	return &api.AdminClientWithSecret{
 		AdminClient:     domainClientToAdmin(client),
 		ClientSecret:    secret,

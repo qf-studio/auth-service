@@ -25,6 +25,7 @@ type mockClientRepo struct {
 	createFn           func(ctx context.Context, client *domain.Client) (*domain.Client, error)
 	updateFn           func(ctx context.Context, client *domain.Client) (*domain.Client, error)
 	updateSecretHashFn func(ctx context.Context, id uuid.UUID, secretHash string) error
+	rotateSecretFn     func(ctx context.Context, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
 	softDeleteFn       func(ctx context.Context, id uuid.UUID) error
 }
 
@@ -70,6 +71,13 @@ func (m *mockClientRepo) Update(ctx context.Context, client *domain.Client) (*do
 func (m *mockClientRepo) UpdateSecretHash(ctx context.Context, id uuid.UUID, secretHash string) error {
 	if m.updateSecretHashFn != nil {
 		return m.updateSecretHashFn(ctx, id, secretHash)
+	}
+	return nil
+}
+
+func (m *mockClientRepo) RotateSecret(ctx context.Context, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error {
+	if m.rotateSecretFn != nil {
+		return m.rotateSecretFn(ctx, id, newSecretHash, gracePeriodEnds)
 	}
 	return nil
 }
@@ -284,7 +292,7 @@ func TestClientService_RotateSecret(t *testing.T) {
 
 func TestClientService_RotateSecret_NotFound(t *testing.T) {
 	repo := &mockClientRepo{
-		updateSecretHashFn: func(_ context.Context, _ uuid.UUID, _ string) error {
+		rotateSecretFn: func(_ context.Context, _ uuid.UUID, _ string, _ time.Time) error {
 			return fmt.Errorf("not found: %w", storage.ErrNotFound)
 		},
 	}
