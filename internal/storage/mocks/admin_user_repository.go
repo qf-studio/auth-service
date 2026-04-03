@@ -8,7 +8,7 @@ import (
 
 // MockAdminUserRepository is a configurable mock for storage.AdminUserRepository.
 type MockAdminUserRepository struct {
-	ListFn       func(ctx context.Context, limit, offset int, includeDeleted bool) ([]*domain.User, int, error)
+	ListFn       func(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error)
 	FindByIDFn   func(ctx context.Context, id string) (*domain.User, error)
 	CreateFn     func(ctx context.Context, user *domain.User) (*domain.User, error)
 	UpdateFn     func(ctx context.Context, user *domain.User) (*domain.User, error)
@@ -18,8 +18,8 @@ type MockAdminUserRepository struct {
 }
 
 // List delegates to ListFn.
-func (m *MockAdminUserRepository) List(ctx context.Context, limit, offset int, includeDeleted bool) ([]*domain.User, int, error) {
-	return m.ListFn(ctx, limit, offset, includeDeleted)
+func (m *MockAdminUserRepository) List(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error) {
+	return m.ListFn(ctx, limit, offset, status)
 }
 
 // FindByID delegates to FindByIDFn.
