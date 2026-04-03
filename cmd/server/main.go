@@ -61,7 +61,11 @@ func run(log *zap.Logger) error {
 	defer func() { _ = redisClient.Close() }()
 
 	// ── Services ─────────────────────────────────────────────────────────
-	authSvc := auth.NewService(redisClient, log)
+	// Auth dependencies (UserRepository, RefreshTokenRepository, TokenProvider,
+	// PasswordVerifier) are wired in GH-112 once PostgreSQL repositories and
+	// token signing are implemented. Passing nil is safe because the HTTP
+	// handlers that call Login/Logout are not yet routed through real backends.
+	authSvc := auth.NewService(redisClient, log, nil, nil, nil, nil)
 	tokenSvc := token.NewService(log)
 
 	services := &api.Services{

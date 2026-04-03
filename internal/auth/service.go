@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/domain"
 )
 
 const (
@@ -24,38 +26,174 @@ const (
 
 	// resetTokenBytes is the number of random bytes in a reset token (32 bytes = 64 hex chars).
 	resetTokenBytes = 32
+
+	// tokenBlockPrefix is the Redis key prefix for blocklisted access token JTIs.
+	tokenBlockPrefix = "token_block:"
 )
 
-// Service implements api.AuthService with Redis-backed password reset tokens.
+// Sentinel errors for authentication failures.
+var (
+	ErrInvalidCredentials = fmt.Errorf("invalid email or password: %w", api.ErrUnauthorized)
+	ErrAccountLocked      = fmt.Errorf("account is locked: %w", api.ErrForbidden)
+	ErrAccountSuspended   = fmt.Errorf("account is suspended: %w", api.ErrForbidden)
+	ErrTokenExpired       = fmt.Errorf("token has expired: %w", api.ErrUnauthorized)
+	ErrTokenRevoked       = fmt.Errorf("token has been revoked: %w", api.ErrUnauthorized)
+)
+
+// Service implements api.AuthService with Redis-backed password reset tokens
+// and full login/logout/refresh functionality.
 type Service struct {
-	redis  *redis.Client
-	logger *zap.Logger
+	redis         *redis.Client
+	logger        *zap.Logger
+	users         UserRepository
+	refreshTokens RefreshTokenRepository
+	tokens        TokenProvider
+	passwords     PasswordVerifier
 }
 
 // NewService creates a new auth Service.
-func NewService(redisClient *redis.Client, logger *zap.Logger) *Service {
+// The users, refreshTokens, tokens, and passwords dependencies may be nil
+// if only password-reset functionality is needed (they are required for login/logout).
+func NewService(
+	redisClient *redis.Client,
+	logger *zap.Logger,
+	users UserRepository,
+	refreshTokens RefreshTokenRepository,
+	tokens TokenProvider,
+	passwords PasswordVerifier,
+) *Service {
 	return &Service{
-		redis:  redisClient,
-		logger: logger,
+		redis:         redisClient,
+		logger:        logger,
+		users:         users,
+		refreshTokens: refreshTokens,
+		tokens:        tokens,
+		passwords:     passwords,
 	}
+}
+
+// Login authenticates a user by email and password, returning a token pair on success.
+// Returns generic ErrInvalidCredentials for both "not found" and "wrong password"
+// to prevent user enumeration. Returns specific errors for locked/suspended accounts
+// only after credentials are verified.
+func (s *Service) Login(ctx context.Context, email, password string) (*api.AuthResult, error) {
+	user, err := s.users.GetByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, api.ErrNotFound) {
+			s.logger.Debug("login attempt for unknown email", zap.String("email", email))
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("fetch user: %w", err)
+	}
+
+	match, err := s.passwords.Verify(password, user.PasswordHash)
+	if err != nil {
+		s.logger.Error("password verification failed", zap.Error(err))
+		return nil, fmt.Errorf("verify password: %w", err)
+	}
+	if !match {
+		s.logger.Debug("login attempt with wrong password", zap.String("user_id", user.ID))
+		return nil, ErrInvalidCredentials
+	}
+
+	switch user.Status {
+	case domain.UserStatusLocked:
+		return nil, ErrAccountLocked
+	case domain.UserStatusSuspended:
+		return nil, ErrAccountSuspended
+	}
+
+	result, refreshSig, err := s.tokens.GenerateTokenPair(ctx, user.ID, user.Roles, domain.ClientTypeUser)
+	if err != nil {
+		return nil, fmt.Errorf("generate tokens: %w", err)
+	}
+
+	refreshToken := &domain.RefreshToken{
+		Signature: refreshSig,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(s.tokens.RefreshTokenTTL()),
+		CreatedAt: time.Now(),
+	}
+	if err := s.refreshTokens.Store(ctx, refreshToken); err != nil {
+		return nil, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	if err := s.users.UpdateLastLoginAt(ctx, user.ID, time.Now()); err != nil {
+		s.logger.Error("failed to update last_login_at",
+			zap.String("user_id", user.ID),
+			zap.Error(err),
+		)
+	}
+
+	return result, nil
+}
+
+// RefreshTokens exchanges a refresh token for a new token pair using strict rotation.
+// If a revoked token is presented (reuse detection), all tokens for the user are revoked.
+func (s *Service) RefreshTokens(ctx context.Context, rawRefreshToken string) (*api.AuthResult, error) {
+	signature, err := s.tokens.ValidateRefreshToken(rawRefreshToken)
+	if err != nil {
+		return nil, fmt.Errorf("invalid refresh token: %w", api.ErrUnauthorized)
+	}
+
+	stored, err := s.refreshTokens.GetBySignature(ctx, signature)
+	if err != nil {
+		if errors.Is(err, api.ErrNotFound) {
+			return nil, fmt.Errorf("refresh token not found: %w", api.ErrUnauthorized)
+		}
+		return nil, fmt.Errorf("lookup refresh token: %w", err)
+	}
+
+	// Reuse detection: if someone presents a revoked token, assume token theft
+	// and revoke all tokens for the user.
+	if stored.IsRevoked() {
+		s.logger.Warn("refresh token reuse detected, revoking all tokens",
+			zap.String("user_id", stored.UserID),
+			zap.String("signature", signature),
+		)
+		if revokeErr := s.refreshTokens.RevokeAllForUser(ctx, stored.UserID); revokeErr != nil {
+			s.logger.Error("failed to revoke all tokens after reuse detection",
+				zap.String("user_id", stored.UserID),
+				zap.Error(revokeErr),
+			)
+		}
+		return nil, ErrTokenRevoked
+	}
+
+	if stored.IsExpired() {
+		return nil, ErrTokenExpired
+	}
+
+	if err := s.refreshTokens.Revoke(ctx, signature); err != nil {
+		return nil, fmt.Errorf("revoke old refresh token: %w", err)
+	}
+
+	result, newSig, err := s.tokens.GenerateTokenPair(ctx, stored.UserID, nil, domain.ClientTypeUser)
+	if err != nil {
+		return nil, fmt.Errorf("generate new tokens: %w", err)
+	}
+
+	newToken := &domain.RefreshToken{
+		Signature: newSig,
+		UserID:    stored.UserID,
+		ExpiresAt: time.Now().Add(s.tokens.RefreshTokenTTL()),
+		CreatedAt: time.Now(),
+	}
+	if err := s.refreshTokens.Store(ctx, newToken); err != nil {
+		return nil, fmt.Errorf("store new refresh token: %w", err)
+	}
+
+	return result, nil
 }
 
 // Register creates a new user account.
 // Stub: full implementation depends on PostgreSQL user repository (future issue).
 func (s *Service) Register(_ context.Context, email, _, name string) (*api.UserInfo, error) {
-	// TODO(GH-XX): wire PostgreSQL user repository for persistence.
 	return &api.UserInfo{
 		ID:    "stub-user-id",
 		Email: email,
 		Name:  name,
 	}, nil
-}
-
-// Login authenticates a user by email and password.
-// Stub: full implementation depends on PostgreSQL user repository and Argon2 hashing (future issue).
-func (s *Service) Login(_ context.Context, _, _ string) (*api.AuthResult, error) {
-	// TODO(GH-XX): wire PostgreSQL user repository + password verification + JWT issuance.
-	return nil, fmt.Errorf("login not yet implemented: %w", api.ErrInternalError)
 }
 
 // ResetPassword initiates a password reset by generating a token, storing it in Redis,
@@ -79,8 +217,6 @@ func (s *Service) ResetPassword(ctx context.Context, email string) error {
 		zap.Duration("ttl", resetTokenTTL),
 	)
 
-	// TODO(GH-XX): send email with reset link containing the token.
-
 	return nil
 }
 
@@ -89,7 +225,6 @@ func (s *Service) ResetPassword(ctx context.Context, email string) error {
 func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword string) error {
 	key := resetTokenPrefix + token
 
-	// Retrieve and delete the token atomically.
 	email, err := s.redis.GetDel(ctx, key).Result()
 	if err == redis.Nil {
 		return fmt.Errorf("invalid or expired reset token: %w", api.ErrUnauthorized)
@@ -111,7 +246,6 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 // GetMe returns the current user's profile.
 // Stub: full implementation depends on PostgreSQL user repository.
 func (s *Service) GetMe(_ context.Context, userID string) (*api.UserInfo, error) {
-	// TODO(GH-XX): wire PostgreSQL user repository.
 	return &api.UserInfo{
 		ID:    userID,
 		Email: "stub@example.com",
@@ -122,21 +256,33 @@ func (s *Service) GetMe(_ context.Context, userID string) (*api.UserInfo, error)
 // ChangePassword changes the authenticated user's password.
 // Stub: full implementation depends on PostgreSQL user repository.
 func (s *Service) ChangePassword(_ context.Context, _, _, _ string) error {
-	// TODO(GH-XX): wire PostgreSQL user repository + Argon2 verification.
 	return fmt.Errorf("change password not yet implemented: %w", api.ErrInternalError)
 }
 
-// Logout terminates a single session for the user.
-// Stub: full implementation depends on session/token revocation store.
-func (s *Service) Logout(_ context.Context, _, _ string) error {
-	// TODO(GH-XX): wire session revocation.
+// Logout terminates a single session by blocklisting the access token's JTI in Redis.
+func (s *Service) Logout(ctx context.Context, _ /* userID */, rawToken string) error {
+	jti, err := s.tokens.ExtractAccessTokenJTI(rawToken)
+	if err != nil {
+		return fmt.Errorf("extract token JTI: %w", api.ErrUnauthorized)
+	}
+
+	ttl := s.tokens.AccessTokenTTL()
+	key := tokenBlockPrefix + jti
+	if err := s.redis.Set(ctx, key, "1", ttl).Err(); err != nil {
+		return fmt.Errorf("blocklist token: %w", err)
+	}
+
+	s.logger.Debug("access token blocklisted", zap.String("jti", jti))
 	return nil
 }
 
-// LogoutAll terminates all sessions for the user.
-// Stub: full implementation depends on session/token revocation store.
-func (s *Service) LogoutAll(_ context.Context, _ string) error {
-	// TODO(GH-XX): wire session revocation.
+// LogoutAll terminates all sessions by revoking all refresh tokens for the user.
+func (s *Service) LogoutAll(ctx context.Context, userID string) error {
+	if err := s.refreshTokens.RevokeAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("revoke all refresh tokens: %w", err)
+	}
+
+	s.logger.Debug("all refresh tokens revoked", zap.String("user_id", userID))
 	return nil
 }
 
