@@ -116,7 +116,7 @@ type IntrospectRequest struct {
 
 // AdminUserService defines admin operations for user management.
 type AdminUserService interface {
-	ListUsers(ctx context.Context, page, perPage int, includeDeleted bool) (*AdminUserList, error)
+	ListUsers(ctx context.Context, page, perPage int, status string) (*AdminUserList, error)
 	GetUser(ctx context.Context, userID string) (*AdminUser, error)
 	CreateUser(ctx context.Context, req *CreateUserRequest) (*AdminUser, error)
 	UpdateUser(ctx context.Context, userID string, req *UpdateUserRequest) (*AdminUser, error)
@@ -127,7 +127,7 @@ type AdminUserService interface {
 
 // AdminClientService defines admin operations for OAuth2 client management.
 type AdminClientService interface {
-	ListClients(ctx context.Context, page, perPage int, includeDeleted bool) (*AdminClientList, error)
+	ListClients(ctx context.Context, page, perPage int, clientType string, includeRevoked bool) (*AdminClientList, error)
 	GetClient(ctx context.Context, clientID string) (*AdminClient, error)
 	CreateClient(ctx context.Context, req *CreateClientRequest) (*AdminClientWithSecret, error)
 	UpdateClient(ctx context.Context, clientID string, req *UpdateClientRequest) (*AdminClient, error)

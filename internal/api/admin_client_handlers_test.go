@@ -19,7 +19,7 @@ import (
 // --- Mock AdminClientService ---
 
 type mockAdminClientService struct {
-	listClientsFn  func(ctx context.Context, page, perPage int, includeDeleted bool) (*api.AdminClientList, error)
+	listClientsFn  func(ctx context.Context, page, perPage int, clientType string, includeRevoked bool) (*api.AdminClientList, error)
 	getClientFn    func(ctx context.Context, clientID string) (*api.AdminClient, error)
 	createClientFn func(ctx context.Context, req *api.CreateClientRequest) (*api.AdminClientWithSecret, error)
 	updateClientFn func(ctx context.Context, clientID string, req *api.UpdateClientRequest) (*api.AdminClient, error)
@@ -27,9 +27,9 @@ type mockAdminClientService struct {
 	rotateSecretFn func(ctx context.Context, clientID string) (*api.AdminClientWithSecret, error)
 }
 
-func (m *mockAdminClientService) ListClients(ctx context.Context, page, perPage int, includeDeleted bool) (*api.AdminClientList, error) {
+func (m *mockAdminClientService) ListClients(ctx context.Context, page, perPage int, clientType string, includeRevoked bool) (*api.AdminClientList, error) {
 	if m.listClientsFn != nil {
-		return m.listClientsFn(ctx, page, perPage, includeDeleted)
+		return m.listClientsFn(ctx, page, perPage, clientType, includeRevoked)
 	}
 	return &api.AdminClientList{
 		Clients: []api.AdminClient{{ID: "c1", Name: "test-client", ClientType: "service", Scopes: []string{"read:users"}, CreatedAt: time.Now(), UpdatedAt: time.Now()}},
@@ -123,10 +123,11 @@ func TestAdminListClients_Success(t *testing.T) {
 
 func TestAdminListClients_Pagination(t *testing.T) {
 	svc := &mockAdminClientService{
-		listClientsFn: func(_ context.Context, page, perPage int, includeDeleted bool) (*api.AdminClientList, error) {
+		listClientsFn: func(_ context.Context, page, perPage int, clientType string, includeRevoked bool) (*api.AdminClientList, error) {
 			assert.Equal(t, 3, page)
 			assert.Equal(t, 5, perPage)
-			assert.False(t, includeDeleted)
+			assert.Equal(t, "", clientType)
+			assert.False(t, includeRevoked)
 			return &api.AdminClientList{Clients: []api.AdminClient{}, Total: 50, Page: page, PerPage: perPage}, nil
 		},
 	}
@@ -345,7 +346,7 @@ func TestAdminDeleteClient_AlreadyDeleted(t *testing.T) {
 
 func TestAdminListClients_PerPageCapped(t *testing.T) {
 	svc := &mockAdminClientService{
-		listClientsFn: func(_ context.Context, page, perPage int, _ bool) (*api.AdminClientList, error) {
+		listClientsFn: func(_ context.Context, page, perPage int, _ string, _ bool) (*api.AdminClientList, error) {
 			assert.Equal(t, 1, page)
 			assert.Equal(t, 100, perPage) // Capped at 100
 			return &api.AdminClientList{Clients: []api.AdminClient{}, Total: 0, Page: page, PerPage: perPage}, nil

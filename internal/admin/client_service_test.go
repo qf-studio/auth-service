@@ -19,7 +19,7 @@ import (
 // --- Mock ClientRepository ---
 
 type mockClientRepo struct {
-	listFn             func(ctx context.Context, limit, offset int, includeRevoked bool) ([]*domain.Client, int, error)
+	listFn             func(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error)
 	findByIDFn         func(ctx context.Context, id uuid.UUID) (*domain.Client, error)
 	findByNameFn       func(ctx context.Context, name string) (*domain.Client, error)
 	createFn           func(ctx context.Context, client *domain.Client) (*domain.Client, error)
@@ -29,9 +29,9 @@ type mockClientRepo struct {
 	softDeleteFn       func(ctx context.Context, id uuid.UUID) error
 }
 
-func (m *mockClientRepo) List(ctx context.Context, limit, offset int, includeRevoked bool) ([]*domain.Client, int, error) {
+func (m *mockClientRepo) List(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error) {
 	if m.listFn != nil {
-		return m.listFn(ctx, limit, offset, includeRevoked)
+		return m.listFn(ctx, limit, offset, clientType, includeRevoked)
 	}
 	return []*domain.Client{testClient()}, 1, nil
 }
@@ -116,7 +116,7 @@ func newTestClientService(repo *mockClientRepo) *ClientService {
 func TestClientService_ListClients(t *testing.T) {
 	svc := newTestClientService(&mockClientRepo{})
 
-	result, err := svc.ListClients(context.Background(), 1, 20, false)
+	result, err := svc.ListClients(context.Background(), 1, 20, "", false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Total)
 	assert.Len(t, result.Clients, 1)
@@ -124,13 +124,13 @@ func TestClientService_ListClients(t *testing.T) {
 
 func TestClientService_ListClients_Error(t *testing.T) {
 	repo := &mockClientRepo{
-		listFn: func(_ context.Context, _, _ int, _ bool) ([]*domain.Client, int, error) {
+		listFn: func(_ context.Context, _, _ int, _ string, _ bool) ([]*domain.Client, int, error) {
 			return nil, 0, fmt.Errorf("db error")
 		},
 	}
 	svc := newTestClientService(repo)
 
-	_, err := svc.ListClients(context.Background(), 1, 20, false)
+	_, err := svc.ListClients(context.Background(), 1, 20, "", false)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrInternalError)
 }
