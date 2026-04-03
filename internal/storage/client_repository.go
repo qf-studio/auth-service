@@ -22,6 +22,7 @@ type ClientRepository interface {
 	Create(ctx context.Context, client *domain.Client) (*domain.Client, error)
 	Update(ctx context.Context, client *domain.Client) (*domain.Client, error)
 	UpdateSecretHash(ctx context.Context, id uuid.UUID, secretHash string) error
+	RotateSecret(ctx context.Context, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
 	SoftDelete(ctx context.Context, id uuid.UUID) error
 }
 
@@ -35,13 +36,14 @@ func NewPostgresClientRepository(pool *pgxpool.Pool) *PostgresClientRepository {
 	return &PostgresClientRepository{pool: pool}
 }
 
-const clientColumns = `id, name, client_type, secret_hash, scopes, owner, access_token_ttl, status, created_at, updated_at, last_used_at`
+const clientColumns = `id, name, client_type, secret_hash, previous_secret_hash, previous_secret_expires_at, scopes, owner, access_token_ttl, status, created_at, updated_at, last_used_at`
 
 func scanClient(row pgx.Row) (*domain.Client, error) {
 	c := &domain.Client{}
 	err := row.Scan(
-		&c.ID, &c.Name, &c.ClientType, &c.SecretHash, &c.Scopes,
-		&c.Owner, &c.AccessTokenTTL, &c.Status,
+		&c.ID, &c.Name, &c.ClientType, &c.SecretHash,
+		&c.PreviousSecretHash, &c.PreviousSecretExpiresAt,
+		&c.Scopes, &c.Owner, &c.AccessTokenTTL, &c.Status,
 		&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt,
 	)
 	if err != nil {
@@ -78,8 +80,9 @@ func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, 
 	for rows.Next() {
 		c := &domain.Client{}
 		if err := rows.Scan(
-			&c.ID, &c.Name, &c.ClientType, &c.SecretHash, &c.Scopes,
-			&c.Owner, &c.AccessTokenTTL, &c.Status,
+			&c.ID, &c.Name, &c.ClientType, &c.SecretHash,
+			&c.PreviousSecretHash, &c.PreviousSecretExpiresAt,
+			&c.Scopes, &c.Owner, &c.AccessTokenTTL, &c.Status,
 			&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan client: %w", err)
@@ -164,6 +167,28 @@ func (r *PostgresClientRepository) UpdateSecretHash(ctx context.Context, id uuid
 	tag, err := r.pool.Exec(ctx, query, secretHash, time.Now().UTC(), id)
 	if err != nil {
 		return fmt.Errorf("update secret hash: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("client %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// RotateSecret moves the current secret to previous_secret_hash with a grace period,
+// then sets the new secret hash. Both secrets are valid until the grace period expires.
+func (r *PostgresClientRepository) RotateSecret(ctx context.Context, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error {
+	query := `
+		UPDATE clients
+		SET previous_secret_hash = secret_hash,
+		    previous_secret_expires_at = $1,
+		    secret_hash = $2,
+		    updated_at = $3
+		WHERE id = $4 AND status != 'revoked'`
+
+	now := time.Now().UTC()
+	tag, err := r.pool.Exec(ctx, query, gracePeriodEnds, newSecretHash, now, id)
+	if err != nil {
+		return fmt.Errorf("rotate secret: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("client %s: %w", id, ErrNotFound)
