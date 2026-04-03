@@ -1,0 +1,34 @@
+package domain
+
+// Client type constants for use in TokenClaims.ClientType.
+const (
+	ClientTypeUser    = "user"
+	ClientTypeService = "service"
+	ClientTypeAgent   = "agent"
+)
+
+// TokenClaims holds the parsed and validated claims from an access token.
+// It is populated by AuthMiddleware and stored in the Gin context under
+// the key "claims". Handlers retrieve it via middleware.GetClaims.
+type TokenClaims struct {
+	// Subject is the user ID (for user tokens) or client ID (for system tokens).
+	Subject string
+
+	// Roles are the roles granted to this subject (e.g., "admin", "user").
+	// Role checks use any-of semantics: access is granted if the subject holds
+	// at least one of the required roles.
+	Roles []string
+
+	// Scopes are the OAuth 2.1 scopes granted to system clients
+	// (e.g., "read:users", "write:tokens"). Scope checks use all-of semantics:
+	// all required scopes must be present.
+	Scopes []string
+
+	// ClientType identifies the kind of entity that owns this token:
+	// "user", "service", or "agent".
+	ClientType string
+
+	// TokenID is the unique identifier (jti) used for revocation checks
+	// against the Redis blocklist.
+	TokenID string
+}

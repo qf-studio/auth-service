@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/domain"
 )
 
 // Service implements api.TokenService.
@@ -44,4 +45,18 @@ func (s *Service) Revoke(_ context.Context, _ string) error {
 func (s *Service) JWKS(_ context.Context) (*api.JWKSResponse, error) {
 	// TODO(GH-XX): implement JWKS from loaded public keys.
 	return &api.JWKSResponse{Keys: []interface{}{}}, nil
+}
+
+// ValidateToken parses and validates the given raw token (qf_at_ prefix
+// already stripped), returning its claims. Implements middleware.TokenValidator.
+func (s *Service) ValidateToken(_ context.Context, _ string) (*domain.TokenClaims, error) {
+	// TODO(GH-XX): implement JWT parsing and ES256/EdDSA validation.
+	return nil, fmt.Errorf("token validation not yet implemented: %w", api.ErrInternalError)
+}
+
+// IsRevoked reports whether the token with the given ID is present in the
+// Redis revocation blocklist. Implements middleware.TokenValidator.
+func (s *Service) IsRevoked(_ context.Context, _ string) (bool, error) {
+	// TODO(GH-XX): implement Redis blocklist check.
+	return false, nil
 }
