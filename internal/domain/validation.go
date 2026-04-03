@@ -70,7 +70,19 @@ type PasswordChangeRequest struct {
 func NewValidator() *validator.Validate {
 	v := validator.New()
 	_ = v.RegisterValidation("nist_password", validateNistPassword)
+	_ = v.RegisterValidation("client_type", validateClientType)
+	_ = v.RegisterValidation("valid_scope", validateScope)
 	return v
+}
+
+// validateClientType ensures the value is one of "service" or "agent".
+func validateClientType(fl validator.FieldLevel) bool {
+	return ValidClientTypes[fl.Field().String()]
+}
+
+// validateScope ensures the value is one of the allowed OAuth2 scopes.
+func validateScope(fl validator.FieldLevel) bool {
+	return ValidScopes[fl.Field().String()]
 }
 
 // validateNistPassword enforces NIST SP 800-63-4 password policy:
@@ -140,6 +152,10 @@ func validationMessage(fe validator.FieldError) string {
 		return fmt.Sprintf("must be one of: %s", fe.Param())
 	case "required_if":
 		return fmt.Sprintf("%s is required for this grant type", strings.ToLower(fe.Field()))
+	case "client_type":
+		return "must be one of: service, agent"
+	case "valid_scope":
+		return "invalid scope"
 	default:
 		return fmt.Sprintf("failed validation: %s", fe.Tag())
 	}
