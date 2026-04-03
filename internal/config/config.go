@@ -81,11 +81,11 @@ type Argon2Config struct {
 
 // RateLimitConfig holds rate limiting parameters.
 type RateLimitConfig struct {
-	RPS                     int
-	Burst                   int
-	ProgressiveDelayAfter   int           // number of failed attempts before progressive delay kicks in
-	LockoutDuration         time.Duration // duration to lock out after MaxFailedAttempts
-	MaxFailedAttempts       int           // failed attempts before lockout
+	RPS                   int
+	Burst                 int
+	ProgressiveDelayAfter int           // number of failed attempts before progressive delay kicks in
+	LockoutDuration       time.Duration // duration to lock out after MaxFailedAttempts
+	MaxFailedAttempts     int           // failed attempts before lockout
 }
 
 // TLSConfig holds TLS settings.
@@ -105,7 +105,7 @@ type CORSConfig struct {
 
 // RequestLimitConfig holds request size and timeout limits.
 type RequestLimitConfig struct {
-	MaxBodySize    int64         // bytes
+	MaxBodySize    int64 // bytes
 	RequestTimeout time.Duration
 }
 

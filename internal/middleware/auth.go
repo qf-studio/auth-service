@@ -12,8 +12,8 @@ import (
 
 // Context keys used by auth and RBAC middleware.
 const (
-	claimsContextKey = "claims"
-	userIDContextKey = "user_id"
+	claimsContextKey  = "claims"
+	userIDContextKey  = "user_id"
 	accessTokenPrefix = "qf_at_"
 )
 

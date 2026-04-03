@@ -140,8 +140,8 @@ func FormatRateLimitHeaders(limit, remaining int, resetUnix int64) map[string]st
 // --- Redis-backed per-account rate limiter ---
 
 const (
-	accountFailPrefix = "rl:fail:"   // Redis key prefix for failed attempt counters.
-	accountLockPrefix = "rl:lock:"   // Redis key prefix for account lockout flags.
+	accountFailPrefix = "rl:fail:" // Redis key prefix for failed attempt counters.
+	accountLockPrefix = "rl:lock:" // Redis key prefix for account lockout flags.
 )
 
 // AccountRateLimiter tracks per-account failed authentication attempts in Redis

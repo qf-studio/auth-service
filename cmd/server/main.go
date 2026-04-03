@@ -62,7 +62,10 @@ func run(log *zap.Logger) error {
 
 	// ── Services ─────────────────────────────────────────────────────────
 	authSvc := auth.NewService(redisClient, log)
-	tokenSvc := token.NewService(log)
+	tokenSvc, err := token.NewService(cfg.JWT, redisClient, log)
+	if err != nil {
+		return fmt.Errorf("token service init failed: %w", err)
+	}
 
 	services := &api.Services{
 		Auth:  authSvc,
@@ -78,6 +81,7 @@ func run(log *zap.Logger) error {
 		SecurityHeaders: middleware.SecurityHeaders(),
 		RateLimit:       rateLimiter.Handler(),
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
+		Auth:            middleware.AuthMiddleware(tokenSvc),
 	}
 
 	// ── HTTP servers ──────────────────────────────────────────────────────

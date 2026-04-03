@@ -17,10 +17,10 @@ import (
 
 // mockValidator implements middleware.TokenValidator for testing.
 type mockValidator struct {
-	claims    *domain.TokenClaims
+	claims      *domain.TokenClaims
 	validateErr error
-	revoked   bool
-	revokeErr error
+	revoked     bool
+	revokeErr   error
 }
 
 func (m *mockValidator) ValidateToken(_ context.Context, _ string) (*domain.TokenClaims, error) {
@@ -50,17 +50,17 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		authHeader     string
-		validator      *mockValidator
-		wantStatus     int
+		name             string
+		authHeader       string
+		validator        *mockValidator
+		wantStatus       int
 		wantBodyContains string
 	}{
 		{
-			name:       "valid token passes, claims set in context",
-			authHeader: "Bearer qf_at_validtoken",
-			validator:  &mockValidator{claims: validClaims},
-			wantStatus: http.StatusOK,
+			name:             "valid token passes, claims set in context",
+			authHeader:       "Bearer qf_at_validtoken",
+			validator:        &mockValidator{claims: validClaims},
+			wantStatus:       http.StatusOK,
 			wantBodyContains: "user-123",
 		},
 		{
