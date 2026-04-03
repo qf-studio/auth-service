@@ -241,8 +241,11 @@ func TestValidateToken_InvalidSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
-	// Corrupt the last character of the signature.
-	corrupted := rawJWT[:len(rawJWT)-1] + "X"
+
+	// Replace the entire signature segment with a different base64url string.
+	parts := strings.SplitN(rawJWT, ".", 3)
+	require.Len(t, parts, 3)
+	corrupted := parts[0] + "." + parts[1] + "." + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 	_, err = svc.ValidateToken(ctx, corrupted)
 	require.Error(t, err)
