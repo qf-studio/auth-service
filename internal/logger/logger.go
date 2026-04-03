@@ -15,12 +15,12 @@ var (
 	once     sync.Once
 )
 
-// Init initialises the package-level singleton logger based on the environment.
+// Init initializes the package-level singleton logger based on the environment.
 //
 //   - "production" / "staging": JSON encoder, InfoLevel, ISO 8601 timestamps.
 //   - "development": console encoder, DebugLevel.
 //
-// Any other value returns an error without initialising the logger.
+// Any other value returns an error without initializing the logger.
 // Calling Init more than once is safe but has no effect after the first call.
 func Init(environment string) error {
 	var initErr error

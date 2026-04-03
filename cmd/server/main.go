@@ -32,7 +32,7 @@ import (
 )
 
 func main() {
-	// Load config first so we can initialise the logger at the correct level.
+	// Load config first so we can initialize the logger at the correct level.
 	cfg, err := config.Load()
 	if err != nil {
 		panic(fmt.Sprintf("config load failed: %v", err))
