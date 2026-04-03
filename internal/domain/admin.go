@@ -121,8 +121,8 @@ type PaginatedResponse struct {
 
 // ValidClientTypes are the allowed client_type values.
 var ValidClientTypes = map[string]bool{
-	ClientTypeService: true,
-	ClientTypeAgent:   true,
+	string(ClientTypeService): true,
+	string(ClientTypeAgent):   true,
 }
 
 // ValidScopes are the allowed OAuth2 scope values for system clients.

@@ -104,7 +104,7 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 }
 
 // IssueTokenPair generates an access/refresh token pair for the given subject.
-func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType string) (*api.AuthResult, error) {
+func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error) {
 	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
@@ -232,7 +232,7 @@ func (c *customClaims) GetJTI() (string, error) {
 	return c.ID, nil
 }
 
-func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType string) (string, error) {
+func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType) (string, error) {
 	jti, err := generateRandomID(jtiBytes)
 	if err != nil {
 		return "", fmt.Errorf("generate jti: %w", err)
@@ -249,7 +249,7 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 		},
 		Roles:      roles,
 		Scopes:     scopes,
-		ClientType: clientType,
+		ClientType: string(clientType),
 	}
 
 	token := jwt.NewWithClaims(s.signingMethod, claims)
@@ -304,7 +304,7 @@ func claimsToDomain(c *customClaims) (*domain.TokenClaims, error) {
 		Subject:    c.Subject,
 		Roles:      c.Roles,
 		Scopes:     c.Scopes,
-		ClientType: c.ClientType,
+		ClientType: domain.ClientType(c.ClientType),
 		TokenID:    c.ID,
 	}, nil
 }
