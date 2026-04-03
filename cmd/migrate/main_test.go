@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/qf-studio/auth-service/migrations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/qf-studio/auth-service/migrations"
 )
 
 func TestCLIBuilds(t *testing.T) {
-	cmd := exec.Command("go", "build", "-o", os.DevNull, "./")
+	cmd := exec.Command("go", "build", "-o", os.DevNull, "./") //nolint:gosec // all args are string literals
 	cmd.Dir = "."
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "go build failed: %s", out)
