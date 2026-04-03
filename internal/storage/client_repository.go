@@ -88,7 +88,9 @@ func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, 
 	limitArgIdx := argIdx
 	offsetArgIdx := argIdx + 1
 	query := fmt.Sprintf(`SELECT %s FROM clients %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, clientColumns, whereClause, limitArgIdx, offsetArgIdx)
-	queryArgs := append(args, limit, offset)
+	queryArgs := make([]interface{}, len(args), len(args)+2)
+	copy(queryArgs, args)
+	queryArgs = append(queryArgs, limit, offset)
 	rows, err := r.pool.Query(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list clients: %w", err)
