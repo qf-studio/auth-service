@@ -296,3 +296,116 @@ func TestLoad_DevelopmentEnv(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "development", cfg.App.Env)
 }
+
+func TestLoad_RateLimitDefaults(t *testing.T) {
+	setEnv(t, requiredEnv())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 50, cfg.Rate.RPS)
+	assert.Equal(t, 100, cfg.Rate.Burst)
+	assert.Equal(t, 5, cfg.Rate.ProgressiveDelayAfter)
+	assert.Equal(t, 10, cfg.Rate.MaxFailedAttempts)
+	assert.Equal(t, 15*time.Minute, cfg.Rate.LockoutDuration)
+}
+
+func TestLoad_RateLimitCustomValues(t *testing.T) {
+	env := requiredEnv()
+	env["RATE_LIMIT_PROGRESSIVE_DELAY_AFTER"] = "3"
+	env["RATE_LIMIT_MAX_FAILED_ATTEMPTS"] = "7"
+	env["RATE_LIMIT_LOCKOUT_DURATION"] = "30m"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, cfg.Rate.ProgressiveDelayAfter)
+	assert.Equal(t, 7, cfg.Rate.MaxFailedAttempts)
+	assert.Equal(t, 30*time.Minute, cfg.Rate.LockoutDuration)
+}
+
+func TestLoad_CORSDefaults(t *testing.T) {
+	setEnv(t, requiredEnv())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}, cfg.CORS.AllowedMethods)
+	assert.Equal(t, []string{"Authorization", "Content-Type", "X-Request-ID"}, cfg.CORS.AllowedHeaders)
+	assert.Equal(t, []string{"X-Request-ID"}, cfg.CORS.ExposeHeaders)
+	assert.False(t, cfg.CORS.AllowCredentials)
+	assert.Equal(t, 12*time.Hour, cfg.CORS.MaxAge)
+}
+
+func TestLoad_CORSCustomValues(t *testing.T) {
+	env := requiredEnv()
+	env["CORS_ALLOWED_METHODS"] = "GET,POST"
+	env["CORS_ALLOWED_HEADERS"] = "Authorization,X-Custom"
+	env["CORS_EXPOSE_HEADERS"] = "X-RateLimit-Remaining"
+	env["CORS_ALLOW_CREDENTIALS"] = "true"
+	env["CORS_MAX_AGE"] = "1h"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"GET", "POST"}, cfg.CORS.AllowedMethods)
+	assert.Equal(t, []string{"Authorization", "X-Custom"}, cfg.CORS.AllowedHeaders)
+	assert.Equal(t, []string{"X-RateLimit-Remaining"}, cfg.CORS.ExposeHeaders)
+	assert.True(t, cfg.CORS.AllowCredentials)
+	assert.Equal(t, time.Hour, cfg.CORS.MaxAge)
+}
+
+func TestLoad_RequestLimitDefaults(t *testing.T) {
+	setEnv(t, requiredEnv())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(1<<20), cfg.RequestLimit.MaxBodySize)
+	assert.Equal(t, 30*time.Second, cfg.RequestLimit.RequestTimeout)
+}
+
+func TestLoad_RequestLimitCustomValues(t *testing.T) {
+	env := requiredEnv()
+	env["REQUEST_MAX_BODY_SIZE"] = "5242880" // 5 MiB
+	env["REQUEST_TIMEOUT"] = "60s"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(5242880), cfg.RequestLimit.MaxBodySize)
+	assert.Equal(t, 60*time.Second, cfg.RequestLimit.RequestTimeout)
+}
+
+func TestLoad_InvalidCORSMaxAge(t *testing.T) {
+	env := requiredEnv()
+	env["CORS_MAX_AGE"] = "invalid"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CORS_MAX_AGE")
+}
+
+func TestLoad_InvalidRequestTimeout(t *testing.T) {
+	env := requiredEnv()
+	env["REQUEST_TIMEOUT"] = "invalid"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "REQUEST_TIMEOUT")
+}
+
+func TestLoad_InvalidLockoutDuration(t *testing.T) {
+	env := requiredEnv()
+	env["RATE_LIMIT_LOCKOUT_DURATION"] = "invalid"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RATE_LIMIT_LOCKOUT_DURATION")
+}
