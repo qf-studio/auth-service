@@ -300,13 +300,22 @@ func claimsToDomain(c *customClaims) (*domain.TokenClaims, error) {
 		return nil, fmt.Errorf("missing subject claim")
 	}
 
-	return &domain.TokenClaims{
+	claims := &domain.TokenClaims{
 		Subject:    c.Subject,
 		Roles:      c.Roles,
 		Scopes:     c.Scopes,
 		ClientType: domain.ClientType(c.ClientType),
 		TokenID:    c.ID,
-	}, nil
+	}
+
+	if c.ExpiresAt != nil {
+		claims.ExpiresAt = c.ExpiresAt.Time
+	}
+	if c.IssuedAt != nil {
+		claims.IssuedAt = c.IssuedAt.Time
+	}
+
+	return claims, nil
 }
 
 // ── Internal: Refresh Token ──────────────────────────────────────────────────

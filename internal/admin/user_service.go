@@ -33,11 +33,11 @@ func NewUserService(repo storage.AdminUserRepository, hasher password.Hasher, lo
 	}
 }
 
-// ListUsers returns a paginated list of users.
-func (s *UserService) ListUsers(ctx context.Context, page, perPage int, includeDeleted bool) (*api.AdminUserList, error) {
+// ListUsers returns a paginated list of users filtered by status.
+func (s *UserService) ListUsers(ctx context.Context, page, perPage int, status string) (*api.AdminUserList, error) {
 	offset := (page - 1) * perPage
 
-	users, total, err := s.repo.List(ctx, perPage, offset, includeDeleted)
+	users, total, err := s.repo.List(ctx, perPage, offset, status)
 	if err != nil {
 		s.logger.Error("list users failed", zap.Error(err))
 		return nil, fmt.Errorf("list users: %w", api.ErrInternalError)

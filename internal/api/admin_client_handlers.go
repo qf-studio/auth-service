@@ -20,12 +20,13 @@ func NewAdminClientHandlers(clients AdminClientService) *AdminClientHandlers {
 }
 
 // List handles GET /admin/clients.
-// Query params: page (default 1), per_page (default 20), include_deleted (default false).
+// Query params: page (default 1), per_page (default 20), client_type (service|agent), include_revoked (default false).
 func (h *AdminClientHandlers) List(c *gin.Context) {
 	page, perPage := parsePagination(c)
-	includeDeleted, _ := strconv.ParseBool(c.DefaultQuery("include_deleted", "false"))
+	clientType := c.DefaultQuery("client_type", "")
+	includeRevoked, _ := strconv.ParseBool(c.DefaultQuery("include_revoked", "false"))
 
-	result, err := h.clients.ListClients(c.Request.Context(), page, perPage, includeDeleted)
+	result, err := h.clients.ListClients(c.Request.Context(), page, perPage, clientType, includeRevoked)
 	if err != nil {
 		handleServiceError(c, err)
 		return

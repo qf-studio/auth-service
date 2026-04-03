@@ -119,7 +119,7 @@ func run(log *zap.Logger) error {
 	// ── Admin services ────────────────────────────────────────────────────
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log)
-	adminTokenSvc := admin.NewTokenService(tokenSvc, "auth-service", log)
+	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log)
 
 	adminServices := &api.AdminServices{
 		Users:   adminUserSvc,
