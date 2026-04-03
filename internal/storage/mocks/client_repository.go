@@ -11,7 +11,7 @@ import (
 
 // MockClientRepository is a configurable mock for storage.ClientRepository.
 type MockClientRepository struct {
-	ListFn             func(ctx context.Context, limit, offset int, includeRevoked bool) ([]*domain.Client, int, error)
+	ListFn             func(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error)
 	FindByIDFn         func(ctx context.Context, id uuid.UUID) (*domain.Client, error)
 	FindByNameFn       func(ctx context.Context, name string) (*domain.Client, error)
 	CreateFn           func(ctx context.Context, client *domain.Client) (*domain.Client, error)
@@ -22,8 +22,8 @@ type MockClientRepository struct {
 }
 
 // List delegates to ListFn.
-func (m *MockClientRepository) List(ctx context.Context, limit, offset int, includeRevoked bool) ([]*domain.Client, int, error) {
-	return m.ListFn(ctx, limit, offset, includeRevoked)
+func (m *MockClientRepository) List(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error) {
+	return m.ListFn(ctx, limit, offset, clientType, includeRevoked)
 }
 
 // FindByID delegates to FindByIDFn.
