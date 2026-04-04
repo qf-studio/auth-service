@@ -112,16 +112,19 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Repositories (admin) ─────────────────────────────────────────────
 	adminUserRepo := storage.NewPostgresAdminUserRepository(pgPool)
 	clientRepo := storage.NewPostgresClientRepository(pgPool)
+	auditRepo := storage.NewPostgresAuditRepository(pgPool)
 
 	// ── Admin services ────────────────────────────────────────────────────
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log)
 	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log)
+	adminAuditSvc := admin.NewAuditService(auditRepo, log)
 
 	adminServices := &api.AdminServices{
 		Users:   adminUserSvc,
 		Clients: adminClientSvc,
 		Tokens:  adminTokenSvc,
+		Audit:   adminAuditSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

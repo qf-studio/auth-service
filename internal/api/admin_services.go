@@ -112,6 +112,37 @@ type IntrospectRequest struct {
 	Token string `json:"token" validate:"required"`
 }
 
+// --- Admin audit types ---
+
+// AdminAuditEvent represents a single audit log entry in admin API responses.
+type AdminAuditEvent struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id,omitempty"`
+	ClientID  string    `json:"client_id,omitempty"`
+	EventType string    `json:"event_type"`
+	IPAddress string    `json:"ip_address,omitempty"`
+	UserAgent string    `json:"user_agent,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AdminAuditList is the paginated response for listing audit events.
+type AdminAuditList struct {
+	Events  []AdminAuditEvent `json:"events"`
+	Total   int               `json:"total"`
+	Page    int               `json:"page"`
+	PerPage int               `json:"per_page"`
+}
+
+// AuditFilter holds filter parameters for querying audit events.
+type AuditFilter struct {
+	UserID    string
+	ClientID  string
+	EventType string
+	StartDate *time.Time
+	EndDate   *time.Time
+}
+
 // --- Admin service interfaces ---
 
 // AdminUserService defines admin operations for user management.
@@ -140,9 +171,15 @@ type AdminTokenService interface {
 	Introspect(ctx context.Context, token string) (*IntrospectionResponse, error)
 }
 
+// AdminAuditService defines admin operations for querying audit logs.
+type AdminAuditService interface {
+	ListEvents(ctx context.Context, page, perPage int, filter AuditFilter) (*AdminAuditList, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users   AdminUserService
 	Clients AdminClientService
 	Tokens  AdminTokenService
+	Audit   AdminAuditService
 }

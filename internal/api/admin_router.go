@@ -81,6 +81,12 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		admin.POST("/tokens/introspect", tokenH.Introspect)
 	}
 
+	// Audit log.
+	if svc.Audit != nil {
+		auditH := NewAdminAuditHandlers(svc.Audit)
+		admin.GET("/audit", auditH.List)
+	}
+
 	return r
 }
 
