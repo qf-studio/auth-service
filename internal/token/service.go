@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/domain"
 )
@@ -54,6 +55,7 @@ const (
 // Service implements api.TokenService and middleware.TokenValidator.
 type Service struct {
 	logger        *zap.Logger
+	audit         audit.EventLogger
 	redis         *redis.Client
 	cfg           config.JWTConfig
 	privateKey    crypto.Signer
@@ -63,7 +65,7 @@ type Service struct {
 
 // NewService creates a new token Service, loading the private key from the
 // path specified in cfg.PrivateKeyPath.
-func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Logger) (*Service, error) {
+func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Logger, auditor audit.EventLogger) (*Service, error) {
 	keyData, err := os.ReadFile(cfg.PrivateKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("read private key: %w", err)
@@ -76,6 +78,7 @@ func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Log
 
 	return &Service{
 		logger:        logger,
+		audit:         auditor,
 		redis:         redisClient,
 		cfg:           cfg,
 		privateKey:    signer,
@@ -86,7 +89,7 @@ func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Log
 
 // NewServiceFromKey creates a token Service from an already-parsed private key.
 // Useful for testing without filesystem access.
-func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClient *redis.Client, logger *zap.Logger) (*Service, error) {
+func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClient *redis.Client, logger *zap.Logger, auditor audit.EventLogger) (*Service, error) {
 	pub := privateKey.Public()
 	method, err := signingMethodForKey(privateKey, cfg.Algorithm)
 	if err != nil {
@@ -95,6 +98,7 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 
 	return &Service{
 		logger:        logger,
+		audit:         auditor,
 		redis:         redisClient,
 		cfg:           cfg,
 		privateKey:    privateKey,
@@ -135,7 +139,18 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (*api.Aut
 
 	// Issue new pair — refresh tokens carry no roles/scopes, so we issue with empty.
 	// The caller (auth service) should enrich with user's current roles/scopes.
-	return s.IssueTokenPair(ctx, subject, nil, nil, domain.ClientTypeUser)
+	result, err := s.IssueTokenPair(ctx, subject, nil, nil, domain.ClientTypeUser)
+	if err != nil {
+		return nil, err
+	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventTokenRefresh,
+		ActorID:  subject,
+		TargetID: subject,
+	})
+
+	return result, nil
 }
 
 // ClientCredentials issues an access token for service-to-service authentication.
@@ -181,6 +196,11 @@ func (s *Service) Revoke(ctx context.Context, rawToken string) error {
 		)
 		return fmt.Errorf("revoke token: %w", err)
 	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventTokenRevoke,
+		Metadata: map[string]string{"jti": jti},
+	})
 
 	s.logger.Info("token revoked", zap.String("jti", jti), zap.Duration("ttl", ttl))
 	return nil

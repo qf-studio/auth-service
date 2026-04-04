@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -123,7 +124,7 @@ func testUser() *domain.User {
 }
 
 func newTestUserService(repo *mockAdminUserRepo) *UserService {
-	return NewUserService(repo, &mockHasher{}, zap.NewNop())
+	return NewUserService(repo, &mockHasher{}, zap.NewNop(), audit.NopLogger{})
 }
 
 // --- ListUsers ---
@@ -238,7 +239,7 @@ func TestUserService_CreateUser_HashError(t *testing.T) {
 		hashFn: func(_ string) (string, error) {
 			return "", fmt.Errorf("hash failed")
 		},
-	}, zap.NewNop())
+	}, zap.NewNop(), audit.NopLogger{})
 
 	_, err := svc.CreateUser(context.Background(), &api.CreateUserRequest{
 		Email:    "new@example.com",

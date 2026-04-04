@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -129,7 +130,7 @@ func (m *mockHasher) Verify(password, hash string) (bool, error) {
 func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher) *Service {
 	t.Helper()
 	logger, _ := zap.NewDevelopment()
-	return NewService(nil, logger, users, tokens, issuer, hasher, &mockBreachChecker{})
+	return NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{})
 }
 
 // newRedisClient creates a Redis client for integration tests (password reset).
@@ -165,7 +166,7 @@ func newIntegrationService(t *testing.T) *Service {
 	t.Helper()
 	client := newRedisClient(t)
 	logger, _ := zap.NewDevelopment()
-	return NewService(client, logger, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
+	return NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
 }
 
 // ── Login Tests ──────────────────────────────────────────────────────────────

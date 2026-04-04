@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
@@ -31,14 +32,16 @@ type ClientService struct {
 	repo   storage.ClientRepository
 	hasher password.Hasher
 	logger *zap.Logger
+	audit  audit.EventLogger
 }
 
 // NewClientService creates a new admin client service.
-func NewClientService(repo storage.ClientRepository, hasher password.Hasher, logger *zap.Logger) *ClientService {
+func NewClientService(repo storage.ClientRepository, hasher password.Hasher, logger *zap.Logger, auditor audit.EventLogger) *ClientService {
 	return &ClientService{
 		repo:   repo,
 		hasher: hasher,
 		logger: logger,
+		audit:  auditor,
 	}
 }
 
@@ -128,6 +131,12 @@ func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientR
 		return nil, fmt.Errorf("create client: %w", api.ErrInternalError)
 	}
 
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminClientCreate,
+		TargetID: created.ID.String(),
+		Metadata: map[string]string{"name": created.Name, "type": string(created.ClientType)},
+	})
+
 	return &api.AdminClientWithSecret{
 		AdminClient:  domainClientToAdmin(created),
 		ClientSecret: secret,
@@ -169,6 +178,11 @@ func (s *ClientService) UpdateClient(ctx context.Context, clientID string, req *
 		return nil, fmt.Errorf("update client: %w", api.ErrInternalError)
 	}
 
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminClientUpdate,
+		TargetID: clientID,
+	})
+
 	admin := domainClientToAdmin(updated)
 	return &admin, nil
 }
@@ -191,6 +205,10 @@ func (s *ClientService) DeleteClient(ctx context.Context, clientID string) error
 		s.logger.Error("delete client failed", zap.String("client_id", clientID), zap.Error(err))
 		return fmt.Errorf("delete client: %w", api.ErrInternalError)
 	}
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminClientDelete,
+		TargetID: clientID,
+	})
 	return nil
 }
 
@@ -229,6 +247,11 @@ func (s *ClientService) RotateSecret(ctx context.Context, clientID string) (*api
 		s.logger.Error("re-read client after rotation failed", zap.String("client_id", clientID), zap.Error(err))
 		return nil, fmt.Errorf("rotate secret: %w", api.ErrInternalError)
 	}
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminClientRotate,
+		TargetID: clientID,
+	})
+
 	return &api.AdminClientWithSecret{
 		AdminClient:     domainClientToAdmin(client),
 		ClientSecret:    secret,

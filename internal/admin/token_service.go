@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 )
 
@@ -28,16 +29,18 @@ type TokenService struct {
 	refreshTokens RefreshTokenLookup
 	issuer        string
 	logger        *zap.Logger
+	audit         audit.EventLogger
 }
 
 // NewTokenService creates a new admin token service.
 // refreshTokens may be nil; when nil, refresh token introspection returns active=false.
-func NewTokenService(validator TokenValidator, refreshTokens RefreshTokenLookup, issuer string, logger *zap.Logger) *TokenService {
+func NewTokenService(validator TokenValidator, refreshTokens RefreshTokenLookup, issuer string, logger *zap.Logger, auditor audit.EventLogger) *TokenService {
 	return &TokenService{
 		validator:     validator,
 		refreshTokens: refreshTokens,
 		issuer:        issuer,
 		logger:        logger,
+		audit:         auditor,
 	}
 }
 
@@ -48,10 +51,26 @@ func NewTokenService(validator TokenValidator, refreshTokens RefreshTokenLookup,
 //
 // Returns active=false for invalid, expired, or revoked tokens (never an error for those cases).
 func (s *TokenService) Introspect(ctx context.Context, token string) (*api.IntrospectionResponse, error) {
+	var resp *api.IntrospectionResponse
+	var err error
+
 	if strings.HasPrefix(token, "qf_rt_") {
-		return s.introspectRefreshToken(ctx, token)
+		resp, err = s.introspectRefreshToken(ctx, token)
+	} else {
+		resp, err = s.introspectAccessToken(ctx, token)
 	}
-	return s.introspectAccessToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type: audit.EventTokenIntrospect,
+		Metadata: map[string]string{
+			"active": fmt.Sprintf("%t", resp.Active),
+		},
+	})
+
+	return resp, nil
 }
 
 // introspectAccessToken validates a JWT access token (qf_at_ prefix accepted).

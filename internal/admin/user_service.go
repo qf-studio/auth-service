@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
@@ -22,14 +23,16 @@ type UserService struct {
 	repo   storage.AdminUserRepository
 	hasher password.Hasher
 	logger *zap.Logger
+	audit  audit.EventLogger
 }
 
 // NewUserService creates a new admin user service.
-func NewUserService(repo storage.AdminUserRepository, hasher password.Hasher, logger *zap.Logger) *UserService {
+func NewUserService(repo storage.AdminUserRepository, hasher password.Hasher, logger *zap.Logger, auditor audit.EventLogger) *UserService {
 	return &UserService{
 		repo:   repo,
 		hasher: hasher,
 		logger: logger,
+		audit:  auditor,
 	}
 }
 
@@ -105,6 +108,12 @@ func (s *UserService) CreateUser(ctx context.Context, req *api.CreateUserRequest
 		return nil, fmt.Errorf("create user: %w", api.ErrInternalError)
 	}
 
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminUserCreate,
+		TargetID: created.ID,
+		Metadata: map[string]string{"email": created.Email},
+	})
+
 	admin := domainUserToAdmin(created)
 	return &admin, nil
 }
@@ -142,6 +151,11 @@ func (s *UserService) UpdateUser(ctx context.Context, userID string, req *api.Up
 		return nil, fmt.Errorf("update user: %w", api.ErrInternalError)
 	}
 
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminUserUpdate,
+		TargetID: userID,
+	})
+
 	admin := domainUserToAdmin(updated)
 	return &admin, nil
 }
@@ -159,6 +173,10 @@ func (s *UserService) DeleteUser(ctx context.Context, userID string) error {
 		s.logger.Error("delete user failed", zap.String("user_id", userID), zap.Error(err))
 		return fmt.Errorf("delete user: %w", api.ErrInternalError)
 	}
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminUserDelete,
+		TargetID: userID,
+	})
 	return nil
 }
 
@@ -172,6 +190,12 @@ func (s *UserService) LockUser(ctx context.Context, userID string, reason string
 		s.logger.Error("lock user failed", zap.String("user_id", userID), zap.Error(err))
 		return nil, fmt.Errorf("lock user: %w", api.ErrInternalError)
 	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminUserLock,
+		TargetID: userID,
+		Metadata: map[string]string{"reason": reason},
+	})
 
 	admin := domainUserToAdmin(u)
 	return &admin, nil
@@ -187,6 +211,11 @@ func (s *UserService) UnlockUser(ctx context.Context, userID string) (*api.Admin
 		s.logger.Error("unlock user failed", zap.String("user_id", userID), zap.Error(err))
 		return nil, fmt.Errorf("unlock user: %w", api.ErrInternalError)
 	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventAdminUserUnlock,
+		TargetID: userID,
+	})
 
 	admin := domainUserToAdmin(u)
 	return &admin, nil

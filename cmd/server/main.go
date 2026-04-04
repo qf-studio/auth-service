@@ -18,6 +18,7 @@ import (
 
 	"github.com/qf-studio/auth-service/internal/admin"
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/config"
@@ -73,14 +74,17 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	userRepo := storage.NewPostgresUserRepository(pgPool)
 	refreshTokenRepo := storage.NewPostgresRefreshTokenRepository(pgPool)
 
+	// ── Audit ─────────────────────────────────────────────────────────────
+	auditSvc := audit.NewService(log, 1024)
+
 	// ── Services ─────────────────────────────────────────────────────────
 	hasher := password.New([]byte(cfg.Argon2.Pepper))
-	tokenSvc, err := token.NewService(cfg.JWT, redisClient, log)
+	tokenSvc, err := token.NewService(cfg.JWT, redisClient, log, auditSvc)
 	if err != nil {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
 	hibpClient := hibp.NewClient(http.DefaultClient)
-	authSvc := auth.NewService(redisClient, log, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
+	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
 
 	services := &api.Services{
 		Auth:  authSvc,
@@ -114,9 +118,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	clientRepo := storage.NewPostgresClientRepository(pgPool)
 
 	// ── Admin services ────────────────────────────────────────────────────
-	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log)
-	adminClientSvc := admin.NewClientService(clientRepo, hasher, log)
-	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log)
+	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
+	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
+	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
 
 	adminServices := &api.AdminServices{
 		Users:   adminUserSvc,
@@ -148,6 +152,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Decision: Redis is listed before any future DB closer so that
 	// token-revocation lookups during drain can still reach the cache.
 	closers := []httpserver.Closer{
+		auditSvc,
 		&redisCloser{client: redisClient},
 	}
 
