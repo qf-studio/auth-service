@@ -11,12 +11,14 @@ import (
 
 // AuthHandlers groups HTTP handlers for authentication endpoints.
 type AuthHandlers struct {
-	auth AuthService
+	auth    AuthService
+	session SessionService
 }
 
-// NewAuthHandlers creates a new AuthHandlers with the given AuthService.
-func NewAuthHandlers(auth AuthService) *AuthHandlers {
-	return &AuthHandlers{auth: auth}
+// NewAuthHandlers creates a new AuthHandlers with the given AuthService
+// and an optional SessionService for session creation on login.
+func NewAuthHandlers(auth AuthService, session SessionService) *AuthHandlers {
+	return &AuthHandlers{auth: auth, session: session}
 }
 
 // Register handles POST /auth/register.
@@ -40,6 +42,15 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 	if err != nil {
 		handleServiceError(c, err)
 		return
+	}
+
+	// Create a session record if the session service is available.
+	if h.session != nil && result.UserID != "" {
+		ip := c.ClientIP()
+		ua := c.GetHeader("User-Agent")
+		// Session creation is best-effort; login should not fail if session
+		// tracking is unavailable.
+		_, _ = h.session.CreateSession(c.Request.Context(), result.UserID, ip, ua)
 	}
 
 	c.JSON(http.StatusOK, result)

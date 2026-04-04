@@ -41,8 +41,13 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 	}
 
 	v := domain.NewValidator()
-	authH := NewAuthHandlers(svc.Auth)
+	authH := NewAuthHandlers(svc.Auth, svc.Session)
 	tokenH := NewTokenHandlers(svc.Token)
+
+	var sessionH *SessionHandlers
+	if svc.Session != nil {
+		sessionH = NewSessionHandlers(svc.Session)
+	}
 
 	// Health probes (no middleware beyond global).
 	hh := newHealthHandlers(healthSvc)
@@ -75,6 +80,12 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 	protected.PUT("/me/password", validateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)
 	protected.POST("/logout", authH.Logout)
 	protected.POST("/logout/all", authH.LogoutAll)
+
+	if sessionH != nil {
+		protected.GET("/sessions", sessionH.List)
+		protected.DELETE("/sessions/:id", sessionH.Delete)
+		protected.DELETE("/sessions", sessionH.DeleteAll)
+	}
 
 	return r
 }

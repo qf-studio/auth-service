@@ -19,14 +19,15 @@ import (
 	"github.com/qf-studio/auth-service/internal/admin"
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/auth"
-	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/health"
+	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
 	"github.com/qf-studio/auth-service/internal/metrics"
 	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/password"
+	"github.com/qf-studio/auth-service/internal/session"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
 )
@@ -82,9 +83,14 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	hibpClient := hibp.NewClient(http.DefaultClient)
 	authSvc := auth.NewService(redisClient, log, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
 
+	// ── Session ──────────────────────────────────────────────────────────
+	sessionStore := session.NewMemoryStore()
+	sessionSvc := session.NewService(sessionStore)
+
 	services := &api.Services{
-		Auth:  authSvc,
-		Token: tokenSvc,
+		Auth:    authSvc,
+		Token:   tokenSvc,
+		Session: sessionSvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
