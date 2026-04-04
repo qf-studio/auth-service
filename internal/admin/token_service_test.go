@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -67,7 +68,7 @@ func (m *mockRefreshTokenLookup) FindBySignature(ctx context.Context, signature 
 // --- Helpers ---
 
 func newTestTokenService(validator *mockTokenValidator, lookup RefreshTokenLookup) *TokenService {
-	return NewTokenService(validator, lookup, "auth-service", zap.NewNop())
+	return NewTokenService(validator, lookup, "auth-service", zap.NewNop(), audit.NopLogger{})
 }
 
 // --- Introspect: Access Token (Active) ---

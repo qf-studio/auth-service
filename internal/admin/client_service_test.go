@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -108,7 +109,7 @@ func testClient() *domain.Client {
 }
 
 func newTestClientService(repo *mockClientRepo) *ClientService {
-	return NewClientService(repo, &mockHasher{}, zap.NewNop())
+	return NewClientService(repo, &mockHasher{}, zap.NewNop(), audit.NopLogger{})
 }
 
 // --- ListClients ---

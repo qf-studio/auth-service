@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/password"
@@ -41,19 +42,21 @@ type TokenIssuer interface {
 // Service implements api.AuthService with Redis-backed password reset tokens
 // and PostgreSQL-backed user authentication.
 type Service struct {
-	redis     *redis.Client
-	logger    *zap.Logger
-	users     storage.UserRepository
-	tokens    storage.RefreshTokenRepository
-	issuer    TokenIssuer
-	hasher    password.Hasher
-	breaches  hibp.BreachChecker
+	redis    *redis.Client
+	logger   *zap.Logger
+	audit    audit.EventLogger
+	users    storage.UserRepository
+	tokens   storage.RefreshTokenRepository
+	issuer   TokenIssuer
+	hasher   password.Hasher
+	breaches hibp.BreachChecker
 }
 
 // NewService creates a new auth Service.
 func NewService(
 	redisClient *redis.Client,
 	logger *zap.Logger,
+	auditor audit.EventLogger,
 	users storage.UserRepository,
 	tokens storage.RefreshTokenRepository,
 	issuer TokenIssuer,
@@ -63,6 +66,7 @@ func NewService(
 	return &Service{
 		redis:    redisClient,
 		logger:   logger,
+		audit:    auditor,
 		users:    users,
 		tokens:   tokens,
 		issuer:   issuer,
@@ -73,13 +77,20 @@ func NewService(
 
 // Register creates a new user account.
 // Stub: full implementation depends on PostgreSQL user repository (future issue).
-func (s *Service) Register(_ context.Context, email, _, name string) (*api.UserInfo, error) {
+func (s *Service) Register(ctx context.Context, email, _, name string) (*api.UserInfo, error) {
 	// TODO(GH-XX): wire PostgreSQL user repository for persistence.
-	return &api.UserInfo{
+	info := &api.UserInfo{
 		ID:    "stub-user-id",
 		Email: email,
 		Name:  name,
-	}, nil
+	}
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventRegister,
+		ActorID:  info.ID,
+		TargetID: info.ID,
+		Metadata: map[string]string{"email": email},
+	})
+	return info, nil
 }
 
 // Login authenticates a user by email and password.
@@ -88,6 +99,10 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	user, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
+			s.audit.LogEvent(ctx, audit.Event{
+				Type:     audit.EventLoginFailure,
+				Metadata: map[string]string{"reason": "user_not_found"},
+			})
 			return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
 		}
 		s.logger.Error("failed to find user by email", zap.Error(err))
@@ -96,9 +111,21 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 
 	// Check account status before verifying password.
 	if user.DeletedAt != nil {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventLoginFailure,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"reason": "account_suspended"},
+		})
 		return nil, fmt.Errorf("account suspended: %w", api.ErrUnauthorized)
 	}
 	if user.Locked {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventLoginFailure,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"reason": "account_locked"},
+		})
 		return nil, fmt.Errorf("account locked: %w", api.ErrUnauthorized)
 	}
 
@@ -108,6 +135,12 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		return nil, fmt.Errorf("verify password: %w", err)
 	}
 	if !match {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventLoginFailure,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"reason": "invalid_password"},
+		})
 		return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
 	}
 
@@ -127,6 +160,12 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	if err := s.users.UpdateLastLogin(ctx, user.ID, time.Now().UTC()); err != nil {
 		s.logger.Error("failed to update last_login_at", zap.String("user_id", user.ID), zap.Error(err))
 	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventLoginSuccess,
+		ActorID:  user.ID,
+		TargetID: user.ID,
+	})
 
 	return result, nil
 }
@@ -151,6 +190,11 @@ func (s *Service) ResetPassword(ctx context.Context, email string) error {
 		zap.String("email", email),
 		zap.Duration("ttl", resetTokenTTL),
 	)
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventPasswordReset,
+		Metadata: map[string]string{"email": email},
+	})
 
 	// TODO(GH-XX): send email with reset link containing the token.
 
@@ -178,6 +222,11 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 
 	s.logger.Info("password reset confirmed", zap.String("email", email))
 
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventPasswordResetConfm,
+		Metadata: map[string]string{"email": email},
+	})
+
 	return nil
 }
 
@@ -194,8 +243,13 @@ func (s *Service) GetMe(_ context.Context, userID string) (*api.UserInfo, error)
 
 // ChangePassword changes the authenticated user's password.
 // Stub: full implementation depends on PostgreSQL user repository.
-func (s *Service) ChangePassword(_ context.Context, _, _, _ string) error {
+func (s *Service) ChangePassword(ctx context.Context, userID, _, _ string) error {
 	// TODO(GH-XX): wire PostgreSQL user repository + Argon2 verification.
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventPasswordChange,
+		ActorID:  userID,
+		TargetID: userID,
+	})
 	return fmt.Errorf("change password not yet implemented: %w", api.ErrInternalError)
 }
 
@@ -211,6 +265,12 @@ func (s *Service) Logout(ctx context.Context, userID, token string) error {
 		return fmt.Errorf("revoke access token: %w", err)
 	}
 
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventLogout,
+		ActorID:  userID,
+		TargetID: userID,
+	})
+
 	s.logger.Info("session terminated", zap.String("user_id", userID))
 	return nil
 }
@@ -224,6 +284,12 @@ func (s *Service) LogoutAll(ctx context.Context, userID string) error {
 		)
 		return fmt.Errorf("revoke all sessions: %w", err)
 	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventLogoutAll,
+		ActorID:  userID,
+		TargetID: userID,
+	})
 
 	s.logger.Info("all sessions terminated", zap.String("user_id", userID))
 	return nil

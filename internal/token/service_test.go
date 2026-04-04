@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/token"
@@ -82,7 +83,7 @@ func newES256Service(t *testing.T) (*token.Service, *miniredis.Miniredis) {
 	key := generateES256Key(t)
 	mr, rc := newTestRedis(t)
 	cfg := defaultCfg()
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger())
+	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	return svc, mr
 }
@@ -93,7 +94,7 @@ func newEdDSAService(t *testing.T) (*token.Service, *miniredis.Miniredis) {
 	mr, rc := newTestRedis(t)
 	cfg := defaultCfg()
 	cfg.Algorithm = "EdDSA"
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger())
+	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	return svc, mr
 }
@@ -109,7 +110,7 @@ func TestNewService_ES256FromFile(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.PrivateKeyPath = keyPath
 
-	svc, err := token.NewService(cfg, rc, testLogger())
+	svc, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 }
@@ -124,7 +125,7 @@ func TestNewService_EdDSAFromFile(t *testing.T) {
 	cfg.Algorithm = "EdDSA"
 	cfg.PrivateKeyPath = keyPath
 
-	svc, err := token.NewService(cfg, rc, testLogger())
+	svc, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 }
@@ -134,7 +135,7 @@ func TestNewService_InvalidKeyPath(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.PrivateKeyPath = "/nonexistent/key.pem"
 
-	_, err := token.NewService(cfg, rc, testLogger())
+	_, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read private key")
 }
@@ -149,7 +150,7 @@ func TestNewService_AlgorithmMismatch(t *testing.T) {
 	cfg.PrivateKeyPath = keyPath
 	cfg.Algorithm = "EdDSA" // ECDSA key with EdDSA algorithm
 
-	_, err := token.NewService(cfg, rc, testLogger())
+	_, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse private key")
 }
@@ -257,7 +258,7 @@ func TestValidateToken_ExpiredToken(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.AccessTokenTTL = 1 * time.Millisecond // Very short TTL
 
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger())
+	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -349,7 +350,7 @@ func TestRevoke_ExpiredTokenNoBlocklist(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.AccessTokenTTL = 1 * time.Millisecond
 
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger())
+	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -409,7 +410,7 @@ func TestRefresh_ExpiredRefreshToken(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.RefreshTokenTTL = 1 * time.Second
 
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger())
+	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -433,7 +434,7 @@ func TestRefresh_SecretRotation(t *testing.T) {
 	oldCfg := defaultCfg()
 	oldCfg.SystemSecrets = []string{"old-secret"}
 
-	oldSvc, err := token.NewServiceFromKey(oldCfg, key, rc, testLogger())
+	oldSvc, err := token.NewServiceFromKey(oldCfg, key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -444,7 +445,7 @@ func TestRefresh_SecretRotation(t *testing.T) {
 	newCfg := defaultCfg()
 	newCfg.SystemSecrets = []string{"new-secret", "old-secret"}
 
-	newSvc, err := token.NewServiceFromKey(newCfg, key, rc, testLogger())
+	newSvc, err := token.NewServiceFromKey(newCfg, key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	// Old refresh token should still validate with the new service.
@@ -511,7 +512,7 @@ func TestNewServiceFromKey_AlgorithmMismatch(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.Algorithm = "EdDSA"
 
-	_, err := token.NewServiceFromKey(cfg, key, rc, testLogger())
+	_, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ECDSA")
 }
@@ -537,7 +538,7 @@ func TestNewService_ECKeyFile(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.PrivateKeyPath = path
 
-	svc, err := token.NewService(cfg, rc, testLogger())
+	svc, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 }
@@ -594,7 +595,7 @@ func TestIssueTokenPair_NoSystemSecretsError(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.SystemSecrets = nil
 
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger())
+	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
