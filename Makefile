@@ -1,8 +1,12 @@
-.PHONY: build test lint fmt clean
+.PHONY: build run test test-cover lint lint-fix fmt clean migrate-up migrate-down docker-up docker-down
 
 # Build
 build:
 	go build -o bin/auth-service cmd/server/main.go
+
+# Run
+run:
+	go run cmd/server/main.go
 
 # Test
 test:
@@ -23,6 +27,20 @@ lint-fix:
 fmt:
 	go fmt ./...
 	goimports -w .
+
+# Migrations
+migrate-up:
+	go run cmd/migrate/main.go up
+
+migrate-down:
+	go run cmd/migrate/main.go down
+
+# Docker
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down
 
 # Clean
 clean:
