@@ -20,6 +20,9 @@ var (
 	ErrClientNotFound  = errors.New("client not found")
 	ErrClientSuspended = errors.New("client suspended")
 
+	// Session errors.
+	ErrSessionInactive = errors.New("session inactive due to inactivity")
+
 	// Authorization errors.
 	ErrInsufficientScope = errors.New("insufficient scope")
 	ErrInsufficientRole  = errors.New("insufficient role")
