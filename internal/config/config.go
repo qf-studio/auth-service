@@ -23,6 +23,23 @@ type Config struct {
 	Email        EmailConfig
 	DPoP         DPoPConfig
 	MFA          MFAConfig
+	OAuth        OAuthConfig
+}
+
+// OAuthProviderConfig holds credentials for a single OAuth provider.
+type OAuthProviderConfig struct {
+	Enabled      bool   // OAUTH_<PROVIDER>_ENABLED
+	ClientID     string // OAUTH_<PROVIDER>_CLIENT_ID
+	ClientSecret string // OAUTH_<PROVIDER>_CLIENT_SECRET
+	RedirectURL  string // OAUTH_<PROVIDER>_REDIRECT_URL
+}
+
+// OAuthConfig holds social login / OAuth settings.
+type OAuthConfig struct {
+	StateSecret string              // OAUTH_STATE_SECRET: HMAC key for signing state tokens
+	Google      OAuthProviderConfig // Google OAuth 2.0
+	GitHub      OAuthProviderConfig // GitHub OAuth
+	Apple       OAuthProviderConfig // Sign in with Apple
 }
 
 // MFAConfig holds multi-factor authentication settings.
@@ -232,6 +249,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	oauthCfg, err := loadOAuth(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -254,6 +275,7 @@ func Load() (*Config, error) {
 		Email:        email,
 		DPoP:         dpop,
 		MFA:          mfaCfg,
+		OAuth:        oauthCfg,
 	}, nil
 }
 
@@ -547,6 +569,47 @@ func loadMFA(l *loader) (MFAConfig, error) {
 		Digits:          digits,
 		Period:          period,
 		BackupCodeCount: backupCount,
+	}, nil
+}
+
+func loadOAuth(l *loader) (OAuthConfig, error) {
+	stateSecret := l.optStr("OAUTH_STATE_SECRET", "")
+
+	google, err := loadOAuthProvider(l, "GOOGLE")
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	github, err := loadOAuthProvider(l, "GITHUB")
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	apple, err := loadOAuthProvider(l, "APPLE")
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+
+	return OAuthConfig{
+		StateSecret: stateSecret,
+		Google:      google,
+		GitHub:      github,
+		Apple:       apple,
+	}, nil
+}
+
+func loadOAuthProvider(l *loader, prefix string) (OAuthProviderConfig, error) {
+	enabled, err := l.optBool("OAUTH_"+prefix+"_ENABLED", false)
+	if err != nil {
+		return OAuthProviderConfig{}, err
+	}
+	clientID := l.optStr("OAUTH_"+prefix+"_CLIENT_ID", "")
+	clientSecret := l.optStr("OAUTH_"+prefix+"_CLIENT_SECRET", "")
+	redirectURL := l.optStr("OAUTH_"+prefix+"_REDIRECT_URL", "")
+
+	return OAuthProviderConfig{
+		Enabled:      enabled,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  redirectURL,
 	}, nil
 }
 

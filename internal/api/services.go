@@ -123,6 +123,19 @@ type MFAService interface {
 	GenerateMFAToken(ctx context.Context, userID string) (string, error)
 }
 
+// OAuthInitResult contains the authorization URL and state for an OAuth flow initiation.
+type OAuthInitResult struct {
+	AuthURL string `json:"auth_url"`
+	State   string `json:"state"`
+}
+
+// OAuthService defines the operations for social login / OAuth provider integration.
+type OAuthService interface {
+	InitiateAuth(ctx context.Context, provider string) (*OAuthInitResult, error)
+	HandleCallback(ctx context.Context, state, code string) (*AuthResult, error)
+	ListProviders() []string
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
@@ -130,6 +143,7 @@ type Services struct {
 	Session SessionService
 	DPoP    DPoPService
 	MFA     MFAService
+	OAuth   OAuthService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

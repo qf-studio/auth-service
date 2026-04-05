@@ -36,6 +36,9 @@ const (
 	EventAdminAPIKeyUpdate  = "admin_apikey_update"
 	EventAdminAPIKeyRevoke  = "admin_apikey_revoke"
 	EventAdminAPIKeyRotate  = "admin_apikey_rotate"
+	EventOAuthLogin         = "oauth_login"
+	EventOAuthLink          = "oauth_link"
+	EventOAuthNewUser       = "oauth_new_user"
 )
 
 // Event represents a single audit log entry.
