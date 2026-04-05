@@ -1,4 +1,4 @@
--- 000006_mfa.up.sql
+-- 000007_mfa.up.sql
 -- Creates MFA secrets and backup codes tables for multi-factor authentication.
 
 CREATE TABLE mfa_secrets (

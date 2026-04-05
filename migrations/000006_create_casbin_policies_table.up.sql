@@ -1,4 +1,4 @@
--- 000005_create_casbin_policies_table.up.sql
+-- 000006_create_casbin_policies_table.up.sql
 -- Creates the Casbin policy storage table for RBAC enforcement.
 
 CREATE TABLE casbin_policies (

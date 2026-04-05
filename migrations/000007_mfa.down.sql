@@ -1,4 +1,4 @@
--- 000006_mfa.down.sql
+-- 000007_mfa.down.sql
 -- Removes MFA secrets and backup codes tables.
 
 DROP INDEX IF EXISTS idx_backup_codes_unused;
