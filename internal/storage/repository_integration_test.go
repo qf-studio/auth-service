@@ -118,11 +118,29 @@ func createTables(t *testing.T, pool *pgxpool.Pool) {
 			used_at    TIMESTAMPTZ,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+
+		CREATE TABLE IF NOT EXISTS webauthn_credentials (
+			id               TEXT        PRIMARY KEY,
+			user_id          TEXT        NOT NULL REFERENCES users (id),
+			credential_id    BYTEA       NOT NULL,
+			public_key       BYTEA       NOT NULL,
+			aaguid           TEXT        NOT NULL DEFAULT '',
+			sign_count       INTEGER     NOT NULL DEFAULT 0,
+			transports       TEXT[]      NOT NULL DEFAULT '{}',
+			attestation_type TEXT        NOT NULL DEFAULT 'none',
+			friendly_name    TEXT        NOT NULL DEFAULT '',
+			created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			deleted_at       TIMESTAMPTZ
+		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_webauthn_credentials_credential_id_active
+			ON webauthn_credentials (credential_id) WHERE deleted_at IS NULL;
 	`)
 	require.NoError(t, err)
 
 	// Clean tables before each test file run.
-	_, err = pool.Exec(ctx, `TRUNCATE users, refresh_tokens, clients, mfa_secrets, mfa_backup_codes`)
+	_, err = pool.Exec(ctx, `TRUNCATE users, refresh_tokens, clients, mfa_secrets, mfa_backup_codes, webauthn_credentials`)
 	require.NoError(t, err)
 }
 

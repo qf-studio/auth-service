@@ -174,3 +174,116 @@ func TestRedisMFAStore_FailedAttempts_Expire(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// WebAuthn challenge / session data tests
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestRedisMFAStore_StoreWebAuthnChallenge(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	data := []byte(`{"challenge":"abc123","user_id":"user-1"}`)
+	err := store.StoreWebAuthnChallenge(ctx, "session-001", data)
+	require.NoError(t, err)
+}
+
+func TestRedisMFAStore_StoreWebAuthnChallenge_DuplicateRejected(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	data := []byte(`{"challenge":"abc"}`)
+	err := store.StoreWebAuthnChallenge(ctx, "session-dup", data)
+	require.NoError(t, err)
+
+	err = store.StoreWebAuthnChallenge(ctx, "session-dup", []byte(`{"challenge":"xyz"}`))
+	require.Error(t, err)
+}
+
+func TestRedisMFAStore_GetWebAuthnChallenge(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	data := []byte(`{"challenge":"get-test","user_id":"user-2"}`)
+	err := store.StoreWebAuthnChallenge(ctx, "session-get", data)
+	require.NoError(t, err)
+
+	got, err := store.GetWebAuthnChallenge(ctx, "session-get")
+	require.NoError(t, err)
+	assert.Equal(t, data, got)
+}
+
+func TestRedisMFAStore_GetWebAuthnChallenge_NotFound(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	_, err := store.GetWebAuthnChallenge(ctx, "nonexistent-session")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrWebAuthnChallengeNotFound)
+}
+
+func TestRedisMFAStore_ConsumeWebAuthnChallenge(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	data := []byte(`{"challenge":"consume-test"}`)
+	err := store.StoreWebAuthnChallenge(ctx, "session-consume", data)
+	require.NoError(t, err)
+
+	got, err := store.ConsumeWebAuthnChallenge(ctx, "session-consume")
+	require.NoError(t, err)
+	assert.Equal(t, data, got)
+
+	// Second consume should fail (single-use).
+	_, err = store.ConsumeWebAuthnChallenge(ctx, "session-consume")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrWebAuthnChallengeNotFound)
+}
+
+func TestRedisMFAStore_ConsumeWebAuthnChallenge_NotFound(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	_, err := store.ConsumeWebAuthnChallenge(ctx, "nonexistent")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrWebAuthnChallengeNotFound)
+}
+
+func TestRedisMFAStore_WebAuthnChallenge_Expired(t *testing.T) {
+	mr, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client, storage.WithWebAuthnChallengeTTL(1*time.Second))
+	ctx := context.Background()
+
+	data := []byte(`{"challenge":"expire-test"}`)
+	err := store.StoreWebAuthnChallenge(ctx, "session-expire", data)
+	require.NoError(t, err)
+
+	mr.FastForward(2 * time.Second)
+
+	_, err = store.GetWebAuthnChallenge(ctx, "session-expire")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrWebAuthnChallengeNotFound)
+}
+
+func TestRedisMFAStore_DeleteWebAuthnChallenge(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	data := []byte(`{"challenge":"delete-test"}`)
+	err := store.StoreWebAuthnChallenge(ctx, "session-del", data)
+	require.NoError(t, err)
+
+	err = store.DeleteWebAuthnChallenge(ctx, "session-del")
+	require.NoError(t, err)
+
+	_, err = store.GetWebAuthnChallenge(ctx, "session-del")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrWebAuthnChallengeNotFound)
+}

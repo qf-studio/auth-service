@@ -41,4 +41,10 @@ var (
 
 	// ErrMFAMaxAttempts indicates the user has exceeded maximum MFA verification attempts.
 	ErrMFAMaxAttempts = errors.New("mfa max attempts exceeded")
+
+	// ErrDuplicateWebAuthn indicates a credential with the same credential ID already exists.
+	ErrDuplicateWebAuthn = errors.New("duplicate webauthn credential")
+
+	// ErrWebAuthnChallengeNotFound indicates the WebAuthn challenge does not exist or has expired.
+	ErrWebAuthnChallengeNotFound = errors.New("webauthn challenge not found")
 )

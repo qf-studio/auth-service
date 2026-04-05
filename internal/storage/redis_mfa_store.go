@@ -16,6 +16,9 @@ const (
 	// mfaFailedPrefix is the Redis key prefix for failed MFA attempt counters.
 	mfaFailedPrefix = "mfa:failed:"
 
+	// webauthnChallengePrefix is the Redis key prefix for WebAuthn challenge/session data.
+	webauthnChallengePrefix = "webauthn:challenge:"
+
 	// defaultMFATokenTTL is the lifetime of a temporary MFA token (5 minutes).
 	defaultMFATokenTTL = 5 * time.Minute
 
@@ -24,14 +27,19 @@ const (
 
 	// defaultMaxMFAAttempts is the maximum allowed failed MFA attempts before lockout.
 	defaultMaxMFAAttempts = 5
+
+	// defaultWebAuthnChallengeTTL is the lifetime of a WebAuthn challenge (60 seconds).
+	defaultWebAuthnChallengeTTL = 60 * time.Second
 )
 
-// RedisMFAStore manages temporary MFA tokens and failed-attempt tracking in Redis.
+// RedisMFAStore manages temporary MFA tokens, failed-attempt tracking,
+// and WebAuthn challenge/session data in Redis.
 type RedisMFAStore struct {
-	client       redis.Cmdable
-	tokenTTL     time.Duration
-	failedTTL    time.Duration
-	maxAttempts  int
+	client            redis.Cmdable
+	tokenTTL          time.Duration
+	failedTTL         time.Duration
+	maxAttempts       int
+	webauthnChallTTL  time.Duration
 }
 
 // RedisMFAStoreOption configures the RedisMFAStore.
@@ -52,13 +60,19 @@ func WithMaxMFAAttempts(n int) RedisMFAStoreOption {
 	return func(s *RedisMFAStore) { s.maxAttempts = n }
 }
 
+// WithWebAuthnChallengeTTL overrides the default WebAuthn challenge TTL.
+func WithWebAuthnChallengeTTL(d time.Duration) RedisMFAStoreOption {
+	return func(s *RedisMFAStore) { s.webauthnChallTTL = d }
+}
+
 // NewRedisMFAStore creates a new Redis-backed MFA token store.
 func NewRedisMFAStore(client redis.Cmdable, opts ...RedisMFAStoreOption) *RedisMFAStore {
 	s := &RedisMFAStore{
-		client:      client,
-		tokenTTL:    defaultMFATokenTTL,
-		failedTTL:   defaultMFAFailedTTL,
-		maxAttempts: defaultMaxMFAAttempts,
+		client:           client,
+		tokenTTL:         defaultMFATokenTTL,
+		failedTTL:        defaultMFAFailedTTL,
+		maxAttempts:      defaultMaxMFAAttempts,
+		webauthnChallTTL: defaultWebAuthnChallengeTTL,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -143,6 +157,61 @@ func (s *RedisMFAStore) ClearFailedAttempts(ctx context.Context, userID string) 
 	key := mfaFailedPrefix + userID
 	if err := s.client.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("clear mfa failed attempts: %w", err)
+	}
+	return nil
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// WebAuthn challenge / session data
+// ────────────────────────────────────────────────────────────────────────────
+
+// StoreWebAuthnChallenge saves WebAuthn challenge/session data keyed by session ID.
+// The data expires after the configured WebAuthn challenge TTL (default 60s).
+func (s *RedisMFAStore) StoreWebAuthnChallenge(ctx context.Context, sessionID string, data []byte) error {
+	key := webauthnChallengePrefix + sessionID
+	ok, err := s.client.SetNX(ctx, key, data, s.webauthnChallTTL).Result()
+	if err != nil {
+		return fmt.Errorf("store webauthn challenge: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("session %s: webauthn challenge already exists", sessionID)
+	}
+	return nil
+}
+
+// GetWebAuthnChallenge retrieves WebAuthn challenge/session data without consuming it.
+// Returns ErrWebAuthnChallengeNotFound if the session has expired or does not exist.
+func (s *RedisMFAStore) GetWebAuthnChallenge(ctx context.Context, sessionID string) ([]byte, error) {
+	key := webauthnChallengePrefix + sessionID
+	data, err := s.client.Get(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, ErrWebAuthnChallengeNotFound
+		}
+		return nil, fmt.Errorf("get webauthn challenge: %w", err)
+	}
+	return data, nil
+}
+
+// ConsumeWebAuthnChallenge retrieves and deletes the challenge data atomically.
+// Returns ErrWebAuthnChallengeNotFound if the session has expired or does not exist.
+func (s *RedisMFAStore) ConsumeWebAuthnChallenge(ctx context.Context, sessionID string) ([]byte, error) {
+	key := webauthnChallengePrefix + sessionID
+	data, err := s.client.GetDel(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, ErrWebAuthnChallengeNotFound
+		}
+		return nil, fmt.Errorf("consume webauthn challenge: %w", err)
+	}
+	return data, nil
+}
+
+// DeleteWebAuthnChallenge removes a WebAuthn challenge/session entry.
+func (s *RedisMFAStore) DeleteWebAuthnChallenge(ctx context.Context, sessionID string) error {
+	key := webauthnChallengePrefix + sessionID
+	if err := s.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("delete webauthn challenge: %w", err)
 	}
 	return nil
 }
