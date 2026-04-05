@@ -20,6 +20,15 @@ type Config struct {
 	TLS          TLSConfig
 	CORS         CORSConfig
 	RequestLimit RequestLimitConfig
+	Email        EmailConfig
+}
+
+// EmailConfig holds outbound email delivery settings.
+type EmailConfig struct {
+	ServiceURL    string // EMAIL_SERVICE_URL: base URL of the email-service
+	APIKey        string // EMAIL_API_KEY: bearer token for the email-service API
+	SenderAddress string // EMAIL_SENDER_ADDRESS: the From address on outgoing mail
+	Enabled       bool   // EMAIL_ENABLED: false → skip delivery (useful in dev/test)
 }
 
 // AppConfig holds server-level settings.
@@ -194,6 +203,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	email, err := loadEmail(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -213,6 +226,7 @@ func Load() (*Config, error) {
 		TLS:          tls,
 		CORS:         cors,
 		RequestLimit: reqLimit,
+		Email:        email,
 	}, nil
 }
 
@@ -434,6 +448,24 @@ func loadRequestLimit(l *loader) (RequestLimitConfig, error) {
 	return RequestLimitConfig{
 		MaxBodySize:    int64(maxBodySize), //nolint:gosec // non-negative validated by optInt
 		RequestTimeout: requestTimeout,
+	}, nil
+}
+
+func loadEmail(l *loader) (EmailConfig, error) {
+	serviceURL := l.optStr("EMAIL_SERVICE_URL", "")
+	apiKey := l.optStr("EMAIL_API_KEY", "")
+	senderAddress := l.optStr("EMAIL_SENDER_ADDRESS", "")
+
+	enabled, err := l.optBool("EMAIL_ENABLED", false)
+	if err != nil {
+		return EmailConfig{}, err
+	}
+
+	return EmailConfig{
+		ServiceURL:    serviceURL,
+		APIKey:        apiKey,
+		SenderAddress: senderAddress,
+		Enabled:       enabled,
 	}, nil
 }
 

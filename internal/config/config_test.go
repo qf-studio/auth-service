@@ -81,6 +81,29 @@ func TestLoad_AllDefaults(t *testing.T) {
 
 	// CORS
 	assert.Equal(t, []string{"https://example.com"}, cfg.CORS.AllowedOrigins)
+
+	// Email defaults
+	assert.Equal(t, "", cfg.Email.ServiceURL)
+	assert.Equal(t, "", cfg.Email.APIKey)
+	assert.Equal(t, "", cfg.Email.SenderAddress)
+	assert.False(t, cfg.Email.Enabled)
+}
+
+func TestLoad_EmailConfig(t *testing.T) {
+	env := requiredEnv()
+	env["EMAIL_SERVICE_URL"] = "https://email.internal"
+	env["EMAIL_API_KEY"] = "secret-key"
+	env["EMAIL_SENDER_ADDRESS"] = "noreply@example.com"
+	env["EMAIL_ENABLED"] = "true"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://email.internal", cfg.Email.ServiceURL)
+	assert.Equal(t, "secret-key", cfg.Email.APIKey)
+	assert.Equal(t, "noreply@example.com", cfg.Email.SenderAddress)
+	assert.True(t, cfg.Email.Enabled)
 }
 
 func TestLoad_CustomValues(t *testing.T) {
