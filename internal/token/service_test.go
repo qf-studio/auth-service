@@ -623,3 +623,80 @@ func TestIssueTokenPair_UniqueJTI(t *testing.T) {
 		jtis[claims.TokenID] = true
 	}
 }
+
+// ── DPoP Binding ────────────────────────────────────────────────────────────
+
+func TestIssueTokenPairWithDPoP_ContainsCnfClaim(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	thumbprint := "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I"
+
+	result, err := svc.IssueTokenPairWithDPoP(ctx, "user-123", []string{"admin"}, []string{"read:users"}, domain.ClientTypeUser, thumbprint)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Equal(t, "DPoP", result.TokenType)
+	assert.True(t, strings.HasPrefix(result.AccessToken, "qf_at_"))
+	assert.True(t, strings.HasPrefix(result.RefreshToken, "qf_rt_"))
+
+	// Validate token and check cnf.jkt round-trip.
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+	assert.Equal(t, thumbprint, claims.DPoPThumbprint)
+	assert.Equal(t, "user-123", claims.Subject)
+}
+
+func TestIssueTokenPairWithDPoP_EdDSA(t *testing.T) {
+	svc, _ := newEdDSAService(t)
+	ctx := context.Background()
+
+	thumbprint := "abc123-test-thumbprint"
+
+	result, err := svc.IssueTokenPairWithDPoP(ctx, "svc-456", []string{"service"}, nil, domain.ClientTypeService, thumbprint)
+	require.NoError(t, err)
+	assert.Equal(t, "DPoP", result.TokenType)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+	assert.Equal(t, thumbprint, claims.DPoPThumbprint)
+}
+
+func TestIssueTokenPair_WithoutDPoP_RemainsBearer(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueTokenPair(ctx, "user-123", []string{"user"}, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer", result.TokenType)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+	assert.Empty(t, claims.DPoPThumbprint)
+}
+
+func TestValidateToken_PreservesDPoPThumbprint(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	thumbprint := "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I"
+
+	result, err := svc.IssueTokenPairWithDPoP(ctx, "user-dpop", []string{"admin"}, []string{"write:all"}, domain.ClientTypeUser, thumbprint)
+	require.NoError(t, err)
+
+	// Parse and validate — thumbprint must survive round-trip.
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+
+	assert.Equal(t, "user-dpop", claims.Subject)
+	assert.Equal(t, thumbprint, claims.DPoPThumbprint)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
+	assert.Equal(t, []string{"write:all"}, claims.Scopes)
+	assert.Equal(t, domain.ClientTypeUser, claims.ClientType)
+	assert.False(t, claims.ExpiresAt.IsZero())
+	assert.False(t, claims.IssuedAt.IsZero())
+}
