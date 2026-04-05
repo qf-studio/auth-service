@@ -14,6 +14,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
 
@@ -108,6 +109,37 @@ func (m *mockBreachChecker) IsBreached(ctx context.Context, password string) (bo
 	return false, nil
 }
 
+type mockEmailSender struct {
+	sendVerificationFn func(ctx context.Context, to, token string) error
+	sendPasswordResetFn func(ctx context.Context, to, token string) error
+	calls              []emailCall
+}
+
+type emailCall struct {
+	method string
+	to     string
+	token  string
+}
+
+func (m *mockEmailSender) SendVerificationEmail(ctx context.Context, to, token string) error {
+	m.calls = append(m.calls, emailCall{method: "verification", to: to, token: token})
+	if m.sendVerificationFn != nil {
+		return m.sendVerificationFn(ctx, to, token)
+	}
+	return nil
+}
+
+func (m *mockEmailSender) SendPasswordReset(ctx context.Context, to, token string) error {
+	m.calls = append(m.calls, emailCall{method: "password_reset", to: to, token: token})
+	if m.sendPasswordResetFn != nil {
+		return m.sendPasswordResetFn(ctx, to, token)
+	}
+	return nil
+}
+
+func (m *mockEmailSender) SendAccountLockout(_ context.Context, _, _ string) error { return nil }
+func (m *mockEmailSender) SendMFAEnrollment(_ context.Context, _ string) error     { return nil }
+
 type mockHasher struct {
 	verifyFn func(password, hash string) (bool, error)
 }
@@ -130,7 +162,7 @@ func (m *mockHasher) Verify(password, hash string) (bool, error) {
 func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher) *Service {
 	t.Helper()
 	logger, _ := zap.NewDevelopment()
-	return NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{})
+	return NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{}, email.NopSender{})
 }
 
 // newRedisClient creates a Redis client for integration tests (password reset).
@@ -161,12 +193,14 @@ func newRedisClient(t *testing.T) *redis.Client {
 	return client
 }
 
-// newIntegrationService creates a Service with a real Redis client.
-func newIntegrationService(t *testing.T) *Service {
+// newIntegrationService creates a Service with a real Redis client and a mock email sender.
+func newIntegrationService(t *testing.T) (*Service, *mockEmailSender) {
 	t.Helper()
 	client := newRedisClient(t)
 	logger, _ := zap.NewDevelopment()
-	return NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
+	emailMock := &mockEmailSender{}
+	svc := NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{}, emailMock)
+	return svc, emailMock
 }
 
 // ── Login Tests ──────────────────────────────────────────────────────────────
@@ -480,7 +514,7 @@ func TestLogoutAll_RevokesAllForUser(t *testing.T) {
 // ── Password Reset Tests (integration, require Redis) ────────────────────────
 
 func TestResetPassword_StoresTokenInRedis(t *testing.T) {
-	svc := newIntegrationService(t)
+	svc, _ := newIntegrationService(t)
 	ctx := context.Background()
 
 	err := svc.ResetPassword(ctx, "user@example.com")
@@ -500,7 +534,7 @@ func TestResetPassword_StoresTokenInRedis(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_ValidToken(t *testing.T) {
-	svc := newIntegrationService(t)
+	svc, _ := newIntegrationService(t)
 	ctx := context.Background()
 
 	token := "test-reset-token-abc123"
@@ -517,7 +551,7 @@ func TestConfirmPasswordReset_ValidToken(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_InvalidToken(t *testing.T) {
-	svc := newIntegrationService(t)
+	svc, _ := newIntegrationService(t)
 	ctx := context.Background()
 
 	err := svc.ConfirmPasswordReset(ctx, "nonexistent-token", "new-secure-password-12345")
@@ -526,7 +560,7 @@ func TestConfirmPasswordReset_InvalidToken(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_TokenUsedOnce(t *testing.T) {
-	svc := newIntegrationService(t)
+	svc, _ := newIntegrationService(t)
 	ctx := context.Background()
 
 	token := "one-time-token"
@@ -543,7 +577,7 @@ func TestConfirmPasswordReset_TokenUsedOnce(t *testing.T) {
 }
 
 func TestResetPassword_FullFlow(t *testing.T) {
-	svc := newIntegrationService(t)
+	svc, _ := newIntegrationService(t)
 	ctx := context.Background()
 
 	err := svc.ResetPassword(ctx, "alice@example.com")
@@ -588,4 +622,140 @@ func TestGetMe_ReturnsStub(t *testing.T) {
 	user, err := svc.GetMe(context.Background(), "user-42")
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", user.ID)
+}
+
+// ── Email Integration Tests ─────────────────────────────────────────────────
+
+func TestRegister_SendsVerificationEmail(t *testing.T) {
+	svc, emailMock := newIntegrationService(t)
+	ctx := context.Background()
+
+	user, err := svc.Register(ctx, "newuser@example.com", "password123456789", "New User")
+	require.NoError(t, err)
+	assert.Equal(t, "newuser@example.com", user.Email)
+
+	// Verify email was sent.
+	require.Len(t, emailMock.calls, 1)
+	assert.Equal(t, "verification", emailMock.calls[0].method)
+	assert.Equal(t, "newuser@example.com", emailMock.calls[0].to)
+	assert.NotEmpty(t, emailMock.calls[0].token)
+
+	// Verify token was stored in Redis.
+	keys, err := svc.redis.Keys(ctx, verifyTokenPrefix+"*").Result()
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+
+	storedEmail, err := svc.redis.Get(ctx, keys[0]).Result()
+	require.NoError(t, err)
+	assert.Equal(t, "newuser@example.com", storedEmail)
+}
+
+func TestRegister_EmailFailureDoesNotBlockRegistration(t *testing.T) {
+	svc, emailMock := newIntegrationService(t)
+	emailMock.sendVerificationFn = func(_ context.Context, _, _ string) error {
+		return fmt.Errorf("email service unavailable")
+	}
+	ctx := context.Background()
+
+	user, err := svc.Register(ctx, "user@example.com", "password123456789", "User")
+	require.NoError(t, err)
+	assert.Equal(t, "user@example.com", user.Email)
+}
+
+func TestVerifyEmail_ValidToken(t *testing.T) {
+	svc, _ := newIntegrationService(t)
+	ctx := context.Background()
+
+	// Store a verification token.
+	token := "test-verify-token-abc123"
+	key := verifyTokenPrefix + token
+	err := svc.redis.Set(ctx, key, "user@example.com", verifyTokenTTL).Err()
+	require.NoError(t, err)
+
+	// Verify the email.
+	err = svc.VerifyEmail(ctx, token)
+	require.NoError(t, err)
+
+	// Token should be consumed.
+	exists, err := svc.redis.Exists(ctx, key).Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), exists, "token should be deleted after verification")
+}
+
+func TestVerifyEmail_InvalidToken(t *testing.T) {
+	svc, _ := newIntegrationService(t)
+	ctx := context.Background()
+
+	err := svc.VerifyEmail(ctx, "nonexistent-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrUnauthorized)
+}
+
+func TestVerifyEmail_TokenUsedOnce(t *testing.T) {
+	svc, _ := newIntegrationService(t)
+	ctx := context.Background()
+
+	token := "one-time-verify-token"
+	key := verifyTokenPrefix + token
+	err := svc.redis.Set(ctx, key, "user@example.com", verifyTokenTTL).Err()
+	require.NoError(t, err)
+
+	err = svc.VerifyEmail(ctx, token)
+	require.NoError(t, err)
+
+	err = svc.VerifyEmail(ctx, token)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrUnauthorized)
+}
+
+func TestVerifyEmail_FullFlow(t *testing.T) {
+	svc, emailMock := newIntegrationService(t)
+	ctx := context.Background()
+
+	// Register sends a verification email.
+	_, err := svc.Register(ctx, "alice@example.com", "password123456789", "Alice")
+	require.NoError(t, err)
+	require.Len(t, emailMock.calls, 1)
+
+	// Extract the token from the email mock.
+	verifyToken := emailMock.calls[0].token
+	require.NotEmpty(t, verifyToken)
+
+	// Verify the email using the token.
+	err = svc.VerifyEmail(ctx, verifyToken)
+	require.NoError(t, err)
+
+	// Token should be consumed — second attempt fails.
+	err = svc.VerifyEmail(ctx, verifyToken)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrUnauthorized)
+}
+
+func TestResetPassword_SendsEmail(t *testing.T) {
+	svc, emailMock := newIntegrationService(t)
+	ctx := context.Background()
+
+	err := svc.ResetPassword(ctx, "user@example.com")
+	require.NoError(t, err)
+
+	require.Len(t, emailMock.calls, 1)
+	assert.Equal(t, "password_reset", emailMock.calls[0].method)
+	assert.Equal(t, "user@example.com", emailMock.calls[0].to)
+	assert.NotEmpty(t, emailMock.calls[0].token)
+}
+
+func TestResetPassword_EmailFailureDoesNotBlockReset(t *testing.T) {
+	svc, emailMock := newIntegrationService(t)
+	emailMock.sendPasswordResetFn = func(_ context.Context, _, _ string) error {
+		return fmt.Errorf("email service unavailable")
+	}
+	ctx := context.Background()
+
+	err := svc.ResetPassword(ctx, "user@example.com")
+	require.NoError(t, err)
+
+	// Token should still be stored in Redis even if email fails.
+	keys, err := svc.redis.Keys(ctx, resetTokenPrefix+"*").Result()
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
 }

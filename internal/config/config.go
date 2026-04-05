@@ -20,6 +20,15 @@ type Config struct {
 	TLS          TLSConfig
 	CORS         CORSConfig
 	RequestLimit RequestLimitConfig
+	Email        EmailConfig
+}
+
+// EmailConfig holds email sending settings.
+type EmailConfig struct {
+	Enabled       bool   // EMAIL_ENABLED (default false)
+	ServiceURL    string // EMAIL_SERVICE_URL (required when enabled)
+	APIKey        string // EMAIL_API_KEY (required when enabled)
+	SenderAddress string // EMAIL_SENDER_ADDRESS (default "noreply@quantflow.studio")
 }
 
 // AppConfig holds server-level settings.
@@ -194,6 +203,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	emailCfg, err := loadEmail(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -213,6 +226,7 @@ func Load() (*Config, error) {
 		TLS:          tls,
 		CORS:         cors,
 		RequestLimit: reqLimit,
+		Email:        emailCfg,
 	}, nil
 }
 
@@ -434,6 +448,24 @@ func loadRequestLimit(l *loader) (RequestLimitConfig, error) {
 	return RequestLimitConfig{
 		MaxBodySize:    int64(maxBodySize), //nolint:gosec // non-negative validated by optInt
 		RequestTimeout: requestTimeout,
+	}, nil
+}
+
+func loadEmail(l *loader) (EmailConfig, error) {
+	enabled, err := l.optBool("EMAIL_ENABLED", false)
+	if err != nil {
+		return EmailConfig{}, err
+	}
+
+	serviceURL := l.optStr("EMAIL_SERVICE_URL", "")
+	apiKey := l.optStr("EMAIL_API_KEY", "")
+	senderAddr := l.optStr("EMAIL_SENDER_ADDRESS", "noreply@quantflow.studio")
+
+	return EmailConfig{
+		Enabled:       enabled,
+		ServiceURL:    serviceURL,
+		APIKey:        apiKey,
+		SenderAddress: senderAddr,
 	}, nil
 }
 

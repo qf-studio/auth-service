@@ -21,6 +21,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
+	"github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -85,7 +86,18 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
 	hibpClient := hibp.NewClient(http.DefaultClient)
-	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
+
+	// ── Email ─────────────────────────────────────────────────────────────
+	var emailSender email.Sender
+	if cfg.Email.Enabled {
+		emailSender = email.NewHTTPSender(cfg.Email.ServiceURL, cfg.Email.APIKey, cfg.Email.SenderAddress, log)
+		log.Info("email sender: HTTP", zap.String("service_url", cfg.Email.ServiceURL))
+	} else {
+		emailSender = email.NewConsoleSender(log)
+		log.Info("email sender: console (development mode)")
+	}
+
+	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient, emailSender)
 
 	// ── Session ──────────────────────────────────────────────────────────
 	sessionStore := session.NewMemoryStore()

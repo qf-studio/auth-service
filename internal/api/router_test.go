@@ -54,6 +54,10 @@ func (m *mockAuthService) Login(ctx context.Context, email, password string) (*a
 	}, nil
 }
 
+func (m *mockAuthService) VerifyEmail(_ context.Context, _ string) error {
+	return nil
+}
+
 func (m *mockAuthService) ResetPassword(ctx context.Context, email string) error {
 	if m.resetPasswordFn != nil {
 		return m.resetPasswordFn(ctx, email)

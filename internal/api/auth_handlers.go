@@ -78,6 +78,18 @@ func (h *AuthHandlers) ConfirmPasswordReset(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Password has been reset"})
 }
 
+// VerifyEmail handles POST /auth/verify-email.
+func (h *AuthHandlers) VerifyEmail(c *gin.Context) {
+	req := c.MustGet("validated_request").(*domain.VerifyEmailRequest)
+
+	if err := h.auth.VerifyEmail(c.Request.Context(), req.Token); err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Email verified successfully"})
+}
+
 // Me handles GET /auth/me.
 func (h *AuthHandlers) Me(c *gin.Context) {
 	userID := c.GetString("user_id")

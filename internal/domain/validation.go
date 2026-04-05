@@ -64,6 +64,11 @@ type PasswordChangeRequest struct {
 	NewPassword string `json:"new_password" validate:"required,nist_password"`
 }
 
+// VerifyEmailRequest is the validated request body for email verification.
+type VerifyEmailRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
 // --- Validator setup ---
 
 // NewValidator creates a validator.Validate instance with custom NIST password validation registered.

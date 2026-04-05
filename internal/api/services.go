@@ -32,6 +32,7 @@ type JWKSResponse struct {
 type AuthService interface {
 	Register(ctx context.Context, email, password, name string) (*UserInfo, error)
 	Login(ctx context.Context, email, password string) (*AuthResult, error)
+	VerifyEmail(ctx context.Context, token string) error
 	ResetPassword(ctx context.Context, email string) error
 	ConfirmPasswordReset(ctx context.Context, token, newPassword string) error
 	GetMe(ctx context.Context, userID string) (*UserInfo, error)

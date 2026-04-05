@@ -16,6 +16,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
@@ -27,6 +28,12 @@ const (
 
 	// resetTokenPrefix is the Redis key prefix for password reset tokens.
 	resetTokenPrefix = "pw_reset:"
+
+	// verifyTokenTTL is how long an email verification token remains valid.
+	verifyTokenTTL = 24 * time.Hour
+
+	// verifyTokenPrefix is the Redis key prefix for email verification tokens.
+	verifyTokenPrefix = "email_verify:"
 
 	// resetTokenBytes is the number of random bytes in a reset token (32 bytes = 64 hex chars).
 	resetTokenBytes = 32
@@ -42,14 +49,15 @@ type TokenIssuer interface {
 // Service implements api.AuthService with Redis-backed password reset tokens
 // and PostgreSQL-backed user authentication.
 type Service struct {
-	redis    *redis.Client
-	logger   *zap.Logger
-	audit    audit.EventLogger
-	users    storage.UserRepository
-	tokens   storage.RefreshTokenRepository
-	issuer   TokenIssuer
-	hasher   password.Hasher
+	redis  *redis.Client
+	logger *zap.Logger
+	audit  audit.EventLogger
+	users  storage.UserRepository
+	tokens storage.RefreshTokenRepository
+	issuer TokenIssuer
+	hasher password.Hasher
 	breaches hibp.BreachChecker
+	email  email.Sender
 }
 
 // NewService creates a new auth Service.
@@ -62,6 +70,7 @@ func NewService(
 	issuer TokenIssuer,
 	hasher password.Hasher,
 	breaches hibp.BreachChecker,
+	emailSender email.Sender,
 ) *Service {
 	return &Service{
 		redis:    redisClient,
@@ -72,25 +81,73 @@ func NewService(
 		issuer:   issuer,
 		hasher:   hasher,
 		breaches: breaches,
+		email:    emailSender,
 	}
 }
 
 // Register creates a new user account.
 // Stub: full implementation depends on PostgreSQL user repository (future issue).
-func (s *Service) Register(ctx context.Context, email, _, name string) (*api.UserInfo, error) {
+func (s *Service) Register(ctx context.Context, emailAddr, _, name string) (*api.UserInfo, error) {
 	// TODO(GH-XX): wire PostgreSQL user repository for persistence.
 	info := &api.UserInfo{
 		ID:    "stub-user-id",
-		Email: email,
+		Email: emailAddr,
 		Name:  name,
 	}
 	s.audit.LogEvent(ctx, audit.Event{
 		Type:     audit.EventRegister,
 		ActorID:  info.ID,
 		TargetID: info.ID,
-		Metadata: map[string]string{"email": email},
+		Metadata: map[string]string{"email": emailAddr},
 	})
+
+	// Generate and store email verification token (best-effort; don't fail registration).
+	if s.redis != nil {
+		verifyToken, err := generateResetToken()
+		if err != nil {
+			s.logger.Error("failed to generate verification token", zap.Error(err))
+			return info, nil
+		}
+
+		key := verifyTokenPrefix + verifyToken
+		if err := s.redis.Set(ctx, key, emailAddr, verifyTokenTTL).Err(); err != nil {
+			s.logger.Error("failed to store verification token in redis", zap.Error(err))
+			return info, nil
+		}
+
+		if err := s.email.SendVerificationEmail(ctx, emailAddr, verifyToken); err != nil {
+			s.logger.Error("failed to send verification email",
+				zap.String("email", emailAddr),
+				zap.Error(err),
+			)
+		}
+	}
+
 	return info, nil
+}
+
+// VerifyEmail confirms the email address using the verification token stored in Redis.
+func (s *Service) VerifyEmail(ctx context.Context, token string) error {
+	key := verifyTokenPrefix + token
+
+	emailAddr, err := s.redis.GetDel(ctx, key).Result()
+	if err == redis.Nil {
+		return fmt.Errorf("invalid or expired verification token: %w", api.ErrUnauthorized)
+	}
+	if err != nil {
+		s.logger.Error("failed to retrieve verification token from redis", zap.Error(err))
+		return fmt.Errorf("retrieve verification token: %w", err)
+	}
+
+	// TODO(GH-XX): update user record to set email_verified = true in PostgreSQL.
+	s.logger.Info("email verified", zap.String("email", emailAddr))
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventRegister,
+		Metadata: map[string]string{"email": emailAddr, "action": "email_verified"},
+	})
+
+	return nil
 }
 
 // Login authenticates a user by email and password.
@@ -198,7 +255,13 @@ func (s *Service) ResetPassword(ctx context.Context, email string) error {
 		Metadata: map[string]string{"email": email},
 	})
 
-	// TODO(GH-XX): send email with reset link containing the token.
+	if err := s.email.SendPasswordReset(ctx, email, token); err != nil {
+		s.logger.Error("failed to send password reset email",
+			zap.String("email", email),
+			zap.Error(err),
+		)
+		// Best-effort: don't fail the request if email sending fails.
+	}
 
 	return nil
 }
