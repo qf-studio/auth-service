@@ -32,4 +32,13 @@ var (
 
 	// ErrDuplicateClient indicates a client with the given name already exists.
 	ErrDuplicateClient = errors.New("duplicate client name")
+
+	// ErrDuplicateMFA indicates the user already has an active MFA secret of this type.
+	ErrDuplicateMFA = errors.New("duplicate mfa enrollment")
+
+	// ErrMFATokenNotFound indicates the MFA token does not exist or has been consumed.
+	ErrMFATokenNotFound = errors.New("mfa token not found")
+
+	// ErrMFAMaxAttempts indicates the user has exceeded maximum MFA verification attempts.
+	ErrMFAMaxAttempts = errors.New("mfa max attempts exceeded")
 )

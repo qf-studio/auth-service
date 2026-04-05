@@ -2,9 +2,10 @@ package storage_test
 
 import (
 	"context"
-	"os"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,111 +13,164 @@ import (
 	"github.com/qf-studio/auth-service/internal/storage"
 )
 
-// testRedis returns a redis.Client for integration tests.
-func testRedis(t *testing.T) *redis.Client {
+func newTestRedis(t *testing.T) (*miniredis.Miniredis, redis.Cmdable) {
 	t.Helper()
-
-	addr := os.Getenv("TEST_REDIS_ADDR")
-	if addr == "" {
-		t.Skip("TEST_REDIS_ADDR not set, skipping Redis integration test")
-	}
-
-	client := redis.NewClient(&redis.Options{Addr: addr})
-	t.Cleanup(func() {
-		_ = client.FlushDB(context.Background()).Err()
-		_ = client.Close()
-	})
-
-	require.NoError(t, client.Ping(context.Background()).Err())
-	return client
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	return mr, client
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // MFA Token tests
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestRedisMFAStore_StoreAndConsumeToken(t *testing.T) {
-	client := testRedis(t)
+func TestRedisMFAStore_StoreMFAToken(t *testing.T) {
+	_, client := newTestRedis(t)
 	store := storage.NewRedisMFAStore(client)
 	ctx := context.Background()
 
-	err := store.StoreMFAToken(ctx, "tok123", "user-abc")
+	err := store.StoreMFAToken(ctx, "token-abc", "user-123")
 	require.NoError(t, err)
-
-	userID, err := store.ConsumeMFAToken(ctx, "tok123")
-	require.NoError(t, err)
-	assert.Equal(t, "user-abc", userID)
-
-	// Second consume should fail — single-use.
-	_, err = store.ConsumeMFAToken(ctx, "tok123")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
 
-func TestRedisMFAStore_StoreToken_Duplicate(t *testing.T) {
-	client := testRedis(t)
+func TestRedisMFAStore_StoreMFAToken_DuplicateRejected(t *testing.T) {
+	_, client := newTestRedis(t)
 	store := storage.NewRedisMFAStore(client)
 	ctx := context.Background()
 
-	require.NoError(t, store.StoreMFAToken(ctx, "dup-tok", "user1"))
+	err := store.StoreMFAToken(ctx, "token-dup", "user-123")
+	require.NoError(t, err)
 
-	err := store.StoreMFAToken(ctx, "dup-tok", "user2")
+	err = store.StoreMFAToken(ctx, "token-dup", "user-456")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "already exists")
+	assert.ErrorIs(t, err, storage.ErrDuplicateMFA)
 }
 
-func TestRedisMFAStore_ConsumeToken_NotFound(t *testing.T) {
-	client := testRedis(t)
+func TestRedisMFAStore_ConsumeMFAToken(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	err := store.StoreMFAToken(ctx, "token-consume", "user-789")
+	require.NoError(t, err)
+
+	userID, err := store.ConsumeMFAToken(ctx, "token-consume")
+	require.NoError(t, err)
+	assert.Equal(t, "user-789", userID)
+
+	// Second consume should fail (single-use).
+	_, err = store.ConsumeMFAToken(ctx, "token-consume")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrMFATokenNotFound)
+}
+
+func TestRedisMFAStore_ConsumeMFAToken_NotFound(t *testing.T) {
+	_, client := newTestRedis(t)
 	store := storage.NewRedisMFAStore(client)
 	ctx := context.Background()
 
 	_, err := store.ConsumeMFAToken(ctx, "nonexistent")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, storage.ErrNotFound)
+	assert.ErrorIs(t, err, storage.ErrMFATokenNotFound)
+}
+
+func TestRedisMFAStore_ConsumeMFAToken_Expired(t *testing.T) {
+	mr, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client, storage.WithMFATokenTTL(1*time.Second))
+	ctx := context.Background()
+
+	err := store.StoreMFAToken(ctx, "token-expire", "user-111")
+	require.NoError(t, err)
+
+	// Fast-forward time in miniredis.
+	mr.FastForward(2 * time.Second)
+
+	_, err = store.ConsumeMFAToken(ctx, "token-expire")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrMFATokenNotFound)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // Failed attempt tracking tests
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestRedisMFAStore_FailedAttempts(t *testing.T) {
-	client := testRedis(t)
+func TestRedisMFAStore_RecordFailedAttempt(t *testing.T) {
+	_, client := newTestRedis(t)
 	store := storage.NewRedisMFAStore(client)
 	ctx := context.Background()
 
-	// Initially zero.
-	count, err := store.GetFailedAttempts(ctx, "user-x")
+	count, err := store.RecordFailedAttempt(ctx, "user-fail-1")
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), count)
+	assert.Equal(t, 1, count)
 
-	// Increment.
-	count, err = store.IncrementFailedAttempts(ctx, "user-x")
+	count, err = store.RecordFailedAttempt(ctx, "user-fail-1")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), count)
-
-	count, err = store.IncrementFailedAttempts(ctx, "user-x")
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), count)
-
-	// Verify.
-	count, err = store.GetFailedAttempts(ctx, "user-x")
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), count)
-
-	// Reset.
-	require.NoError(t, store.ResetFailedAttempts(ctx, "user-x"))
-
-	count, err = store.GetFailedAttempts(ctx, "user-x")
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), count)
+	assert.Equal(t, 2, count)
 }
 
-func TestRedisMFAStore_ResetFailedAttempts_Nonexistent(t *testing.T) {
-	client := testRedis(t)
+func TestRedisMFAStore_RecordFailedAttempt_MaxExceeded(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client, storage.WithMaxMFAAttempts(3))
+	ctx := context.Background()
+
+	for i := 1; i < 3; i++ {
+		_, err := store.RecordFailedAttempt(ctx, "user-max")
+		require.NoError(t, err)
+	}
+
+	// Third attempt should trigger max exceeded.
+	count, err := store.RecordFailedAttempt(ctx, "user-max")
+	assert.Equal(t, 3, count)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrMFAMaxAttempts)
+}
+
+func TestRedisMFAStore_GetFailedAttempts(t *testing.T) {
+	_, client := newTestRedis(t)
 	store := storage.NewRedisMFAStore(client)
 	ctx := context.Background()
 
-	// Reset on nonexistent key should not error.
-	err := store.ResetFailedAttempts(ctx, "nobody")
+	// No attempts yet.
+	count, err := store.GetFailedAttempts(ctx, "user-get-fail")
 	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	_, err = store.RecordFailedAttempt(ctx, "user-get-fail")
+	require.NoError(t, err)
+
+	count, err = store.GetFailedAttempts(ctx, "user-get-fail")
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestRedisMFAStore_ClearFailedAttempts(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client)
+	ctx := context.Background()
+
+	_, err := store.RecordFailedAttempt(ctx, "user-clear")
+	require.NoError(t, err)
+
+	err = store.ClearFailedAttempts(ctx, "user-clear")
+	require.NoError(t, err)
+
+	count, err := store.GetFailedAttempts(ctx, "user-clear")
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestRedisMFAStore_FailedAttempts_Expire(t *testing.T) {
+	mr, client := newTestRedis(t)
+	store := storage.NewRedisMFAStore(client, storage.WithMFAFailedTTL(1*time.Second))
+	ctx := context.Background()
+
+	_, err := store.RecordFailedAttempt(ctx, "user-expire-fail")
+	require.NoError(t, err)
+
+	mr.FastForward(2 * time.Second)
+
+	count, err := store.GetFailedAttempts(ctx, "user-expire-fail")
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }

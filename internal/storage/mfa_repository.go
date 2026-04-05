@@ -6,30 +6,34 @@ import (
 	"github.com/qf-studio/auth-service/internal/domain"
 )
 
-// MFARepository defines persistence operations for MFA secrets and backup codes.
+// MFARepository defines the persistence operations for MFA secrets and backup codes.
 type MFARepository interface {
-	// SaveSecret creates or replaces the MFA secret for a user+method pair.
+	// SaveSecret creates or replaces the MFA secret for a user.
 	SaveSecret(ctx context.Context, secret *domain.MFASecret) (*domain.MFASecret, error)
 
-	// GetSecret retrieves the MFA secret for a user and method.
-	GetSecret(ctx context.Context, userID string, method domain.MFAMethod) (*domain.MFASecret, error)
+	// GetSecret retrieves the active (non-deleted) MFA secret for a user.
+	// Returns ErrNotFound if the user has no active secret.
+	GetSecret(ctx context.Context, userID string) (*domain.MFASecret, error)
 
-	// ConfirmSecret marks an MFA secret as confirmed (user completed verification).
-	ConfirmSecret(ctx context.Context, userID string, method domain.MFAMethod) error
+	// ConfirmSecret marks the user's MFA secret as confirmed.
+	// Returns ErrNotFound if no active secret exists.
+	ConfirmSecret(ctx context.Context, userID string) error
 
-	// DeleteSecret removes an MFA secret for a user and method.
-	DeleteSecret(ctx context.Context, userID string, method domain.MFAMethod) error
+	// DeleteSecret soft-deletes the user's active MFA secret.
+	// Returns ErrNotFound if no active secret exists.
+	DeleteSecret(ctx context.Context, userID string) error
 
-	// SaveBackupCodes replaces all backup codes for a user (hashed).
-	SaveBackupCodes(ctx context.Context, userID string, codeHashes []string) error
+	// SaveBackupCodes stores a set of hashed backup codes for a user,
+	// replacing any existing unused codes.
+	SaveBackupCodes(ctx context.Context, userID string, codes []domain.BackupCode) error
 
-	// GetBackupCodes returns all unused backup codes for a user.
-	GetBackupCodes(ctx context.Context, userID string) ([]*domain.MFABackupCode, error)
+	// GetBackupCodes returns all backup codes for a user (both used and unused).
+	GetBackupCodes(ctx context.Context, userID string) ([]domain.BackupCode, error)
 
-	// ConsumeBackupCode marks a single backup code as used. Returns ErrNotFound
-	// if no unused code matches the given hash.
-	ConsumeBackupCode(ctx context.Context, userID string, codeHash string) error
+	// ConsumeBackupCode marks a backup code as used. Returns ErrNotFound
+	// if no unused code with the given hash exists.
+	ConsumeBackupCode(ctx context.Context, userID, codeHash string) error
 
-	// GetMFAStatus returns the aggregate MFA status for a user.
+	// GetMFAStatus returns the MFA enrollment status for a user.
 	GetMFAStatus(ctx context.Context, userID string) (*domain.MFAStatus, error)
 }

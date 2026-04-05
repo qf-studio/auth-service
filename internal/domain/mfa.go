@@ -1,41 +1,35 @@
 package domain
 
-import (
-	"time"
+import "time"
 
-	"github.com/google/uuid"
-)
-
-// MFAMethod represents the type of MFA used.
-type MFAMethod string
-
-const (
-	MFAMethodTOTP MFAMethod = "totp"
-)
-
-// MFASecret represents a stored MFA secret for a user.
+// MFASecret represents a user's MFA enrollment (e.g. TOTP secret).
 type MFASecret struct {
-	ID        uuid.UUID
-	UserID    string
-	Method    MFAMethod
-	Secret    string
-	Confirmed bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID          string
+	UserID      string
+	Type        string // "totp", "webauthn" (Phase 2)
+	Secret      string // encrypted TOTP secret
+	Confirmed   bool
+	ConfirmedAt *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	DeletedAt   *time.Time
 }
 
-// MFABackupCode represents a single backup code for a user.
-type MFABackupCode struct {
-	ID        uuid.UUID
+// BackupCode represents a single hashed MFA backup code.
+type BackupCode struct {
+	ID        string
 	UserID    string
 	CodeHash  string
+	Used      bool
 	UsedAt    *time.Time
 	CreatedAt time.Time
 }
 
-// MFAStatus summarises whether MFA is enabled and which methods are confirmed.
+// MFAStatus summarises whether MFA is enabled for a user.
 type MFAStatus struct {
-	Enabled          bool
-	ConfirmedMethods []MFAMethod
-	BackupCodesLeft  int
+	UserID     string
+	Enabled    bool
+	Type       string // active MFA type, empty if not enabled
+	Confirmed  bool
+	BackupLeft int // remaining unused backup codes
 }
