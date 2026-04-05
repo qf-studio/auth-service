@@ -36,6 +36,7 @@ const (
 	EventAdminAPIKeyUpdate     = "admin_apikey_update"
 	EventAdminAPIKeyRevoke     = "admin_apikey_revoke"
 	EventAdminAPIKeyRotate     = "admin_apikey_rotate"
+	EventTokenExchange         = "token_exchange"
 )
 
 // Event represents a single audit log entry.

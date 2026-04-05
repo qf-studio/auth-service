@@ -242,9 +242,19 @@ func (s *Service) IsRevoked(ctx context.Context, tokenID string) (bool, error) {
 // customClaims extends jwt.RegisteredClaims with our application-specific fields.
 type customClaims struct {
 	jwt.RegisteredClaims
-	Roles      []string `json:"roles,omitempty"`
-	Scopes     []string `json:"scopes,omitempty"`
-	ClientType string   `json:"client_type"`
+	Roles      []string    `json:"roles,omitempty"`
+	Scopes     []string    `json:"scopes,omitempty"`
+	ClientType string      `json:"client_type"`
+	Act        *actorClaim `json:"act,omitempty"`
+}
+
+// actorClaim represents the RFC 8693 "act" claim for delegation chains.
+// Each level contains the actor's subject and optionally a nested act claim
+// representing the previous actor in the chain.
+type actorClaim struct {
+	Subject    string      `json:"sub"`
+	ClientType string      `json:"client_type"`
+	Act        *actorClaim `json:"act,omitempty"`
 }
 
 // GetJTI is a helper to extract the JTI from RegisteredClaims.
