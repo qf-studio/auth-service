@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/rbac"
 )
 
 // ErrNoClaims is returned by GetClaims when AuthMiddleware has not run or
@@ -78,6 +79,53 @@ func RequireScopes(scopes ...string) gin.HandlerFunc {
 					"insufficient scope")
 				return
 			}
+		}
+
+		c.Next()
+	}
+}
+
+// PermissionMiddleware holds a Casbin enforcer and provides the
+// RequirePermission factory method. Construct it once at startup and
+// reuse across route registrations.
+//
+//	pm := middleware.NewPermissionMiddleware(casbinEnforcer)
+//	router.GET("/tokens", pm.RequirePermission("/tokens", "read"), handler)
+type PermissionMiddleware struct {
+	enforcer rbac.PermissionEnforcer
+}
+
+// NewPermissionMiddleware creates a PermissionMiddleware backed by the
+// given Casbin PermissionEnforcer.
+func NewPermissionMiddleware(enforcer rbac.PermissionEnforcer) *PermissionMiddleware {
+	return &PermissionMiddleware{enforcer: enforcer}
+}
+
+// RequirePermission returns a Gin middleware that enforces policy-based access
+// control. The subject is extracted from the JWT claims populated by
+// AuthMiddleware (claims.Subject). Returns:
+//   - 401 Unauthorized if AuthMiddleware has not run (no claims in context)
+//   - 403 Forbidden if the Casbin policy denies access
+//   - 500 Internal Server Error if the enforcer fails (infrastructure error)
+func (pm *PermissionMiddleware) RequirePermission(obj, act string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims, err := GetClaims(c)
+		if err != nil {
+			domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized,
+				"authentication required")
+			return
+		}
+
+		allowed, err := pm.enforcer.CheckPermission(claims.Subject, obj, act)
+		if err != nil {
+			domain.RespondWithError(c, http.StatusInternalServerError, domain.CodeInternalError,
+				"permission check failed")
+			return
+		}
+		if !allowed {
+			domain.RespondWithError(c, http.StatusForbidden, domain.CodeForbidden,
+				"permission denied")
+			return
 		}
 
 		c.Next()

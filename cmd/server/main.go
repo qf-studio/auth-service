@@ -28,6 +28,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/metrics"
 	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/password"
+	"github.com/qf-studio/auth-service/internal/rbac"
 	"github.com/qf-studio/auth-service/internal/session"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
@@ -78,6 +79,12 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Audit ─────────────────────────────────────────────────────────────
 	auditSvc := audit.NewService(log, 1024)
 
+	// ── RBAC (Casbin) ──────────────────────────────────────────────────────
+	casbinEnforcer, err := rbac.NewCasbinEnforcer(pgPool, log)
+	if err != nil {
+		return fmt.Errorf("casbin enforcer init failed: %w", err)
+	}
+
 	// ── Services ─────────────────────────────────────────────────────────
 	hasher := password.New([]byte(cfg.Argon2.Pepper))
 	tokenSvc, err := token.NewService(cfg.JWT, redisClient, log, auditSvc)
@@ -108,6 +115,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
+	permMW := middleware.NewPermissionMiddleware(casbinEnforcer)
 
 	mw := &api.MiddlewareStack{
 		CORS:            middleware.CORS(cfg.CORS),
@@ -117,6 +125,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
 		Auth:            middleware.AuthMiddleware(tokenSvc),
 		Metrics:         metricsCollector.Middleware(),
+		Permission:      permMW,
 	}
 
 	// ── Repositories (admin) ─────────────────────────────────────────────
@@ -127,11 +136,13 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
 	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
+	adminRBACSvc := admin.NewRBACService(casbinEnforcer, log)
 
 	adminServices := &api.AdminServices{
 		Users:   adminUserSvc,
 		Clients: adminClientSvc,
 		Tokens:  adminTokenSvc,
+		RBAC:    adminRBACSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

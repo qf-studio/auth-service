@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/qf-studio/auth-service/internal/middleware"
 )
 
 // AuthResult contains the tokens returned after successful authentication.
@@ -90,4 +92,8 @@ type MiddlewareStack struct {
 	RequestSize     gin.HandlerFunc
 	Auth            gin.HandlerFunc
 	Metrics         gin.HandlerFunc
+	// Permission is the Casbin-backed RBAC permission middleware. Nil-safe:
+	// routes that call mw.Permission.RequirePermission will compile, but the
+	// router only invokes them when mw.Permission is non-nil.
+	Permission *middleware.PermissionMiddleware
 }

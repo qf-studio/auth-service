@@ -140,9 +140,39 @@ type AdminTokenService interface {
 	Introspect(ctx context.Context, token string) (*IntrospectionResponse, error)
 }
 
+// AdminRBACService defines admin operations for RBAC policy and role management.
+type AdminRBACService interface {
+	ListPolicies(ctx context.Context) ([]RBACPolicy, error)
+	AddPolicy(ctx context.Context, sub, obj, act string) error
+	RemovePolicy(ctx context.Context, sub, obj, act string) error
+	GetRolesForUser(ctx context.Context, userID string) ([]string, error)
+	AssignRole(ctx context.Context, userID, role string) error
+	RemoveRole(ctx context.Context, userID, role string) error
+}
+
+// RBACPolicy represents a single Casbin policy rule in admin API responses.
+type RBACPolicy struct {
+	Subject string `json:"sub"`
+	Object  string `json:"obj"`
+	Action  string `json:"act"`
+}
+
+// AdminRBACPolicyRequest is the request body for adding or removing a policy rule.
+type AdminRBACPolicyRequest struct {
+	Subject string `json:"sub" validate:"required"`
+	Object  string `json:"obj" validate:"required"`
+	Action  string `json:"act" validate:"required"`
+}
+
+// AdminRBACRoleRequest is the request body for assigning or removing a role.
+type AdminRBACRoleRequest struct {
+	Role string `json:"role" validate:"required"`
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users   AdminUserService
 	Clients AdminClientService
 	Tokens  AdminTokenService
+	RBAC    AdminRBACService
 }

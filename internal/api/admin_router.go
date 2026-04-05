@@ -81,6 +81,20 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		admin.POST("/tokens/introspect", tokenH.Introspect)
 	}
 
+	// RBAC policy and role management.
+	if svc.RBAC != nil {
+		rbacH := NewAdminRBACHandlers(svc.RBAC)
+		rbac := admin.Group("/rbac")
+		{
+			rbac.GET("/policies", rbacH.ListPolicies)
+			rbac.POST("/policies", rbacH.AddPolicy)
+			rbac.DELETE("/policies", rbacH.RemovePolicy)
+			rbac.GET("/roles/:user_id", rbacH.GetRoles)
+			rbac.POST("/roles/:user_id", rbacH.AssignRole)
+			rbac.DELETE("/roles/:user_id", rbacH.RemoveRole)
+		}
+	}
+
 	return r
 }
 
