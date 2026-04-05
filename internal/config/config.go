@@ -24,6 +24,14 @@ type Config struct {
 	DPoP         DPoPConfig
 	MFA          MFAConfig
 	OAuth        OAuthConfig
+	OIDC         OIDCConfig
+}
+
+// OIDCConfig holds OpenID Connect provider settings.
+type OIDCConfig struct {
+	IssuerURL       string        // OIDC_ISSUER_URL: the issuer identifier (e.g. https://auth.example.com)
+	IDTokenTTL      time.Duration // OIDC_ID_TOKEN_TTL: lifetime of ID tokens
+	SupportedScopes []string      // OIDC_SUPPORTED_SCOPES: comma-separated OIDC scopes
 }
 
 // OAuthProviderConfig holds credentials and settings for a single OAuth provider.
@@ -255,6 +263,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	oidcCfg, err := loadOIDC(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -278,6 +290,7 @@ func Load() (*Config, error) {
 		DPoP:         dpop,
 		MFA:          mfaCfg,
 		OAuth:        oauthCfg,
+		OIDC:         oidcCfg,
 	}, nil
 }
 
@@ -628,6 +641,25 @@ func loadOAuthProvider(l *loader, provider string) (OAuthProviderConfig, error) 
 		Enabled:      true,
 		TeamID:       teamID,
 		KeyID:        keyID,
+	}, nil
+}
+
+func loadOIDC(l *loader) (OIDCConfig, error) {
+	issuerURL := l.optStr("OIDC_ISSUER_URL", "http://localhost:4000")
+
+	idTokenTTLStr := l.optStr("OIDC_ID_TOKEN_TTL", "1h")
+	idTokenTTL, err := parseDuration(idTokenTTLStr)
+	if err != nil {
+		return OIDCConfig{}, fmt.Errorf("OIDC_ID_TOKEN_TTL: %w", err)
+	}
+
+	scopesRaw := l.optStr("OIDC_SUPPORTED_SCOPES", "openid,profile,email,offline_access")
+	scopes := splitCSV(scopesRaw)
+
+	return OIDCConfig{
+		IssuerURL:       issuerURL,
+		IDTokenTTL:      idTokenTTL,
+		SupportedScopes: scopes,
 	}, nil
 }
 

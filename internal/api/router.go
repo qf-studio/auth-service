@@ -59,6 +59,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		oauthH = NewOAuthHandlers(svc.OAuth)
 	}
 
+	var oidcH *OIDCHandlers
+	if svc.OIDC != nil {
+		oidcH = NewOIDCHandlers(svc.OIDC)
+	}
+
 	// Health probes (no middleware beyond global).
 	hh := newHealthHandlers(healthSvc)
 	r.GET("/health", hh.health)
@@ -67,6 +72,13 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 
 	// JWKS endpoint (public, no auth).
 	r.GET("/.well-known/jwks.json", tokenH.JWKS)
+
+	// OIDC discovery and authorization endpoints (public, no auth).
+	if oidcH != nil {
+		r.GET("/.well-known/openid-configuration", oidcH.Discovery)
+		r.GET("/oauth/authorize", oidcH.Authorize)
+		r.POST("/oauth/token", oidcH.Token)
+	}
 
 	// Public auth routes.
 	auth := r.Group("/auth")
@@ -125,6 +137,18 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 	if oauthH != nil {
 		protected.GET("/me/oauth", oauthH.ListLinked)
 		protected.DELETE("/me/oauth/:provider", oauthH.Unlink)
+	}
+
+	// OIDC UserInfo endpoint (requires auth, at root path per OIDC spec).
+	if oidcH != nil {
+		userinfo := r.Group("")
+		if mw != nil && mw.APIKey != nil {
+			userinfo.Use(mw.APIKey)
+		}
+		if mw != nil && mw.Auth != nil {
+			userinfo.Use(mw.Auth)
+		}
+		userinfo.GET("/userinfo", oidcH.UserInfo)
 	}
 
 	return r
