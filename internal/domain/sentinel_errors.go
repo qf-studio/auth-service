@@ -26,4 +26,8 @@ var (
 	// Authorization errors.
 	ErrInsufficientScope = errors.New("insufficient scope")
 	ErrInsufficientRole  = errors.New("insufficient role")
+
+	// OAuth account errors.
+	ErrOAuthAccountNotFound    = errors.New("oauth account not found")
+	ErrOAuthAccountAlreadyLinked = errors.New("oauth account already linked")
 )
