@@ -41,4 +41,10 @@ var (
 
 	// ErrMFAMaxAttempts indicates the user has exceeded maximum MFA verification attempts.
 	ErrMFAMaxAttempts = errors.New("mfa max attempts exceeded")
+
+	// ErrDuplicateSocialAccount indicates the provider+provider_user_id pair already exists.
+	ErrDuplicateSocialAccount = errors.New("duplicate social account")
+
+	// ErrOAuthStateNotFound indicates the OAuth state token does not exist or has expired.
+	ErrOAuthStateNotFound = errors.New("oauth state not found")
 )

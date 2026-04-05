@@ -23,6 +23,24 @@ type Config struct {
 	Email        EmailConfig
 	DPoP         DPoPConfig
 	MFA          MFAConfig
+	OAuth        OAuthConfig
+}
+
+// OAuthProviderConfig holds credentials and toggle for a single OAuth provider.
+type OAuthProviderConfig struct {
+	Enabled      bool
+	ClientID     string
+	ClientSecret string
+}
+
+// OAuthConfig holds social login / OAuth provider settings.
+type OAuthConfig struct {
+	Google          OAuthProviderConfig
+	GitHub          OAuthProviderConfig
+	Apple           OAuthProviderConfig
+	StateHMACSecret string        // OAUTH_STATE_HMAC_SECRET: HMAC key for signing state tokens
+	StateTTL        time.Duration // OAUTH_STATE_TTL: lifetime of OAuth state parameters
+	RedirectBaseURL string        // OAUTH_REDIRECT_BASE_URL: base URL for OAuth callback endpoints
 }
 
 // MFAConfig holds multi-factor authentication settings.
@@ -232,6 +250,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	oauthCfg, err := loadOAuth(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -254,6 +276,7 @@ func Load() (*Config, error) {
 		Email:        email,
 		DPoP:         dpop,
 		MFA:          mfaCfg,
+		OAuth:        oauthCfg,
 	}, nil
 }
 
@@ -547,6 +570,48 @@ func loadMFA(l *loader) (MFAConfig, error) {
 		Digits:          digits,
 		Period:          period,
 		BackupCodeCount: backupCount,
+	}, nil
+}
+
+func loadOAuth(l *loader) (OAuthConfig, error) {
+	googleEnabled, err := l.optBool("OAUTH_GOOGLE_ENABLED", false)
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	githubEnabled, err := l.optBool("OAUTH_GITHUB_ENABLED", false)
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	appleEnabled, err := l.optBool("OAUTH_APPLE_ENABLED", false)
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+
+	stateTTLStr := l.optStr("OAUTH_STATE_TTL", "10m")
+	stateTTL, err := parseDuration(stateTTLStr)
+	if err != nil {
+		return OAuthConfig{}, fmt.Errorf("OAUTH_STATE_TTL: %w", err)
+	}
+
+	return OAuthConfig{
+		Google: OAuthProviderConfig{
+			Enabled:      googleEnabled,
+			ClientID:     l.optStr("OAUTH_GOOGLE_CLIENT_ID", ""),
+			ClientSecret: l.optStr("OAUTH_GOOGLE_CLIENT_SECRET", ""),
+		},
+		GitHub: OAuthProviderConfig{
+			Enabled:      githubEnabled,
+			ClientID:     l.optStr("OAUTH_GITHUB_CLIENT_ID", ""),
+			ClientSecret: l.optStr("OAUTH_GITHUB_CLIENT_SECRET", ""),
+		},
+		Apple: OAuthProviderConfig{
+			Enabled:      appleEnabled,
+			ClientID:     l.optStr("OAUTH_APPLE_CLIENT_ID", ""),
+			ClientSecret: l.optStr("OAUTH_APPLE_CLIENT_SECRET", ""),
+		},
+		StateHMACSecret: l.optStr("OAUTH_STATE_HMAC_SECRET", ""),
+		StateTTL:        stateTTL,
+		RedirectBaseURL: l.optStr("OAUTH_REDIRECT_BASE_URL", ""),
 	}, nil
 }
 
