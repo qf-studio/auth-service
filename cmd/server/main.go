@@ -106,6 +106,17 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Metrics ───────────────────────────────────────────────────────────
 	metricsCollector := metrics.New()
 
+	// ── Repositories (admin) ─────────────────────────────────────────────
+	adminUserRepo := storage.NewPostgresAdminUserRepository(pgPool)
+	clientRepo := storage.NewPostgresClientRepository(pgPool)
+	apiKeyRepo := storage.NewPostgresAPIKeyRepository(pgPool)
+
+	// ── Admin services ────────────────────────────────────────────────────
+	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
+	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
+	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
+	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, hasher, log, auditSvc)
+
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
 
@@ -115,23 +126,16 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		SecurityHeaders: middleware.SecurityHeaders(),
 		RateLimit:       rateLimiter.Handler(),
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
+		APIKey:          middleware.APIKeyMiddleware(adminAPIKeySvc),
 		Auth:            middleware.AuthMiddleware(tokenSvc),
 		Metrics:         metricsCollector.Middleware(),
 	}
-
-	// ── Repositories (admin) ─────────────────────────────────────────────
-	adminUserRepo := storage.NewPostgresAdminUserRepository(pgPool)
-	clientRepo := storage.NewPostgresClientRepository(pgPool)
-
-	// ── Admin services ────────────────────────────────────────────────────
-	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
-	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
-	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
 
 	adminServices := &api.AdminServices{
 		Users:   adminUserSvc,
 		Clients: adminClientSvc,
 		Tokens:  adminTokenSvc,
+		APIKeys: adminAPIKeySvc,
 	}
 
 	adminDeps := &api.AdminDeps{

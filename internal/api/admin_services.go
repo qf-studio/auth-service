@@ -56,6 +56,36 @@ type AdminClientList struct {
 	PerPage int           `json:"per_page"`
 }
 
+// AdminAPIKey represents an API key in admin API responses.
+type AdminAPIKey struct {
+	ID         string     `json:"id"`
+	ClientID   string     `json:"client_id"`
+	Name       string     `json:"name"`
+	KeyPrefix  string     `json:"key_prefix"`
+	Scopes     []string   `json:"scopes"`
+	RateLimit  int        `json:"rate_limit"`
+	Status     string     `json:"status"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// AdminAPIKeyWithSecret is returned only on create and key rotation.
+type AdminAPIKeyWithSecret struct {
+	AdminAPIKey
+	Key             string     `json:"key"`
+	GracePeriodEnds *time.Time `json:"grace_period_ends,omitempty"`
+}
+
+// AdminAPIKeyList is the paginated response for listing API keys.
+type AdminAPIKeyList struct {
+	APIKeys []AdminAPIKey `json:"api_keys"`
+	Total   int           `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
+}
+
 // IntrospectionResponse follows RFC 7662 token introspection.
 type IntrospectionResponse struct {
 	Active     bool   `json:"active"`
@@ -112,6 +142,22 @@ type IntrospectRequest struct {
 	Token string `json:"token" validate:"required"`
 }
 
+// CreateAPIKeyRequest is the request body for creating an API key.
+type CreateAPIKeyRequest struct {
+	ClientID  string   `json:"client_id"  validate:"required,uuid"`
+	Name      string   `json:"name"       validate:"required,min=1,max=255"`
+	Scopes    []string `json:"scopes"     validate:"omitempty"`
+	RateLimit *int     `json:"rate_limit" validate:"omitempty,min=0,max=100000"`
+	ExpiresAt *string  `json:"expires_at" validate:"omitempty"`
+}
+
+// UpdateAPIKeyRequest is the request body for updating an API key.
+type UpdateAPIKeyRequest struct {
+	Name      *string  `json:"name"       validate:"omitempty,min=1,max=255"`
+	Scopes    []string `json:"scopes"     validate:"omitempty"`
+	RateLimit *int     `json:"rate_limit" validate:"omitempty,min=0,max=100000"`
+}
+
 // --- Admin service interfaces ---
 
 // AdminUserService defines admin operations for user management.
@@ -140,9 +186,20 @@ type AdminTokenService interface {
 	Introspect(ctx context.Context, token string) (*IntrospectionResponse, error)
 }
 
+// AdminAPIKeyService defines admin operations for API key management.
+type AdminAPIKeyService interface {
+	ListAPIKeys(ctx context.Context, page, perPage int, clientID string) (*AdminAPIKeyList, error)
+	GetAPIKey(ctx context.Context, keyID string) (*AdminAPIKey, error)
+	CreateAPIKey(ctx context.Context, req *CreateAPIKeyRequest) (*AdminAPIKeyWithSecret, error)
+	UpdateAPIKey(ctx context.Context, keyID string, req *UpdateAPIKeyRequest) (*AdminAPIKey, error)
+	RevokeAPIKey(ctx context.Context, keyID string) error
+	RotateAPIKey(ctx context.Context, keyID string) (*AdminAPIKeyWithSecret, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users   AdminUserService
 	Clients AdminClientService
 	Tokens  AdminTokenService
+	APIKeys AdminAPIKeyService
 }
