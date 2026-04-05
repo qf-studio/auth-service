@@ -27,6 +27,7 @@ func init() {
 type mockAuthService struct {
 	registerFn             func(ctx context.Context, email, password, name string) (*api.UserInfo, error)
 	loginFn                func(ctx context.Context, email, password string) (*api.AuthResult, error)
+	verifyMFALoginFn       func(ctx context.Context, mfaToken, code string) (*api.AuthResult, error)
 	resetPasswordFn        func(ctx context.Context, email string) error
 	confirmPasswordResetFn func(ctx context.Context, token, newPassword string) error
 	getMeFn                func(ctx context.Context, userID string) (*api.UserInfo, error)
@@ -45,6 +46,18 @@ func (m *mockAuthService) Register(ctx context.Context, email, password, name st
 func (m *mockAuthService) Login(ctx context.Context, email, password string) (*api.AuthResult, error) {
 	if m.loginFn != nil {
 		return m.loginFn(ctx, email, password)
+	}
+	return &api.AuthResult{
+		AccessToken:  "qf_at_test_access",
+		RefreshToken: "qf_rt_test_refresh",
+		TokenType:    "Bearer",
+		ExpiresIn:    3600,
+	}, nil
+}
+
+func (m *mockAuthService) VerifyMFALogin(ctx context.Context, mfaToken, code string) (*api.AuthResult, error) {
+	if m.verifyMFALoginFn != nil {
+		return m.verifyMFALoginFn(ctx, mfaToken, code)
 	}
 	return &api.AuthResult{
 		AccessToken:  "qf_at_test_access",

@@ -21,6 +21,7 @@ import (
 
 type mockUserRepository struct {
 	findByEmailFn   func(ctx context.Context, email string) (*domain.User, error)
+	findByIDFn      func(ctx context.Context, id string) (*domain.User, error)
 	updateLastLogin func(ctx context.Context, userID string, ts time.Time) error
 }
 
@@ -28,7 +29,10 @@ func (m *mockUserRepository) Create(_ context.Context, _ *domain.User) (*domain.
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockUserRepository) FindByID(_ context.Context, _ string) (*domain.User, error) {
+func (m *mockUserRepository) FindByID(ctx context.Context, id string) (*domain.User, error) {
+	if m.findByIDFn != nil {
+		return m.findByIDFn(ctx, id)
+	}
 	return nil, fmt.Errorf("not implemented")
 }
 
@@ -105,6 +109,57 @@ func (m *mockTokenIssuer) Revoke(ctx context.Context, token string) error {
 	return nil
 }
 
+type mockMFAProvider struct {
+	isMFAEnabledFn      func(ctx context.Context, userID string) (bool, error)
+	generateMFATokenFn  func(ctx context.Context, userID string) (string, error)
+	consumeMFATokenFn   func(ctx context.Context, token string) (string, error)
+	verifyCodeFn        func(ctx context.Context, userID, code string) error
+	recordFailedFn      func(ctx context.Context, userID string) (int, error)
+	clearFailedFn       func(ctx context.Context, userID string) error
+}
+
+func (m *mockMFAProvider) IsMFAEnabled(ctx context.Context, userID string) (bool, error) {
+	if m.isMFAEnabledFn != nil {
+		return m.isMFAEnabledFn(ctx, userID)
+	}
+	return false, nil
+}
+
+func (m *mockMFAProvider) GenerateMFAToken(ctx context.Context, userID string) (string, error) {
+	if m.generateMFATokenFn != nil {
+		return m.generateMFATokenFn(ctx, userID)
+	}
+	return "test-mfa-token", nil
+}
+
+func (m *mockMFAProvider) ConsumeMFAToken(ctx context.Context, token string) (string, error) {
+	if m.consumeMFATokenFn != nil {
+		return m.consumeMFATokenFn(ctx, token)
+	}
+	return "", fmt.Errorf("not found: %w", api.ErrUnauthorized)
+}
+
+func (m *mockMFAProvider) VerifyCode(ctx context.Context, userID, code string) error {
+	if m.verifyCodeFn != nil {
+		return m.verifyCodeFn(ctx, userID, code)
+	}
+	return fmt.Errorf("invalid code: %w", api.ErrUnauthorized)
+}
+
+func (m *mockMFAProvider) RecordFailedAttempt(ctx context.Context, userID string) (int, error) {
+	if m.recordFailedFn != nil {
+		return m.recordFailedFn(ctx, userID)
+	}
+	return 1, nil
+}
+
+func (m *mockMFAProvider) ClearFailedAttempts(ctx context.Context, userID string) error {
+	if m.clearFailedFn != nil {
+		return m.clearFailedFn(ctx, userID)
+	}
+	return nil
+}
+
 type mockBreachChecker struct {
 	isBreachedFn func(ctx context.Context, password string) (bool, error)
 }
@@ -133,12 +188,19 @@ func (m *mockHasher) Verify(password, hash string) (bool, error) {
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
-// newUnitService creates a Service with a nil Redis client for pure unit tests
-// that don't exercise password-reset (Redis-dependent) code paths.
+// newUnitService creates a Service with a nil Redis client and nil MFA for pure unit tests
+// that don't exercise password-reset (Redis-dependent) or MFA code paths.
 func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher) *Service {
 	t.Helper()
 	logger, _ := zap.NewDevelopment()
-	return NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{})
+	return NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{}, nil)
+}
+
+// newUnitServiceWithMFA creates a Service with an MFA provider for testing MFA login flows.
+func newUnitServiceWithMFA(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher, mfaProv MFAProvider) *Service {
+	t.Helper()
+	logger, _ := zap.NewDevelopment()
+	return NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{}, mfaProv)
 }
 
 // newRedisClient creates a Redis client for integration tests (password reset).
@@ -174,7 +236,7 @@ func newIntegrationService(t *testing.T) *Service {
 	t.Helper()
 	client := newRedisClient(t)
 	logger, _ := zap.NewDevelopment()
-	return NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
+	return NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{}, nil)
 }
 
 // ── Login Tests ──────────────────────────────────────────────────────────────
@@ -596,4 +658,229 @@ func TestGetMe_ReturnsStub(t *testing.T) {
 	user, err := svc.GetMe(context.Background(), "user-42")
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", user.ID)
+}
+
+// ── MFA Login Tests ─────────────────────────────────────────────────────────
+
+func TestLogin_MFAEnabled_ReturnsMFAChallenge(t *testing.T) {
+	mfaUser := &domain.User{
+		ID:           "user-mfa",
+		Email:        "mfa@example.com",
+		PasswordHash: "hash",
+		Roles:        []string{"user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return mfaUser, nil
+		},
+	}
+	mfaProv := &mockMFAProvider{
+		isMFAEnabledFn: func(_ context.Context, _ string) (bool, error) {
+			return true, nil
+		},
+		generateMFATokenFn: func(_ context.Context, userID string) (string, error) {
+			assert.Equal(t, "user-mfa", userID)
+			return "mfa-challenge-token", nil
+		},
+	}
+
+	svc := newUnitServiceWithMFA(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, mfaProv)
+	result, err := svc.Login(context.Background(), "mfa@example.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.MFARequired)
+	assert.Equal(t, "mfa-challenge-token", result.MFAToken)
+	assert.Equal(t, "user-mfa", result.UserID)
+	assert.Empty(t, result.AccessToken, "should not issue tokens when MFA required")
+	assert.Empty(t, result.RefreshToken, "should not issue tokens when MFA required")
+}
+
+func TestLogin_MFANotEnabled_IssuesTokens(t *testing.T) {
+	normalUser := &domain.User{
+		ID:           "user-normal",
+		Email:        "normal@example.com",
+		PasswordHash: "hash",
+		Roles:        []string{"user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return normalUser, nil
+		},
+	}
+	mfaProv := &mockMFAProvider{
+		isMFAEnabledFn: func(_ context.Context, _ string) (bool, error) {
+			return false, nil
+		},
+	}
+
+	svc := newUnitServiceWithMFA(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, mfaProv)
+	result, err := svc.Login(context.Background(), "normal@example.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.MFARequired)
+	assert.NotEmpty(t, result.AccessToken)
+	assert.NotEmpty(t, result.RefreshToken)
+}
+
+func TestLogin_AdminWithoutMFA_Blocked(t *testing.T) {
+	adminUser := &domain.User{
+		ID:           "user-admin",
+		Email:        "admin@example.com",
+		PasswordHash: "hash",
+		Roles:        []string{"admin", "user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return adminUser, nil
+		},
+	}
+	mfaProv := &mockMFAProvider{
+		isMFAEnabledFn: func(_ context.Context, _ string) (bool, error) {
+			return false, nil // MFA not enrolled
+		},
+	}
+
+	svc := newUnitServiceWithMFA(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, mfaProv)
+	result, err := svc.Login(context.Background(), "admin@example.com", "password")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrForbidden)
+	assert.Nil(t, result)
+}
+
+func TestLogin_AdminWithMFA_ReturnsMFAChallenge(t *testing.T) {
+	adminUser := &domain.User{
+		ID:           "user-admin",
+		Email:        "admin@example.com",
+		PasswordHash: "hash",
+		Roles:        []string{"admin", "user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return adminUser, nil
+		},
+	}
+	mfaProv := &mockMFAProvider{
+		isMFAEnabledFn: func(_ context.Context, _ string) (bool, error) {
+			return true, nil
+		},
+		generateMFATokenFn: func(_ context.Context, _ string) (string, error) {
+			return "admin-mfa-token", nil
+		},
+	}
+
+	svc := newUnitServiceWithMFA(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, mfaProv)
+	result, err := svc.Login(context.Background(), "admin@example.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.MFARequired)
+	assert.Equal(t, "admin-mfa-token", result.MFAToken)
+}
+
+func TestLogin_NilMFA_SkipsMFACheck(t *testing.T) {
+	normalUser := &domain.User{
+		ID:           "user-1",
+		Email:        "alice@example.com",
+		PasswordHash: "hash",
+		Roles:        []string{"user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return normalUser, nil
+		},
+	}
+
+	// nil MFA provider — should skip MFA entirely.
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	result, err := svc.Login(context.Background(), "alice@example.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.MFARequired)
+	assert.NotEmpty(t, result.AccessToken)
+}
+
+// ── VerifyMFALogin Tests ────────────────────────────────────────────────────
+
+func TestVerifyMFALogin_Success(t *testing.T) {
+	mfaUser := &domain.User{
+		ID:    "user-mfa",
+		Email: "mfa@example.com",
+		Roles: []string{"user"},
+	}
+
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, id string) (*domain.User, error) {
+			if id == "user-mfa" {
+				return mfaUser, nil
+			}
+			return nil, storage.ErrNotFound
+		},
+	}
+
+	mfaProv := &mockMFAProvider{
+		consumeMFATokenFn: func(_ context.Context, token string) (string, error) {
+			if token == "valid-mfa-token" {
+				return "user-mfa", nil
+			}
+			return "", fmt.Errorf("not found: %w", api.ErrUnauthorized)
+		},
+		verifyCodeFn: func(_ context.Context, userID, code string) error {
+			if userID == "user-mfa" && code == "123456" {
+				return nil
+			}
+			return fmt.Errorf("invalid: %w", api.ErrUnauthorized)
+		},
+	}
+
+	svc := newUnitServiceWithMFA(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, mfaProv)
+	result, err := svc.VerifyMFALogin(context.Background(), "valid-mfa-token", "123456")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "user-mfa", result.UserID)
+	assert.NotEmpty(t, result.AccessToken)
+	assert.NotEmpty(t, result.RefreshToken)
+	assert.False(t, result.MFARequired)
+}
+
+func TestVerifyMFALogin_InvalidMFAToken(t *testing.T) {
+	mfaProv := &mockMFAProvider{
+		consumeMFATokenFn: func(_ context.Context, _ string) (string, error) {
+			return "", fmt.Errorf("invalid or expired: %w", api.ErrUnauthorized)
+		},
+	}
+
+	svc := newUnitServiceWithMFA(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, mfaProv)
+	result, err := svc.VerifyMFALogin(context.Background(), "bad-token", "123456")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrUnauthorized)
+	assert.Nil(t, result)
+}
+
+func TestVerifyMFALogin_InvalidCode(t *testing.T) {
+	mfaProv := &mockMFAProvider{
+		consumeMFATokenFn: func(_ context.Context, _ string) (string, error) {
+			return "user-mfa", nil
+		},
+		verifyCodeFn: func(_ context.Context, _, _ string) error {
+			return fmt.Errorf("invalid code: %w", api.ErrUnauthorized)
+		},
+	}
+
+	svc := newUnitServiceWithMFA(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, mfaProv)
+	result, err := svc.VerifyMFALogin(context.Background(), "valid-token", "000000")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrUnauthorized)
+	assert.Nil(t, result)
+}
+
+func TestVerifyMFALogin_NilMFA_ReturnsError(t *testing.T) {
+	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	result, err := svc.VerifyMFALogin(context.Background(), "token", "code")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
+	assert.Nil(t, result)
 }

@@ -84,6 +84,12 @@ type VerifyEmailRequest struct {
 	Token string `json:"token" validate:"required"`
 }
 
+// MFAVerifyRequest is the validated request body for completing MFA during login.
+type MFAVerifyRequest struct {
+	MFAToken string `json:"mfa_token" validate:"required"`
+	Code     string `json:"code"      validate:"required,min=6,max=8"`
+}
+
 // --- Validator setup ---
 
 // NewValidator creates a validator.Validate instance with custom NIST password validation registered.

@@ -44,12 +44,33 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 		return
 	}
 
-	// Create a session record if the session service is available.
-	if h.session != nil && result.UserID != "" {
+	// Skip session creation for MFA challenges — auth isn't complete yet.
+	if !result.MFARequired && h.session != nil && result.UserID != "" {
 		ip := c.ClientIP()
 		ua := c.GetHeader("User-Agent")
 		// Session creation is best-effort; login should not fail if session
 		// tracking is unavailable.
+		_, _ = h.session.CreateSession(c.Request.Context(), result.UserID, ip, ua)
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// VerifyMFA handles POST /auth/mfa/verify.
+// Completes the second step of an MFA login flow.
+func (h *AuthHandlers) VerifyMFA(c *gin.Context) {
+	req := c.MustGet("validated_request").(*domain.MFAVerifyRequest)
+
+	result, err := h.auth.VerifyMFALogin(c.Request.Context(), req.MFAToken, req.Code)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	// Create session after successful MFA verification.
+	if h.session != nil && result.UserID != "" {
+		ip := c.ClientIP()
+		ua := c.GetHeader("User-Agent")
 		_, _ = h.session.CreateSession(c.Request.Context(), result.UserID, ip, ua)
 	}
 

@@ -39,6 +39,16 @@ type TokenIssuer interface {
 	Revoke(ctx context.Context, token string) error
 }
 
+// MFAProvider abstracts MFA operations needed by the auth service during login.
+type MFAProvider interface {
+	IsMFAEnabled(ctx context.Context, userID string) (bool, error)
+	GenerateMFAToken(ctx context.Context, userID string) (string, error)
+	ConsumeMFAToken(ctx context.Context, token string) (string, error)
+	VerifyCode(ctx context.Context, userID, code string) error
+	RecordFailedAttempt(ctx context.Context, userID string) (int, error)
+	ClearFailedAttempts(ctx context.Context, userID string) error
+}
+
 // Service implements api.AuthService with Redis-backed password reset tokens
 // and PostgreSQL-backed user authentication.
 type Service struct {
@@ -50,6 +60,7 @@ type Service struct {
 	issuer   TokenIssuer
 	hasher   password.Hasher
 	breaches hibp.BreachChecker
+	mfa      MFAProvider
 }
 
 // NewService creates a new auth Service.
@@ -62,6 +73,7 @@ func NewService(
 	issuer TokenIssuer,
 	hasher password.Hasher,
 	breaches hibp.BreachChecker,
+	mfa MFAProvider,
 ) *Service {
 	return &Service{
 		redis:    redisClient,
@@ -72,6 +84,7 @@ func NewService(
 		issuer:   issuer,
 		hasher:   hasher,
 		breaches: breaches,
+		mfa:      mfa,
 	}
 }
 
@@ -144,7 +157,60 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
 	}
 
-	// Issue token pair.
+	// ── MFA gate ─────────────────────────────────────────────────────────
+	if s.mfa != nil {
+		mfaRequired, err := s.checkMFA(ctx, user)
+		if err != nil {
+			return nil, err
+		}
+		if mfaRequired {
+			mfaToken, err := s.mfa.GenerateMFAToken(ctx, user.ID)
+			if err != nil {
+				s.logger.Error("failed to generate mfa token", zap.String("user_id", user.ID), zap.Error(err))
+				return nil, fmt.Errorf("generate mfa token: %w", err)
+			}
+			return &api.AuthResult{
+				MFARequired: true,
+				MFAToken:    mfaToken,
+				UserID:      user.ID,
+			}, nil
+		}
+	}
+
+	return s.completeLogin(ctx, user)
+}
+
+// checkMFA determines whether the user must complete MFA before receiving tokens.
+// Admin role always requires MFA. Returns an error if an admin has not enrolled MFA.
+func (s *Service) checkMFA(ctx context.Context, user *domain.User) (bool, error) {
+	isAdmin := hasRole(user.Roles, domain.RoleAdmin)
+
+	mfaEnabled, err := s.mfa.IsMFAEnabled(ctx, user.ID)
+	if err != nil {
+		s.logger.Error("failed to check mfa status", zap.String("user_id", user.ID), zap.Error(err))
+		return false, fmt.Errorf("check mfa status: %w", err)
+	}
+
+	if mfaEnabled {
+		return true, nil
+	}
+
+	// Admin role requires MFA — block login if not enrolled.
+	if isAdmin {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventLoginFailure,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"reason": "admin_mfa_not_enrolled"},
+		})
+		return false, fmt.Errorf("admin accounts must enable MFA before login: %w", api.ErrForbidden)
+	}
+
+	return false, nil
+}
+
+// completeLogin issues the token pair and performs post-login bookkeeping.
+func (s *Service) completeLogin(ctx context.Context, user *domain.User) (*api.AuthResult, error) {
 	result, err := s.issuer.IssueTokenPair(ctx, user.ID, user.Roles, nil, domain.ClientTypeUser)
 	if err != nil {
 		s.logger.Error("failed to issue token pair", zap.Error(err))
@@ -170,6 +236,55 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	})
 
 	return result, nil
+}
+
+// VerifyMFALogin completes the second step of an MFA login:
+// consumes the temporary MFA token, verifies the TOTP/backup code,
+// and issues the full token pair.
+func (s *Service) VerifyMFALogin(ctx context.Context, mfaToken, code string) (*api.AuthResult, error) {
+	if s.mfa == nil {
+		return nil, fmt.Errorf("mfa not configured: %w", api.ErrInternalError)
+	}
+
+	// Consume MFA token → get user ID.
+	userID, err := s.mfa.ConsumeMFAToken(ctx, mfaToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify the TOTP or backup code.
+	if err := s.mfa.VerifyCode(ctx, userID, code); err != nil {
+		// Record failed attempt (rate limiting).
+		if _, rErr := s.mfa.RecordFailedAttempt(ctx, userID); rErr != nil {
+			s.logger.Error("failed to record mfa attempt", zap.String("user_id", userID), zap.Error(rErr))
+			return nil, rErr
+		}
+		return nil, err
+	}
+
+	// Clear failed attempts on success.
+	if err := s.mfa.ClearFailedAttempts(ctx, userID); err != nil {
+		s.logger.Error("failed to clear mfa attempts", zap.String("user_id", userID), zap.Error(err))
+	}
+
+	// Look up user for roles.
+	user, err := s.users.FindByID(ctx, userID)
+	if err != nil {
+		s.logger.Error("failed to find user after mfa", zap.String("user_id", userID), zap.Error(err))
+		return nil, fmt.Errorf("find user: %w", err)
+	}
+
+	return s.completeLogin(ctx, user)
+}
+
+// hasRole checks if the given role list contains a specific role.
+func hasRole(roles []string, role string) bool {
+	for _, r := range roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
 }
 
 // ResetPassword initiates a password reset by generating a token, storing it in Redis,

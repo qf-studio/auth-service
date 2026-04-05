@@ -27,6 +27,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
 	"github.com/qf-studio/auth-service/internal/metrics"
+	"github.com/qf-studio/auth-service/internal/mfa"
 	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/session"
@@ -79,6 +80,11 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Audit ─────────────────────────────────────────────────────────────
 	auditSvc := audit.NewService(log, 1024)
 
+	// ── MFA ──────────────────────────────────────────────────────────────
+	mfaRepo := storage.NewPostgresMFARepository(pgPool)
+	mfaStore := storage.NewRedisMFAStore(redisClient)
+	mfaSvc := mfa.NewService(mfaRepo, mfaStore, log, auditSvc)
+
 	// ── Services ─────────────────────────────────────────────────────────
 	hasher := password.New([]byte(cfg.Argon2.Pepper))
 	tokenSvc, err := token.NewService(cfg.JWT, redisClient, log, auditSvc)
@@ -86,7 +92,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
 	hibpClient := hibp.NewClient(http.DefaultClient)
-	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
+	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient, mfaSvc)
 
 	// ── Session ──────────────────────────────────────────────────────────
 	sessionStore := session.NewMemoryStore()
@@ -108,6 +114,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Token:   tokenSvc,
 		Session: sessionSvc,
 		DPoP:    dpopAPISvc,
+		MFA:     mfaSvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────

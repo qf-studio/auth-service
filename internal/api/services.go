@@ -8,12 +8,16 @@ import (
 )
 
 // AuthResult contains the tokens returned after successful authentication.
+// When MFA is required, only MFARequired and MFAToken are populated;
+// the caller must complete MFA verification to receive the full token pair.
 type AuthResult struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in"`
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	TokenType    string `json:"token_type,omitempty"`
+	ExpiresIn    int    `json:"expires_in,omitempty"`
 	UserID       string `json:"user_id,omitempty"`
+	MFARequired  bool   `json:"mfa_required,omitempty"`
+	MFAToken     string `json:"mfa_token,omitempty"`
 }
 
 // UserInfo represents the authenticated user's profile.
@@ -32,6 +36,7 @@ type JWKSResponse struct {
 type AuthService interface {
 	Register(ctx context.Context, email, password, name string) (*UserInfo, error)
 	Login(ctx context.Context, email, password string) (*AuthResult, error)
+	VerifyMFALogin(ctx context.Context, mfaToken, code string) (*AuthResult, error)
 	ResetPassword(ctx context.Context, email string) error
 	ConfirmPasswordReset(ctx context.Context, token, newPassword string) error
 	GetMe(ctx context.Context, userID string) (*UserInfo, error)
@@ -88,12 +93,25 @@ type SessionService interface {
 	DeleteAllSessions(ctx context.Context, userID string) error
 }
 
+// MFAService defines the operations for MFA verification during login.
+type MFAService interface {
+	GetMFAStatus(ctx context.Context, userID string) (*MFAStatusInfo, error)
+}
+
+// MFAStatusInfo is the API representation of a user's MFA enrollment status.
+type MFAStatusInfo struct {
+	Enabled    bool   `json:"enabled"`
+	Type       string `json:"type,omitempty"`
+	BackupLeft int    `json:"backup_codes_remaining"`
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
 	Token   TokenService
 	Session SessionService
 	DPoP    DPoPService
+	MFA     MFAService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.
