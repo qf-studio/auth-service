@@ -493,6 +493,7 @@ func TestLoad_OAuthDefaults(t *testing.T) {
 
 func TestLoad_OAuthEnabled(t *testing.T) {
 	env := requiredEnv()
+	env["OAUTH_STATE_SECRET"] = "test-state-secret-for-hmac-sign"
 	env["OAUTH_GOOGLE_ENABLED"] = "true"
 	env["OAUTH_GOOGLE_CLIENT_ID"] = "google-client-id"
 	env["OAUTH_GOOGLE_CLIENT_SECRET"] = "google-client-secret"
@@ -515,12 +516,13 @@ func TestLoad_OAuthEnabled(t *testing.T) {
 	assert.Equal(t, "github-client-id", cfg.OAuth.GitHub.ClientID)
 
 	assert.False(t, cfg.OAuth.Apple.Enabled)
+	assert.Equal(t, "test-state-secret-for-hmac-sign", cfg.OAuth.StateSecret)
 }
 
 func TestLoad_OAuthEnabledMissingClientID(t *testing.T) {
 	env := requiredEnv()
 	env["OAUTH_GOOGLE_ENABLED"] = "true"
-	// Missing CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
+	// Missing CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, STATE_SECRET
 	setEnv(t, env)
 
 	_, err := Load()
@@ -528,6 +530,7 @@ func TestLoad_OAuthEnabledMissingClientID(t *testing.T) {
 	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_CLIENT_ID")
 	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_CLIENT_SECRET")
 	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_REDIRECT_URI")
+	assert.Contains(t, err.Error(), "OAUTH_STATE_SECRET")
 }
 
 func TestLoad_OAuthInvalidEnabled(t *testing.T) {

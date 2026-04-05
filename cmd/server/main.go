@@ -120,12 +120,26 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	authSvc.SetMFAChecker(mfaSvc)
 
 	// ── OAuth ─────────────────────────────────────────────────────────────
-	// Collect enabled OAuth providers. Concrete provider implementations
-	// (Google, GitHub, Apple) are registered in subsequent issues; the
-	// service and handlers are wired now so that provider registration is
-	// the only remaining step.
+	var stateMgr *oauth.StateManager
+	if cfg.OAuth.StateSecret != "" {
+		stateMgr = oauth.NewStateManager(cfg.OAuth.StateSecret)
+	}
+
 	var oauthProviders []oauth.Provider
-	oauthSvc := oauth.NewService(cfg.OAuth, nil, tokenSvc, log, oauthProviders...)
+	if cfg.OAuth.Google.Enabled {
+		oauthProviders = append(oauthProviders, oauth.NewGoogleProvider(cfg.OAuth.Google, stateMgr, nil))
+	}
+	if cfg.OAuth.GitHub.Enabled {
+		oauthProviders = append(oauthProviders, oauth.NewGitHubProvider(cfg.OAuth.GitHub, stateMgr, nil))
+	}
+	if cfg.OAuth.Apple.Enabled {
+		appleProvider, appleErr := oauth.NewAppleProvider(cfg.OAuth.Apple, stateMgr, nil)
+		if appleErr != nil {
+			return fmt.Errorf("apple oauth provider init failed: %w", appleErr)
+		}
+		oauthProviders = append(oauthProviders, appleProvider)
+	}
+	oauthSvc := oauth.NewService(cfg.OAuth, nil, tokenSvc, log, stateMgr, oauthProviders...)
 
 	services := &api.Services{
 		Auth:    authSvc,
