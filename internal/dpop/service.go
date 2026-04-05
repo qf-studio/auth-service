@@ -4,16 +4,9 @@ package dpop
 
 import (
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -25,12 +18,6 @@ import (
 )
 
 const (
-	// nonceKeyPrefix is the Redis key prefix for DPoP nonces.
-	nonceKeyPrefix = "dpop:nonce:"
-
-	// jtiKeyPrefix is the Redis key prefix for JTI replay protection.
-	jtiKeyPrefix = "dpop:jti:"
-
 	// maxClockSkew allows a small amount of clock drift for iat validation.
 	maxClockSkew = 30 * time.Second
 
@@ -73,7 +60,6 @@ func (s *Service) Enabled() bool {
 
 // ValidateProof validates a DPoP proof JWT per RFC 9449 §4.3.
 // It verifies the proof structure, signature, htm/htu binding, timing, and JTI uniqueness.
-// If nonce enforcement is desired, pass the expected nonce; empty string skips nonce check.
 func (s *Service) ValidateProof(ctx context.Context, proofJWT, httpMethod, httpURI string) (*ProofClaims, error) {
 	// Parse the JWT header without verifying yet to extract the JWK.
 	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
@@ -106,7 +92,6 @@ func (s *Service) ValidateProof(ctx context.Context, proofJWT, httpMethod, httpU
 	}
 
 	// §4.3 step 4: verify the signature using the embedded public key.
-	// Re-parse with proper verification.
 	verifiedToken, err := jwt.Parse(proofJWT, func(t *jwt.Token) (interface{}, error) {
 		return pubKey, nil
 	}, jwt.WithValidMethods([]string{alg}))
@@ -168,7 +153,7 @@ func (s *Service) ValidateProof(ctx context.Context, proofJWT, httpMethod, httpU
 	}
 
 	// Compute JWK thumbprint (RFC 7638).
-	thumbprint, err := computeJWKThumbprint(jwkRaw)
+	thumbprint, err := JWKThumbprint(pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("compute JWK thumbprint: %w", err)
 	}
@@ -220,112 +205,3 @@ func (s *Service) checkAndStoreJTI(ctx context.Context, jti string) error {
 	}
 	return nil
 }
-
-// parseJWK extracts a crypto.PublicKey from a JWK map in the JWT header.
-func parseJWK(raw interface{}) (crypto.PublicKey, error) {
-	jwkMap, ok := raw.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("jwk is not an object")
-	}
-
-	kty, _ := jwkMap["kty"].(string)
-
-	switch kty {
-	case "EC":
-		return parseECPublicKey(jwkMap)
-	case "OKP":
-		return parseOKPPublicKey(jwkMap)
-	default:
-		return nil, fmt.Errorf("unsupported key type: %q", kty)
-	}
-}
-
-func parseECPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
-	crv, _ := jwk["crv"].(string)
-	if crv != "P-256" {
-		return nil, fmt.Errorf("unsupported EC curve: %q (only P-256 supported)", crv)
-	}
-
-	xStr, _ := jwk["x"].(string)
-	yStr, _ := jwk["y"].(string)
-
-	xBytes, err := base64.RawURLEncoding.DecodeString(xStr)
-	if err != nil {
-		return nil, fmt.Errorf("decode x: %w", err)
-	}
-	yBytes, err := base64.RawURLEncoding.DecodeString(yStr)
-	if err != nil {
-		return nil, fmt.Errorf("decode y: %w", err)
-	}
-
-	key := &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(xBytes),
-		Y:     new(big.Int).SetBytes(yBytes),
-	}
-
-	if !key.Curve.IsOnCurve(key.X, key.Y) {
-		return nil, fmt.Errorf("EC point not on curve")
-	}
-
-	return key, nil
-}
-
-func parseOKPPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
-	crv, _ := jwk["crv"].(string)
-	if crv != "Ed25519" {
-		return nil, fmt.Errorf("unsupported OKP curve: %q", crv)
-	}
-
-	xStr, _ := jwk["x"].(string)
-	xBytes, err := base64.RawURLEncoding.DecodeString(xStr)
-	if err != nil {
-		return nil, fmt.Errorf("decode x: %w", err)
-	}
-
-	if len(xBytes) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("invalid Ed25519 key size: %d", len(xBytes))
-	}
-
-	return ed25519.PublicKey(xBytes), nil
-}
-
-// computeJWKThumbprint computes the JWK SHA-256 thumbprint per RFC 7638.
-func computeJWKThumbprint(raw interface{}) (string, error) {
-	jwk, ok := raw.(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("jwk is not an object")
-	}
-
-	kty, _ := jwk["kty"].(string)
-
-	// RFC 7638: use only the required members for the key type, in lexicographic order.
-	var canonical map[string]interface{}
-	switch kty {
-	case "EC":
-		canonical = map[string]interface{}{
-			"crv": jwk["crv"],
-			"kty": jwk["kty"],
-			"x":   jwk["x"],
-			"y":   jwk["y"],
-		}
-	case "OKP":
-		canonical = map[string]interface{}{
-			"crv": jwk["crv"],
-			"kty": jwk["kty"],
-			"x":   jwk["x"],
-		}
-	default:
-		return "", fmt.Errorf("unsupported key type for thumbprint: %q", kty)
-	}
-
-	// JSON encoding with sorted keys (Go maps are sorted by encoding/json).
-	b, err := json.Marshal(canonical)
-	if err != nil {
-		return "", fmt.Errorf("marshal canonical JWK: %w", err)
-	}
-
-	hash := sha256.Sum256(b)
-	return base64.RawURLEncoding.EncodeToString(hash[:]), nil
-}
-
