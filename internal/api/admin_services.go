@@ -196,10 +196,26 @@ type AdminAPIKeyService interface {
 	RotateAPIKey(ctx context.Context, keyID string) (*AdminAPIKeyWithSecret, error)
 }
 
+// AdminMFAStatus represents the MFA status for a user in admin API responses.
+type AdminMFAStatus struct {
+	UserID     string `json:"user_id"`
+	Enabled    bool   `json:"enabled"`
+	Type       string `json:"type,omitempty"`
+	Confirmed  bool   `json:"confirmed"`
+	BackupLeft int    `json:"backup_codes_remaining"`
+}
+
+// AdminMFAService defines admin operations for MFA management.
+type AdminMFAService interface {
+	GetMFAStatus(ctx context.Context, userID string) (*AdminMFAStatus, error)
+	ResetMFA(ctx context.Context, userID string) error
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users   AdminUserService
 	Clients AdminClientService
 	Tokens  AdminTokenService
 	APIKeys AdminAPIKeyService
+	MFA     AdminMFAService
 }

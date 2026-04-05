@@ -49,6 +49,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		sessionH = NewSessionHandlers(svc.Session)
 	}
 
+	var mfaH *MFAHandlers
+	if svc.MFA != nil {
+		mfaH = NewMFAHandlers(svc.MFA)
+	}
+
 	// Health probes (no middleware beyond global).
 	hh := newHealthHandlers(healthSvc)
 	r.GET("/health", hh.health)
@@ -69,6 +74,10 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		pw := auth.Group("/password")
 		pw.POST("/reset", validateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
 		pw.POST("/reset/confirm", validateReq(v, &domain.PasswordResetConfirmRequest{}), authH.ConfirmPasswordReset)
+
+		if mfaH != nil {
+			auth.POST("/mfa/verify", validateReq(v, &domain.MFAVerifyRequest{}), mfaH.Verify)
+		}
 	}
 
 	// Protected auth routes (require API key or auth middleware).
@@ -93,6 +102,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		protected.DELETE("/sessions", sessionH.DeleteAll)
 	}
 
+	if mfaH != nil {
+		protected.POST("/mfa/enroll", mfaH.Enroll)
+		protected.POST("/mfa/confirm", validateReq(v, &domain.MFAConfirmRequest{}), mfaH.Confirm)
+	}
+
 	return r
 }
 
@@ -114,6 +128,10 @@ func validateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
 		return domain.ValidateRequest(v, func() interface{} { return &domain.PasswordResetConfirmRequest{} })
 	case *domain.PasswordChangeRequest:
 		return domain.ValidateRequest(v, func() interface{} { return &domain.PasswordChangeRequest{} })
+	case *domain.MFAConfirmRequest:
+		return domain.ValidateRequest(v, func() interface{} { return &domain.MFAConfirmRequest{} })
+	case *domain.MFAVerifyRequest:
+		return domain.ValidateRequest(v, func() interface{} { return &domain.MFAVerifyRequest{} })
 	default:
 		panic("unsupported request type for validation middleware")
 	}

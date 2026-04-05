@@ -89,6 +89,13 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// MFA management (nested under /admin/users/:id).
+	if svc.MFA != nil {
+		mfaH := NewAdminMFAHandlers(svc.MFA)
+		admin.GET("/users/:id/mfa", mfaH.GetStatus)
+		admin.DELETE("/users/:id/mfa", mfaH.Reset)
+	}
+
 	// Token introspection.
 	if svc.Tokens != nil {
 		tokenH := NewAdminTokenHandlers(svc.Tokens)

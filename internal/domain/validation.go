@@ -84,6 +84,21 @@ type VerifyEmailRequest struct {
 	Token string `json:"token" validate:"required"`
 }
 
+// MFAEnrollRequest is the validated request body for initiating MFA enrollment.
+// No body fields required — the user is identified from the auth context.
+type MFAEnrollRequest struct{}
+
+// MFAConfirmRequest is the validated request body for confirming MFA enrollment.
+type MFAConfirmRequest struct {
+	Code string `json:"code" validate:"required,len=6"`
+}
+
+// MFAVerifyRequest is the validated request body for MFA verification during login.
+type MFAVerifyRequest struct {
+	MFAToken string `json:"mfa_token" validate:"required"`
+	Code     string `json:"code"      validate:"required,min=6,max=12"`
+}
+
 // --- Validator setup ---
 
 // NewValidator creates a validator.Validate instance with custom NIST password validation registered.
@@ -174,6 +189,8 @@ func validationMessage(fe validator.FieldError) string {
 		return fmt.Sprintf("%s is required for this grant type", strings.ToLower(fe.Field()))
 	case "client_type":
 		return "must be one of: service, agent"
+	case "len":
+		return fmt.Sprintf("must be exactly %s characters", fe.Param())
 	case "valid_scope":
 		return "invalid scope"
 	default:

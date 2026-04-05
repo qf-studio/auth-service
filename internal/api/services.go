@@ -88,12 +88,27 @@ type SessionService interface {
 	DeleteAllSessions(ctx context.Context, userID string) error
 }
 
+// MFAEnrollResult contains the data returned after initiating MFA enrollment.
+type MFAEnrollResult struct {
+	Secret      string   `json:"secret"`
+	QRCodeURI   string   `json:"qr_code_uri"`
+	BackupCodes []string `json:"backup_codes"`
+}
+
+// MFAService defines the operations for multi-factor authentication.
+type MFAService interface {
+	Enroll(ctx context.Context, userID string) (*MFAEnrollResult, error)
+	Confirm(ctx context.Context, userID, code string) error
+	Verify(ctx context.Context, mfaToken, code string) (*AuthResult, error)
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
 	Token   TokenService
 	Session SessionService
 	DPoP    DPoPService
+	MFA     MFAService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

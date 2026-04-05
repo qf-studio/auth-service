@@ -26,4 +26,12 @@ var (
 	// Authorization errors.
 	ErrInsufficientScope = errors.New("insufficient scope")
 	ErrInsufficientRole  = errors.New("insufficient role")
+
+	// MFA errors.
+	ErrMFANotEnrolled     = errors.New("MFA not enrolled")
+	ErrMFAAlreadyEnrolled = errors.New("MFA already enrolled")
+	ErrMFANotConfirmed    = errors.New("MFA enrollment not confirmed")
+	ErrInvalidOTP         = errors.New("invalid one-time password")
+	ErrInvalidBackupCode  = errors.New("invalid backup code")
+	ErrMFARequired        = errors.New("MFA verification required")
 )
