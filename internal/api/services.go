@@ -43,9 +43,25 @@ type AuthService interface {
 // TokenService defines the operations for token management.
 type TokenService interface {
 	Refresh(ctx context.Context, refreshToken string) (*AuthResult, error)
+	RefreshWithDPoP(ctx context.Context, refreshToken, jktThumbprint string) (*AuthResult, error)
 	ClientCredentials(ctx context.Context, clientID, clientSecret string) (*AuthResult, error)
+	ClientCredentialsWithDPoP(ctx context.Context, clientID, clientSecret, jktThumbprint string) (*AuthResult, error)
 	Revoke(ctx context.Context, token string) error
 	JWKS(ctx context.Context) (*JWKSResponse, error)
+}
+
+// DPoPProofClaims contains validated claims from a DPoP proof JWT.
+type DPoPProofClaims struct {
+	JKTThumbprint string
+	HTTPMethod    string
+	HTTPURI       string
+}
+
+// DPoPService defines the operations for DPoP proof validation.
+type DPoPService interface {
+	Enabled() bool
+	ValidateProof(ctx context.Context, proofJWT, httpMethod, httpURI string) (*DPoPProofClaims, error)
+	IssueNonce(ctx context.Context) (string, error)
 }
 
 // SessionInfo represents a single user session returned by the API.
@@ -77,6 +93,7 @@ type Services struct {
 	Auth    AuthService
 	Token   TokenService
 	Session SessionService
+	DPoP    DPoPService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.
@@ -90,5 +107,6 @@ type MiddlewareStack struct {
 	RequestSize     gin.HandlerFunc
 	APIKey          gin.HandlerFunc
 	Auth            gin.HandlerFunc
+	DPoP            gin.HandlerFunc
 	Metrics         gin.HandlerFunc
 }

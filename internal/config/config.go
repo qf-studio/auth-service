@@ -21,6 +21,14 @@ type Config struct {
 	CORS         CORSConfig
 	RequestLimit RequestLimitConfig
 	Email        EmailConfig
+	DPoP         DPoPConfig
+}
+
+// DPoPConfig holds DPoP (Demonstrating Proof-of-Possession) settings.
+type DPoPConfig struct {
+	Enabled   bool          // DPOP_ENABLED: whether DPoP proof binding is active
+	NonceTTL  time.Duration // DPOP_NONCE_TTL: lifetime of server-issued nonces
+	JTIWindow time.Duration // DPOP_JTI_WINDOW: replay window for proof JTI deduplication
 }
 
 // EmailConfig holds outbound email delivery settings.
@@ -207,6 +215,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	dpop, err := loadDPoP(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -227,6 +239,7 @@ func Load() (*Config, error) {
 		CORS:         cors,
 		RequestLimit: reqLimit,
 		Email:        email,
+		DPoP:         dpop,
 	}, nil
 }
 
@@ -466,6 +479,31 @@ func loadEmail(l *loader) (EmailConfig, error) {
 		APIKey:        apiKey,
 		SenderAddress: senderAddress,
 		Enabled:       enabled,
+	}, nil
+}
+
+func loadDPoP(l *loader) (DPoPConfig, error) {
+	enabled, err := l.optBool("DPOP_ENABLED", false)
+	if err != nil {
+		return DPoPConfig{}, err
+	}
+
+	nonceTTLStr := l.optStr("DPOP_NONCE_TTL", "5m")
+	nonceTTL, err := parseDuration(nonceTTLStr)
+	if err != nil {
+		return DPoPConfig{}, fmt.Errorf("DPOP_NONCE_TTL: %w", err)
+	}
+
+	jtiWindowStr := l.optStr("DPOP_JTI_WINDOW", "1m")
+	jtiWindow, err := parseDuration(jtiWindowStr)
+	if err != nil {
+		return DPoPConfig{}, fmt.Errorf("DPOP_JTI_WINDOW: %w", err)
+	}
+
+	return DPoPConfig{
+		Enabled:   enabled,
+		NonceTTL:  nonceTTL,
+		JTIWindow: jtiWindow,
 	}, nil
 }
 

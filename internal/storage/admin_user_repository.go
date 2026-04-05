@@ -215,4 +215,3 @@ func (r *PostgresAdminUserRepository) Unlock(ctx context.Context, id string) (*d
 	}
 	return u, nil
 }
-

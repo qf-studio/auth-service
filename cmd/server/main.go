@@ -21,6 +21,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
+	"github.com/qf-studio/auth-service/internal/dpop"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -91,10 +92,22 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	sessionStore := session.NewMemoryStore()
 	sessionSvc := session.NewService(sessionStore)
 
+	// ── DPoP ─────────────────────────────────────────────────────────────
+	dpopSvc := dpop.NewService(cfg.DPoP, redisClient, log)
+	var dpopAPISvc api.DPoPService
+	if cfg.DPoP.Enabled {
+		dpopAPISvc = dpop.NewAPIAdapter(dpopSvc)
+		log.Info("DPoP proof-of-possession enabled",
+			zap.Duration("nonce_ttl", cfg.DPoP.NonceTTL),
+			zap.Duration("jti_window", cfg.DPoP.JTIWindow),
+		)
+	}
+
 	services := &api.Services{
 		Auth:    authSvc,
 		Token:   tokenSvc,
 		Session: sessionSvc,
+		DPoP:    dpopAPISvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -120,6 +133,11 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
 
+	var dpopMW gin.HandlerFunc
+	if cfg.DPoP.Enabled {
+		dpopMW = middleware.DPoPMiddleware(dpop.NewMiddlewareValidator(dpopSvc))
+	}
+
 	mw := &api.MiddlewareStack{
 		CORS:            middleware.CORS(cfg.CORS),
 		CorrelationID:   middleware.CorrelationID(log),
@@ -128,6 +146,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
 		APIKey:          middleware.APIKeyMiddleware(adminAPIKeySvc),
 		Auth:            middleware.AuthMiddleware(tokenSvc),
+		DPoP:            dpopMW,
 		Metrics:         metricsCollector.Middleware(),
 	}
 

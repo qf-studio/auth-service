@@ -133,6 +133,14 @@ func (m *mockTokenService) Revoke(ctx context.Context, token string) error {
 	return nil
 }
 
+func (m *mockTokenService) RefreshWithDPoP(ctx context.Context, refreshToken, jktThumbprint string) (*api.AuthResult, error) {
+	return m.Refresh(ctx, refreshToken)
+}
+
+func (m *mockTokenService) ClientCredentialsWithDPoP(ctx context.Context, clientID, clientSecret, jktThumbprint string) (*api.AuthResult, error) {
+	return m.ClientCredentials(ctx, clientID, clientSecret)
+}
+
 func (m *mockTokenService) JWKS(ctx context.Context) (*api.JWKSResponse, error) {
 	if m.jwksFn != nil {
 		return m.jwksFn(ctx)

@@ -31,11 +31,11 @@ const (
 	EventAdminClientUpdate  = "admin_client_update"
 	EventAdminClientDelete  = "admin_client_delete"
 	EventAdminClientRotate  = "admin_client_rotate_secret"
-	EventTokenIntrospect       = "token_introspect"
-	EventAdminAPIKeyCreate     = "admin_apikey_create"
-	EventAdminAPIKeyUpdate     = "admin_apikey_update"
-	EventAdminAPIKeyRevoke     = "admin_apikey_revoke"
-	EventAdminAPIKeyRotate     = "admin_apikey_rotate"
+	EventTokenIntrospect    = "token_introspect"
+	EventAdminAPIKeyCreate  = "admin_apikey_create"
+	EventAdminAPIKeyUpdate  = "admin_apikey_update"
+	EventAdminAPIKeyRevoke  = "admin_apikey_revoke"
+	EventAdminAPIKeyRotate  = "admin_apikey_rotate"
 )
 
 // Event represents a single audit log entry.

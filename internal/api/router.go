@@ -42,7 +42,7 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 
 	v := domain.NewValidator()
 	authH := NewAuthHandlers(svc.Auth, svc.Session)
-	tokenH := NewTokenHandlers(svc.Token)
+	tokenH := NewTokenHandlers(svc.Token, svc.DPoP)
 
 	var sessionH *SessionHandlers
 	if svc.Session != nil {
@@ -78,6 +78,9 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 	}
 	if mw != nil && mw.Auth != nil {
 		protected.Use(mw.Auth)
+	}
+	if mw != nil && mw.DPoP != nil {
+		protected.Use(mw.DPoP)
 	}
 	protected.GET("/me", authH.Me)
 	protected.PUT("/me/password", validateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)
