@@ -54,6 +54,16 @@ func (h *TokenHandlers) Token(c *gin.Context) {
 		return
 	}
 
+	var result *AuthResult
+
+	if dpopThumbprint != "" && h.dpopToken != nil {
+		// DPoP-bound token issuance.
+		result, err = h.tokenWithDPoP(c, req, dpopThumbprint)
+	} else {
+		// Standard Bearer token issuance.
+		result, err = h.tokenStandard(c, req)
+	}
+
 	if err != nil {
 		handleServiceError(c, err)
 		return

@@ -30,19 +30,19 @@ const (
 
 // Client represents an OAuth2 client (service or AI agent) in the system.
 type Client struct {
-	ID                       uuid.UUID  `json:"id"                          db:"id"`
-	Name                     string     `json:"name"                        db:"name"`
-	ClientType               ClientType `json:"client_type"                 db:"client_type"`
-	SecretHash               string     `json:"-"                           db:"secret_hash"`
-	PreviousSecretHash       string     `json:"-"                           db:"previous_secret_hash"`
-	PreviousSecretExpiresAt  *time.Time `json:"-"                           db:"previous_secret_expires_at"`
-	Scopes                   []string   `json:"scopes"                      db:"scopes"`
-	Owner                    string     `json:"owner"                       db:"owner"`
-	AccessTokenTTL           int        `json:"access_token_ttl"            db:"access_token_ttl"` // seconds
-	Status                   string     `json:"status"                      db:"status"`
-	CreatedAt                time.Time  `json:"created_at"                  db:"created_at"`
-	UpdatedAt                time.Time  `json:"updated_at"                  db:"updated_at"`
-	LastUsedAt               *time.Time `json:"last_used_at"                db:"last_used_at"`
+	ID                      uuid.UUID  `json:"id"                          db:"id"`
+	Name                    string     `json:"name"                        db:"name"`
+	ClientType              ClientType `json:"client_type"                 db:"client_type"`
+	SecretHash              string     `json:"-"                           db:"secret_hash"`
+	PreviousSecretHash      string     `json:"-"                           db:"previous_secret_hash"`
+	PreviousSecretExpiresAt *time.Time `json:"-"                           db:"previous_secret_expires_at"`
+	Scopes                  []string   `json:"scopes"                      db:"scopes"`
+	Owner                   string     `json:"owner"                       db:"owner"`
+	AccessTokenTTL          int        `json:"access_token_ttl"            db:"access_token_ttl"` // seconds
+	Status                  string     `json:"status"                      db:"status"`
+	CreatedAt               time.Time  `json:"created_at"                  db:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"                  db:"updated_at"`
+	LastUsedAt              *time.Time `json:"last_used_at"                db:"last_used_at"`
 }
 
 // AccessTokenDuration returns the access token TTL as a time.Duration.

@@ -58,8 +58,8 @@ func TestRecordDuration_HistogramBuckets(t *testing.T) {
 	// Use simple buckets for clarity: 0.01s, 0.1s, 1s
 	c := NewWithBuckets([]float64{0.01, 0.1, 1})
 
-	c.RecordRequest(200, 5*time.Millisecond, "GET", "/a")  // <= 0.01
-	c.RecordRequest(200, 50*time.Millisecond, "GET", "/b") // <= 0.1
+	c.RecordRequest(200, 5*time.Millisecond, "GET", "/a")   // <= 0.01
+	c.RecordRequest(200, 50*time.Millisecond, "GET", "/b")  // <= 0.1
 	c.RecordRequest(200, 500*time.Millisecond, "GET", "/c") // <= 1
 	c.RecordRequest(200, 5*time.Second, "GET", "/d")        // +Inf
 
