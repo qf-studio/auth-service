@@ -38,7 +38,7 @@ func NewPostgresClientRepository(pool *pgxpool.Pool) *PostgresClientRepository {
 	return &PostgresClientRepository{pool: pool}
 }
 
-const clientColumns = `id, name, client_type, secret_hash, previous_secret_hash, previous_secret_expires_at, scopes, owner, access_token_ttl, status, created_at, updated_at, last_used_at`
+const clientColumns = `id, name, client_type, secret_hash, previous_secret_hash, previous_secret_expires_at, scopes, owner, access_token_ttl, status, redirect_uris, is_third_party, approval_status, created_at, updated_at, last_used_at`
 
 func scanClient(row pgx.Row) (*domain.Client, error) {
 	c := &domain.Client{}
@@ -46,6 +46,7 @@ func scanClient(row pgx.Row) (*domain.Client, error) {
 		&c.ID, &c.Name, &c.ClientType, &c.SecretHash,
 		&c.PreviousSecretHash, &c.PreviousSecretExpiresAt,
 		&c.Scopes, &c.Owner, &c.AccessTokenTTL, &c.Status,
+		&c.RedirectURIs, &c.IsThirdParty, &c.ApprovalStatus,
 		&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt,
 	)
 	if err != nil {
@@ -103,6 +104,7 @@ func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, 
 			&c.ID, &c.Name, &c.ClientType, &c.SecretHash,
 			&c.PreviousSecretHash, &c.PreviousSecretExpiresAt,
 			&c.Scopes, &c.Owner, &c.AccessTokenTTL, &c.Status,
+			&c.RedirectURIs, &c.IsThirdParty, &c.ApprovalStatus,
 			&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan client: %w", err)

@@ -40,6 +40,9 @@ type Client struct {
 	Owner                   string     `json:"owner"                       db:"owner"`
 	AccessTokenTTL          int        `json:"access_token_ttl"            db:"access_token_ttl"` // seconds
 	Status                  string     `json:"status"                      db:"status"`
+	RedirectURIs            []string   `json:"redirect_uris"               db:"redirect_uris"`
+	IsThirdParty            bool       `json:"is_third_party"              db:"is_third_party"`
+	ApprovalStatus          string     `json:"approval_status"             db:"approval_status"`
 	CreatedAt               time.Time  `json:"created_at"                  db:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"                  db:"updated_at"`
 	LastUsedAt              *time.Time `json:"last_used_at"                db:"last_used_at"`

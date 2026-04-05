@@ -41,4 +41,16 @@ var (
 
 	// ErrMFAMaxAttempts indicates the user has exceeded maximum MFA verification attempts.
 	ErrMFAMaxAttempts = errors.New("mfa max attempts exceeded")
+
+	// ErrDuplicateAuthorizationCode indicates an authorization code hash collision.
+	ErrDuplicateAuthorizationCode = errors.New("duplicate authorization code")
+
+	// ErrAuthorizationCodeUsed indicates the authorization code has already been consumed.
+	ErrAuthorizationCodeUsed = errors.New("authorization code already used")
+
+	// ErrAuthorizationCodeExpired indicates the authorization code has expired.
+	ErrAuthorizationCodeExpired = errors.New("authorization code expired")
+
+	// ErrDuplicateConsent indicates a consent session with the given challenge already exists.
+	ErrDuplicateConsent = errors.New("duplicate consent session")
 )
