@@ -71,8 +71,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		pw.POST("/reset/confirm", validateReq(v, &domain.PasswordResetConfirmRequest{}), authH.ConfirmPasswordReset)
 	}
 
-	// Protected auth routes (require auth middleware).
+	// Protected auth routes (require API key or auth middleware).
 	protected := r.Group("/auth")
+	if mw != nil && mw.APIKey != nil {
+		protected.Use(mw.APIKey)
+	}
 	if mw != nil && mw.Auth != nil {
 		protected.Use(mw.Auth)
 	}

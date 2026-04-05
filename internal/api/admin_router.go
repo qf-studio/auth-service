@@ -75,6 +75,20 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// API key management.
+	if svc.APIKeys != nil {
+		keyH := NewAdminAPIKeyHandlers(svc.APIKeys)
+		apikeys := admin.Group("/apikeys")
+		{
+			apikeys.GET("", keyH.List)
+			apikeys.GET("/:id", keyH.Get)
+			apikeys.POST("", keyH.Create)
+			apikeys.PATCH("/:id", keyH.Update)
+			apikeys.DELETE("/:id", keyH.Delete)
+			apikeys.POST("/:id/rotate", keyH.Rotate)
+		}
+	}
+
 	// Token introspection.
 	if svc.Tokens != nil {
 		tokenH := NewAdminTokenHandlers(svc.Tokens)

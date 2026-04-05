@@ -41,6 +41,12 @@ type TokenValidator interface {
 // Returns 401 on any authentication failure.
 func AuthMiddleware(validator TokenValidator) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Skip if already authenticated (e.g., by APIKeyMiddleware).
+		if _, exists := c.Get(claimsContextKey); exists {
+			c.Next()
+			return
+		}
+
 		raw := extractBearer(c)
 		if raw == "" {
 			domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized,
