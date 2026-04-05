@@ -87,6 +87,11 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.Equal(t, "", cfg.Email.APIKey)
 	assert.Equal(t, "", cfg.Email.SenderAddress)
 	assert.False(t, cfg.Email.Enabled)
+
+	// DPoP defaults
+	assert.False(t, cfg.DPoP.Enabled)
+	assert.Equal(t, 5*time.Minute, cfg.DPoP.NonceTTL)
+	assert.Equal(t, 1*time.Minute, cfg.DPoP.JTIWindow)
 }
 
 func TestLoad_EmailConfig(t *testing.T) {
@@ -431,6 +436,41 @@ func TestLoad_InvalidLockoutDuration(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "RATE_LIMIT_LOCKOUT_DURATION")
+}
+
+func TestLoad_DPoPCustomValues(t *testing.T) {
+	env := requiredEnv()
+	env["DPOP_ENABLED"] = "true"
+	env["DPOP_NONCE_TTL"] = "10m"
+	env["DPOP_JTI_WINDOW"] = "2m"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.DPoP.Enabled)
+	assert.Equal(t, 10*time.Minute, cfg.DPoP.NonceTTL)
+	assert.Equal(t, 2*time.Minute, cfg.DPoP.JTIWindow)
+}
+
+func TestLoad_InvalidDPoPNonceTTL(t *testing.T) {
+	env := requiredEnv()
+	env["DPOP_NONCE_TTL"] = "invalid"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DPOP_NONCE_TTL")
+}
+
+func TestLoad_InvalidDPoPJTIWindow(t *testing.T) {
+	env := requiredEnv()
+	env["DPOP_JTI_WINDOW"] = "invalid"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DPOP_JTI_WINDOW")
 }
 
 func BenchmarkLoad(b *testing.B) {

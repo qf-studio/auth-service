@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -11,25 +12,43 @@ import (
 // TokenHandlers groups HTTP handlers for token management endpoints.
 type TokenHandlers struct {
 	token TokenService
+	dpop  DPoPService
 }
 
-// NewTokenHandlers creates a new TokenHandlers with the given TokenService.
-func NewTokenHandlers(token TokenService) *TokenHandlers {
-	return &TokenHandlers{token: token}
+// NewTokenHandlers creates a new TokenHandlers with the given TokenService and optional DPoPService.
+func NewTokenHandlers(token TokenService, dpop DPoPService) *TokenHandlers {
+	return &TokenHandlers{token: token, dpop: dpop}
 }
 
 // Token handles POST /auth/token — dispatches based on grant_type.
+// If a DPoP header is present and the DPoP service is enabled, the proof is
+// validated and the resulting JWK thumbprint is bound to the issued token.
 func (h *TokenHandlers) Token(c *gin.Context) {
 	req := c.MustGet("validated_request").(*domain.TokenRequest)
 
+	// Extract DPoP proof if present.
+	jktThumbprint, err := h.extractDPoPThumbprint(c)
+	if err != nil {
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest,
+			fmt.Sprintf("invalid DPoP proof: %s", err))
+		return
+	}
+
 	var result *AuthResult
-	var err error
 
 	switch req.GrantType {
 	case "refresh_token":
-		result, err = h.token.Refresh(c.Request.Context(), req.RefreshToken)
+		if jktThumbprint != "" {
+			result, err = h.token.RefreshWithDPoP(c.Request.Context(), req.RefreshToken, jktThumbprint)
+		} else {
+			result, err = h.token.Refresh(c.Request.Context(), req.RefreshToken)
+		}
 	case "client_credentials":
-		result, err = h.token.ClientCredentials(c.Request.Context(), req.ClientID, req.ClientSecret)
+		if jktThumbprint != "" {
+			result, err = h.token.ClientCredentialsWithDPoP(c.Request.Context(), req.ClientID, req.ClientSecret, jktThumbprint)
+		} else {
+			result, err = h.token.ClientCredentials(c.Request.Context(), req.ClientID, req.ClientSecret)
+		}
 	default:
 		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "unsupported grant_type")
 		return
@@ -41,6 +60,36 @@ func (h *TokenHandlers) Token(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// extractDPoPThumbprint validates the DPoP proof header (if present) and returns
+// the JWK thumbprint. Returns empty string and nil error when no DPoP header is sent.
+func (h *TokenHandlers) extractDPoPThumbprint(c *gin.Context) (string, error) {
+	proofJWT := c.GetHeader("DPoP")
+	if proofJWT == "" {
+		return "", nil
+	}
+
+	if h.dpop == nil || !h.dpop.Enabled() {
+		return "", fmt.Errorf("DPoP is not enabled on this server")
+	}
+
+	httpURI := requestURI(c)
+	claims, err := h.dpop.ValidateProof(c.Request.Context(), proofJWT, c.Request.Method, httpURI)
+	if err != nil {
+		return "", err
+	}
+
+	return claims.JKTThumbprint, nil
+}
+
+// requestURI reconstructs the full request URI for DPoP htu matching.
+func requestURI(c *gin.Context) string {
+	scheme := "https"
+	if c.Request.TLS == nil {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, c.Request.Host, c.Request.URL.Path)
 }
 
 // Revoke handles POST /auth/revoke.
