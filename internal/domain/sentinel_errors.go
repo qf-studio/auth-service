@@ -20,6 +20,12 @@ var (
 	ErrClientNotFound  = errors.New("client not found")
 	ErrClientSuspended = errors.New("client suspended")
 
+	// API key errors.
+	ErrAPIKeyNotFound    = errors.New("api key not found")
+	ErrAPIKeyRevoked     = errors.New("api key revoked")
+	ErrAPIKeyExpired     = errors.New("api key expired")
+	ErrAPIKeyRateLimited = errors.New("api key rate limit exceeded")
+
 	// Session errors.
 	ErrSessionInactive = errors.New("session inactive due to inactivity")
 
