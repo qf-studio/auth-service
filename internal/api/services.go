@@ -8,12 +8,16 @@ import (
 )
 
 // AuthResult contains the tokens returned after successful authentication.
+// When MFARequired is true, only MFAToken is populated and the caller must
+// complete the MFA challenge before receiving access/refresh tokens.
 type AuthResult struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
 	UserID       string `json:"user_id,omitempty"`
+	MFARequired  bool   `json:"mfa_required,omitempty"`
+	MFAToken     string `json:"mfa_token,omitempty"`
 }
 
 // UserInfo represents the authenticated user's profile.
