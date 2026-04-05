@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -12,6 +13,7 @@ type AuthResult struct {
 	RefreshToken string `json:"refresh_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
+	UserID       string `json:"user_id,omitempty"`
 }
 
 // UserInfo represents the authenticated user's profile.
@@ -46,10 +48,35 @@ type TokenService interface {
 	JWKS(ctx context.Context) (*JWKSResponse, error)
 }
 
+// SessionInfo represents a single user session returned by the API.
+type SessionInfo struct {
+	ID             string    `json:"id"`
+	UserID         string    `json:"user_id"`
+	IPAddress      string    `json:"ip_address"`
+	UserAgent      string    `json:"user_agent"`
+	CreatedAt      time.Time `json:"created_at"`
+	LastActivityAt time.Time `json:"last_activity_at"`
+	Current        bool      `json:"current"`
+}
+
+// SessionList is the response envelope for listing sessions.
+type SessionList struct {
+	Sessions []SessionInfo `json:"sessions"`
+}
+
+// SessionService defines the operations for session management.
+type SessionService interface {
+	CreateSession(ctx context.Context, userID, ipAddress, userAgent string) (*SessionInfo, error)
+	ListSessions(ctx context.Context, userID string) ([]SessionInfo, error)
+	DeleteSession(ctx context.Context, userID, sessionID string) error
+	DeleteAllSessions(ctx context.Context, userID string) error
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
-	Auth  AuthService
-	Token TokenService
+	Auth    AuthService
+	Token   TokenService
+	Session SessionService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

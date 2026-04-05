@@ -151,6 +151,8 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		return nil, fmt.Errorf("issue tokens: %w", err)
 	}
 
+	result.UserID = user.ID
+
 	// Store refresh token signature in DB (best-effort — don't fail login).
 	if err := s.tokens.Store(ctx, result.RefreshToken, user.ID, time.Now().Add(24*time.Hour)); err != nil {
 		s.logger.Error("failed to store refresh token signature", zap.String("user_id", user.ID), zap.Error(err))
