@@ -49,6 +49,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		sessionH = NewSessionHandlers(svc.Session)
 	}
 
+	var mfaH *MFAHandlers
+	if svc.MFA != nil {
+		mfaH = NewMFAHandlers(svc.MFA)
+	}
+
 	// Health probes (no middleware beyond global).
 	hh := newHealthHandlers(healthSvc)
 	r.GET("/health", hh.health)
@@ -69,6 +74,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		pw := auth.Group("/password")
 		pw.POST("/reset", validateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
 		pw.POST("/reset/confirm", validateReq(v, &domain.PasswordResetConfirmRequest{}), authH.ConfirmPasswordReset)
+
+		// MFA verify is public (uses mfa_token, not bearer auth).
+		if mfaH != nil {
+			auth.POST("/mfa/verify", mfaH.Verify)
+		}
 	}
 
 	// Protected auth routes (require API key or auth middleware).
@@ -91,6 +101,14 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		protected.GET("/sessions", sessionH.List)
 		protected.DELETE("/sessions/:id", sessionH.Delete)
 		protected.DELETE("/sessions", sessionH.DeleteAll)
+	}
+
+	if mfaH != nil {
+		mfa := protected.Group("/mfa")
+		mfa.POST("/setup", mfaH.Setup)
+		mfa.POST("/confirm", mfaH.Confirm)
+		mfa.POST("/disable", mfaH.Disable)
+		mfa.GET("/status", mfaH.Status)
 	}
 
 	return r

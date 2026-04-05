@@ -61,6 +61,14 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// User MFA management (nested under users).
+	if svc.Users != nil && svc.MFA != nil {
+		mfaH := NewAdminMFAHandlers(svc.MFA)
+		users := admin.Group("/users")
+		users.GET("/:id/mfa", mfaH.GetStatus)
+		users.DELETE("/:id/mfa", mfaH.Reset)
+	}
+
 	// Client management.
 	if svc.Clients != nil {
 		clientH := NewAdminClientHandlers(svc.Clients)

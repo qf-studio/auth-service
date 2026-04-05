@@ -44,6 +44,12 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 		return
 	}
 
+	// If MFA is required, return the challenge without creating a session.
+	if result.MFARequired {
+		c.JSON(http.StatusOK, result)
+		return
+	}
+
 	// Create a session record if the session service is available.
 	if h.session != nil && result.UserID != "" {
 		ip := c.ClientIP()

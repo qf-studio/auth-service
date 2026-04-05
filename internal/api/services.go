@@ -8,12 +8,15 @@ import (
 )
 
 // AuthResult contains the tokens returned after successful authentication.
+// When MFA is required, only MFARequired and MFAToken are populated.
 type AuthResult struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in"`
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	TokenType    string `json:"token_type,omitempty"`
+	ExpiresIn    int    `json:"expires_in,omitempty"`
 	UserID       string `json:"user_id,omitempty"`
+	MFARequired  bool   `json:"mfa_required,omitempty"`
+	MFAToken     string `json:"mfa_token,omitempty"`
 }
 
 // UserInfo represents the authenticated user's profile.
@@ -88,12 +91,45 @@ type SessionService interface {
 	DeleteAllSessions(ctx context.Context, userID string) error
 }
 
+// MFAEnrollmentResult is returned when a user initiates MFA enrollment.
+type MFAEnrollmentResult struct {
+	Secret string `json:"secret"`
+	URI    string `json:"uri"`
+}
+
+// MFAConfirmResult is returned when enrollment is confirmed, containing backup codes.
+type MFAConfirmResult struct {
+	BackupCodes []string `json:"backup_codes"`
+}
+
+// MFAStatusResponse is returned by the MFA status endpoint.
+type MFAStatusResponse struct {
+	Enabled    bool   `json:"enabled"`
+	Type       string `json:"type,omitempty"`
+	Confirmed  bool   `json:"confirmed"`
+	BackupLeft int    `json:"backup_codes_remaining"`
+}
+
+// MFAService defines the operations for multi-factor authentication.
+type MFAService interface {
+	InitiateEnrollment(ctx context.Context, userID, email string) (*MFAEnrollmentResult, error)
+	ConfirmEnrollment(ctx context.Context, userID, code string) ([]string, error)
+	VerifyTOTP(ctx context.Context, userID, code string) error
+	VerifyBackupCode(ctx context.Context, userID, code string) error
+	CompleteMFALogin(ctx context.Context, mfaToken, code, codeType string) (*AuthResult, error)
+	Disable(ctx context.Context, userID string) error
+	GetStatus(ctx context.Context, userID string) (*MFAStatusResponse, error)
+	IsMFAEnabled(ctx context.Context, userID string) (bool, error)
+	GenerateMFAToken(ctx context.Context, userID string) (string, error)
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
 	Token   TokenService
 	Session SessionService
 	DPoP    DPoPService
+	MFA     MFAService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

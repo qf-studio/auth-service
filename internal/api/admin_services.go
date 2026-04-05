@@ -202,4 +202,5 @@ type AdminServices struct {
 	Clients AdminClientService
 	Tokens  AdminTokenService
 	APIKeys AdminAPIKeyService
+	MFA     MFAService
 }

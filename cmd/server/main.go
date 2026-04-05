@@ -27,6 +27,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/httpserver"
 	"github.com/qf-studio/auth-service/internal/logger"
 	"github.com/qf-studio/auth-service/internal/metrics"
+	"github.com/qf-studio/auth-service/internal/mfa"
 	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/session"
@@ -103,11 +104,26 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		)
 	}
 
+	// ── MFA ──────────────────────────────────────────────────────────────
+	mfaRepo := storage.NewPostgresMFARepository(pgPool)
+	mfaStore := storage.NewRedisMFAStore(redisClient)
+	mfaCfg := mfa.Config{
+		Issuer:          cfg.MFA.Issuer,
+		Digits:          cfg.MFA.Digits,
+		Period:          uint(cfg.MFA.Period), //nolint:gosec // non-negative from config
+		BackupCodeCount: cfg.MFA.BackupCodeCount,
+	}
+	mfaSvc := mfa.NewService(mfaCfg, mfaRepo, mfaStore, tokenSvc, log, auditSvc)
+
+	// Inject MFA checker into auth service to enable MFA challenge on login.
+	authSvc.SetMFAChecker(mfaSvc)
+
 	services := &api.Services{
 		Auth:    authSvc,
 		Token:   tokenSvc,
 		Session: sessionSvc,
 		DPoP:    dpopAPISvc,
+		MFA:     mfaSvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -155,6 +171,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Clients: adminClientSvc,
 		Tokens:  adminTokenSvc,
 		APIKeys: adminAPIKeySvc,
+		MFA:     mfaSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

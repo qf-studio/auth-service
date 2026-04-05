@@ -331,6 +331,92 @@ func TestLogin(t *testing.T) {
 	}
 }
 
+// ── MFA Mocks ───────────────────────────────────────────────────────────────
+
+type mockMFAChecker struct {
+	isMFAEnabledFn       func(ctx context.Context, userID string) (bool, error)
+	generateMFATokenFn   func(ctx context.Context, userID string) (string, error)
+}
+
+func (m *mockMFAChecker) IsMFAEnabled(ctx context.Context, userID string) (bool, error) {
+	if m.isMFAEnabledFn != nil {
+		return m.isMFAEnabledFn(ctx, userID)
+	}
+	return false, nil
+}
+
+func (m *mockMFAChecker) GenerateMFAToken(ctx context.Context, userID string) (string, error) {
+	if m.generateMFATokenFn != nil {
+		return m.generateMFATokenFn(ctx, userID)
+	}
+	return "mfa-token-123", nil
+}
+
+func TestLogin_MFAChallenge(t *testing.T) {
+	activeUser := &domain.User{
+		ID:           "user-1",
+		Email:        "alice@example.com",
+		PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+		Roles:        []string{"user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return activeUser, nil
+		},
+	}
+
+	mfaChecker := &mockMFAChecker{
+		isMFAEnabledFn: func(_ context.Context, _ string) (bool, error) {
+			return true, nil
+		},
+		generateMFATokenFn: func(_ context.Context, _ string) (string, error) {
+			return "mfa-challenge-token", nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	svc.SetMFAChecker(mfaChecker)
+
+	result, err := svc.Login(context.Background(), "alice@example.com", "correct-password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.MFARequired, "expected MFA challenge")
+	assert.Equal(t, "mfa-challenge-token", result.MFAToken)
+	assert.Equal(t, "user-1", result.UserID)
+	assert.Empty(t, result.AccessToken, "should not issue access token when MFA required")
+}
+
+func TestLogin_MFANotEnabled_ReturnsTokens(t *testing.T) {
+	activeUser := &domain.User{
+		ID:           "user-1",
+		Email:        "alice@example.com",
+		PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+		Roles:        []string{"user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return activeUser, nil
+		},
+	}
+
+	mfaChecker := &mockMFAChecker{
+		isMFAEnabledFn: func(_ context.Context, _ string) (bool, error) {
+			return false, nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	svc.SetMFAChecker(mfaChecker)
+
+	result, err := svc.Login(context.Background(), "alice@example.com", "correct-password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.MFARequired)
+	assert.Equal(t, "qf_at_test-access", result.AccessToken)
+}
+
 func TestLogin_UpdatesLastLogin(t *testing.T) {
 	var lastLoginUpdated bool
 	users := &mockUserRepository{
