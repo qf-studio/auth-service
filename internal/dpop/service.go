@@ -4,16 +4,11 @@ package dpop
 
 import (
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -25,12 +20,6 @@ import (
 )
 
 const (
-	// nonceKeyPrefix is the Redis key prefix for DPoP nonces.
-	nonceKeyPrefix = "dpop:nonce:"
-
-	// jtiKeyPrefix is the Redis key prefix for JTI replay protection.
-	jtiKeyPrefix = "dpop:jti:"
-
 	// maxClockSkew allows a small amount of clock drift for iat validation.
 	maxClockSkew = 30 * time.Second
 
@@ -219,75 +208,6 @@ func (s *Service) checkAndStoreJTI(ctx context.Context, jti string) error {
 		return fmt.Errorf("DPoP proof JTI already used (replay)")
 	}
 	return nil
-}
-
-// parseJWK extracts a crypto.PublicKey from a JWK map in the JWT header.
-func parseJWK(raw interface{}) (crypto.PublicKey, error) {
-	jwkMap, ok := raw.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("jwk is not an object")
-	}
-
-	kty, _ := jwkMap["kty"].(string)
-
-	switch kty {
-	case "EC":
-		return parseECPublicKey(jwkMap)
-	case "OKP":
-		return parseOKPPublicKey(jwkMap)
-	default:
-		return nil, fmt.Errorf("unsupported key type: %q", kty)
-	}
-}
-
-func parseECPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
-	crv, _ := jwk["crv"].(string)
-	if crv != "P-256" {
-		return nil, fmt.Errorf("unsupported EC curve: %q (only P-256 supported)", crv)
-	}
-
-	xStr, _ := jwk["x"].(string)
-	yStr, _ := jwk["y"].(string)
-
-	xBytes, err := base64.RawURLEncoding.DecodeString(xStr)
-	if err != nil {
-		return nil, fmt.Errorf("decode x: %w", err)
-	}
-	yBytes, err := base64.RawURLEncoding.DecodeString(yStr)
-	if err != nil {
-		return nil, fmt.Errorf("decode y: %w", err)
-	}
-
-	key := &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(xBytes),
-		Y:     new(big.Int).SetBytes(yBytes),
-	}
-
-	if !key.Curve.IsOnCurve(key.X, key.Y) {
-		return nil, fmt.Errorf("EC point not on curve")
-	}
-
-	return key, nil
-}
-
-func parseOKPPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
-	crv, _ := jwk["crv"].(string)
-	if crv != "Ed25519" {
-		return nil, fmt.Errorf("unsupported OKP curve: %q", crv)
-	}
-
-	xStr, _ := jwk["x"].(string)
-	xBytes, err := base64.RawURLEncoding.DecodeString(xStr)
-	if err != nil {
-		return nil, fmt.Errorf("decode x: %w", err)
-	}
-
-	if len(xBytes) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("invalid Ed25519 key size: %d", len(xBytes))
-	}
-
-	return ed25519.PublicKey(xBytes), nil
 }
 
 // computeJWKThumbprint computes the JWK SHA-256 thumbprint per RFC 7638.
