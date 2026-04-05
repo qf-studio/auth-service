@@ -590,4 +590,3 @@ func generateRandomBytes(n int) ([]byte, error) {
 
 // Ensure Service implements the required interfaces at compile time.
 var _ api.TokenService = (*Service)(nil)
-var _ api.DPoPTokenService = (*Service)(nil)

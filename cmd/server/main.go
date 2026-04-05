@@ -110,15 +110,6 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		DPoP:    dpopAPISvc,
 	}
 
-	if cfg.DPoP.Enabled {
-		services.DPoPToken = tokenSvc
-		services.DPoPValidator = dpop.NewHandlerAdapter(dpopSvc)
-		log.Info("DPoP proof-of-possession enabled",
-			zap.Duration("nonce_ttl", cfg.DPoP.NonceTTL),
-			zap.Duration("jti_window", cfg.DPoP.JTIWindow),
-		)
-	}
-
 	// ── Health ─────────────────────────────────────────────────────────────
 	healthCheckers := []health.Checker{
 		health.NewRedisChecker(redisClient),
