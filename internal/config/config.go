@@ -23,6 +23,22 @@ type Config struct {
 	Email        EmailConfig
 	DPoP         DPoPConfig
 	MFA          MFAConfig
+	OAuth        OAuthConfig
+}
+
+// OAuthProviderConfig holds credentials and settings for a single OAuth provider.
+type OAuthProviderConfig struct {
+	ClientID     string // OAUTH_<PROVIDER>_CLIENT_ID
+	ClientSecret string // OAUTH_<PROVIDER>_CLIENT_SECRET
+	RedirectURI  string // OAUTH_<PROVIDER>_REDIRECT_URI
+	Enabled      bool   // OAUTH_<PROVIDER>_ENABLED
+}
+
+// OAuthConfig holds OAuth provider configurations.
+type OAuthConfig struct {
+	Google OAuthProviderConfig
+	GitHub OAuthProviderConfig
+	Apple  OAuthProviderConfig
 }
 
 // MFAConfig holds multi-factor authentication settings.
@@ -232,6 +248,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	oauthCfg, err := loadOAuth(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -254,6 +274,7 @@ func Load() (*Config, error) {
 		Email:        email,
 		DPoP:         dpop,
 		MFA:          mfaCfg,
+		OAuth:        oauthCfg,
 	}, nil
 }
 
@@ -547,6 +568,50 @@ func loadMFA(l *loader) (MFAConfig, error) {
 		Digits:          digits,
 		Period:          period,
 		BackupCodeCount: backupCount,
+	}, nil
+}
+
+func loadOAuth(l *loader) (OAuthConfig, error) {
+	google, err := loadOAuthProvider(l, "GOOGLE")
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	github, err := loadOAuthProvider(l, "GITHUB")
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	apple, err := loadOAuthProvider(l, "APPLE")
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+
+	return OAuthConfig{
+		Google: google,
+		GitHub: github,
+		Apple:  apple,
+	}, nil
+}
+
+func loadOAuthProvider(l *loader, provider string) (OAuthProviderConfig, error) {
+	prefix := "OAUTH_" + provider + "_"
+
+	enabled, err := l.optBool(prefix+"ENABLED", false)
+	if err != nil {
+		return OAuthProviderConfig{}, err
+	}
+	if !enabled {
+		return OAuthProviderConfig{Enabled: false}, nil
+	}
+
+	clientID := l.requireStr(prefix + "CLIENT_ID")
+	clientSecret := l.requireStr(prefix + "CLIENT_SECRET")
+	redirectURI := l.requireStr(prefix + "REDIRECT_URI")
+
+	return OAuthProviderConfig{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURI:  redirectURI,
+		Enabled:      true,
 	}, nil
 }
 

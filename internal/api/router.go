@@ -54,6 +54,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		mfaH = NewMFAHandlers(svc.MFA)
 	}
 
+	var oauthH *OAuthHandlers
+	if svc.OAuth != nil {
+		oauthH = NewOAuthHandlers(svc.OAuth)
+	}
+
 	// Health probes (no middleware beyond global).
 	hh := newHealthHandlers(healthSvc)
 	r.GET("/health", hh.health)
@@ -78,6 +83,12 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		// MFA verify is public (uses mfa_token, not bearer auth).
 		if mfaH != nil {
 			auth.POST("/mfa/verify", mfaH.Verify)
+		}
+
+		// OAuth initiation and callback are public (no auth required).
+		if oauthH != nil {
+			auth.GET("/oauth/:provider", oauthH.Redirect)
+			auth.GET("/oauth/:provider/callback", oauthH.Callback)
 		}
 	}
 
@@ -109,6 +120,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		mfa.POST("/confirm", mfaH.Confirm)
 		mfa.POST("/disable", mfaH.Disable)
 		mfa.GET("/status", mfaH.Status)
+	}
+
+	if oauthH != nil {
+		protected.GET("/me/oauth", oauthH.ListLinked)
+		protected.DELETE("/me/oauth/:provider", oauthH.Unlink)
 	}
 
 	return r

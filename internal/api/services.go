@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/qf-studio/auth-service/internal/domain"
 )
 
 // AuthResult contains the tokens returned after successful authentication.
@@ -123,6 +125,14 @@ type MFAService interface {
 	GenerateMFAToken(ctx context.Context, userID string) (string, error)
 }
 
+// OAuthService defines the operations for OAuth social login and account linking.
+type OAuthService interface {
+	GetAuthURL(ctx context.Context, provider string) (*domain.OAuthAuthURL, error)
+	HandleCallback(ctx context.Context, provider, code, state string) (*AuthResult, error)
+	ListLinkedAccounts(ctx context.Context, userID string) (*domain.OAuthLinkedAccounts, error)
+	UnlinkAccount(ctx context.Context, userID, provider string) error
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
@@ -130,6 +140,7 @@ type Services struct {
 	Session SessionService
 	DPoP    DPoPService
 	MFA     MFAService
+	OAuth   OAuthService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

@@ -92,6 +92,11 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.False(t, cfg.DPoP.Enabled)
 	assert.Equal(t, 5*time.Minute, cfg.DPoP.NonceTTL)
 	assert.Equal(t, 1*time.Minute, cfg.DPoP.JTIWindow)
+
+	// OAuth defaults (all disabled)
+	assert.False(t, cfg.OAuth.Google.Enabled)
+	assert.False(t, cfg.OAuth.GitHub.Enabled)
+	assert.False(t, cfg.OAuth.Apple.Enabled)
 }
 
 func TestLoad_EmailConfig(t *testing.T) {
@@ -471,6 +476,68 @@ func TestLoad_InvalidDPoPJTIWindow(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DPOP_JTI_WINDOW")
+}
+
+func TestLoad_OAuthDefaults(t *testing.T) {
+	setEnv(t, requiredEnv())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	// All OAuth providers disabled by default.
+	assert.False(t, cfg.OAuth.Google.Enabled)
+	assert.False(t, cfg.OAuth.GitHub.Enabled)
+	assert.False(t, cfg.OAuth.Apple.Enabled)
+	assert.Empty(t, cfg.OAuth.Google.ClientID)
+}
+
+func TestLoad_OAuthEnabled(t *testing.T) {
+	env := requiredEnv()
+	env["OAUTH_GOOGLE_ENABLED"] = "true"
+	env["OAUTH_GOOGLE_CLIENT_ID"] = "google-client-id"
+	env["OAUTH_GOOGLE_CLIENT_SECRET"] = "google-client-secret"
+	env["OAUTH_GOOGLE_REDIRECT_URI"] = "https://example.com/auth/oauth/google/callback"
+	env["OAUTH_GITHUB_ENABLED"] = "true"
+	env["OAUTH_GITHUB_CLIENT_ID"] = "github-client-id"
+	env["OAUTH_GITHUB_CLIENT_SECRET"] = "github-client-secret"
+	env["OAUTH_GITHUB_REDIRECT_URI"] = "https://example.com/auth/oauth/github/callback"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.OAuth.Google.Enabled)
+	assert.Equal(t, "google-client-id", cfg.OAuth.Google.ClientID)
+	assert.Equal(t, "google-client-secret", cfg.OAuth.Google.ClientSecret)
+	assert.Equal(t, "https://example.com/auth/oauth/google/callback", cfg.OAuth.Google.RedirectURI)
+
+	assert.True(t, cfg.OAuth.GitHub.Enabled)
+	assert.Equal(t, "github-client-id", cfg.OAuth.GitHub.ClientID)
+
+	assert.False(t, cfg.OAuth.Apple.Enabled)
+}
+
+func TestLoad_OAuthEnabledMissingClientID(t *testing.T) {
+	env := requiredEnv()
+	env["OAUTH_GOOGLE_ENABLED"] = "true"
+	// Missing CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_CLIENT_ID")
+	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_CLIENT_SECRET")
+	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_REDIRECT_URI")
+}
+
+func TestLoad_OAuthInvalidEnabled(t *testing.T) {
+	env := requiredEnv()
+	env["OAUTH_GOOGLE_ENABLED"] = "notbool"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_ENABLED")
 }
 
 func BenchmarkLoad(b *testing.B) {
