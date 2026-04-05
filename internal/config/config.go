@@ -20,6 +20,13 @@ type Config struct {
 	TLS          TLSConfig
 	CORS         CORSConfig
 	RequestLimit RequestLimitConfig
+	APIKey       APIKeyConfig
+}
+
+// APIKeyConfig holds API key management settings.
+type APIKeyConfig struct {
+	GracePeriod      time.Duration // Duration during which the previous key remains valid after rotation.
+	DefaultRateLimit int           // Default rate limit (requests per second) for new API keys.
 }
 
 // AppConfig holds server-level settings.
@@ -194,6 +201,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	apiKey, err := loadAPIKey(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -213,6 +224,7 @@ func Load() (*Config, error) {
 		TLS:          tls,
 		CORS:         cors,
 		RequestLimit: reqLimit,
+		APIKey:       apiKey,
 	}, nil
 }
 
@@ -450,6 +462,24 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func loadAPIKey(l *loader) (APIKeyConfig, error) {
+	gracePeriodStr := l.optStr("API_KEY_GRACE_PERIOD", "24h")
+	gracePeriod, err := parseDuration(gracePeriodStr)
+	if err != nil {
+		return APIKeyConfig{}, fmt.Errorf("API_KEY_GRACE_PERIOD: %w", err)
+	}
+
+	defaultRateLimit, err := l.optInt("API_KEY_DEFAULT_RATE_LIMIT", 100)
+	if err != nil {
+		return APIKeyConfig{}, err
+	}
+
+	return APIKeyConfig{
+		GracePeriod:      gracePeriod,
+		DefaultRateLimit: defaultRateLimit,
+	}, nil
 }
 
 // parseDuration extends time.ParseDuration to support "d" (days) suffix.

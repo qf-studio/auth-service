@@ -32,4 +32,7 @@ var (
 
 	// ErrDuplicateClient indicates a client with the given name already exists.
 	ErrDuplicateClient = errors.New("duplicate client name")
+
+	// ErrDuplicateAPIKey indicates an API key with the given name already exists for the client.
+	ErrDuplicateAPIKey = errors.New("duplicate api key name")
 )
