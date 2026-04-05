@@ -127,6 +127,17 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	var oauthProviders []oauth.Provider
 	oauthSvc := oauth.NewService(cfg.OAuth, nil, tokenSvc, log, oauthProviders...)
 
+	// ── OIDC Provider ─────────────────────────────────────────────────────
+	// The OIDC provider service implementation is registered in a subsequent
+	// issue. The handlers and routes are wired now so that plugging in the
+	// service is the only remaining step.
+	var oidcSvc api.OIDCProviderService
+	log.Info("OIDC provider configuration loaded",
+		zap.String("issuer", cfg.OIDC.IssuerURL),
+		zap.Duration("id_token_ttl", cfg.OIDC.IDTokenTTL),
+		zap.Strings("scopes", cfg.OIDC.SupportedScopes),
+	)
+
 	services := &api.Services{
 		Auth:    authSvc,
 		Token:   tokenSvc,
@@ -134,6 +145,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		DPoP:    dpopAPISvc,
 		MFA:     mfaSvc,
 		OAuth:   oauthSvc,
+		OIDC:    oidcSvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -176,12 +188,18 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Metrics:         metricsCollector.Middleware(),
 	}
 
+	// Consent and client approval services are registered in subsequent issues.
+	var consentSvc api.ConsentService
+	var clientApprovalSvc api.AdminClientApprovalService
+
 	adminServices := &api.AdminServices{
-		Users:   adminUserSvc,
-		Clients: adminClientSvc,
-		Tokens:  adminTokenSvc,
-		APIKeys: adminAPIKeySvc,
-		MFA:     mfaSvc,
+		Users:          adminUserSvc,
+		Clients:        adminClientSvc,
+		Tokens:         adminTokenSvc,
+		APIKeys:        adminAPIKeySvc,
+		MFA:            mfaSvc,
+		Consent:        consentSvc,
+		ClientApproval: clientApprovalSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

@@ -198,9 +198,11 @@ type AdminAPIKeyService interface {
 
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
-	Users   AdminUserService
-	Clients AdminClientService
-	Tokens  AdminTokenService
-	APIKeys AdminAPIKeyService
-	MFA     MFAService
+	Users          AdminUserService
+	Clients        AdminClientService
+	Tokens         AdminTokenService
+	APIKeys        AdminAPIKeyService
+	MFA            MFAService
+	Consent        ConsentService
+	ClientApproval AdminClientApprovalService
 }

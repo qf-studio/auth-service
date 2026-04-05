@@ -97,6 +97,26 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.False(t, cfg.OAuth.Google.Enabled)
 	assert.False(t, cfg.OAuth.GitHub.Enabled)
 	assert.False(t, cfg.OAuth.Apple.Enabled)
+
+	// OIDC defaults
+	assert.Equal(t, "http://localhost:4000", cfg.OIDC.IssuerURL)
+	assert.Equal(t, 1*time.Hour, cfg.OIDC.IDTokenTTL)
+	assert.Equal(t, []string{"openid", "profile", "email", "offline_access"}, cfg.OIDC.SupportedScopes)
+}
+
+func TestLoad_OIDCConfig(t *testing.T) {
+	env := requiredEnv()
+	env["OIDC_ISSUER_URL"] = "https://auth.example.com"
+	env["OIDC_ID_TOKEN_TTL"] = "30m"
+	env["OIDC_SUPPORTED_SCOPES"] = "openid,profile,email,groups"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://auth.example.com", cfg.OIDC.IssuerURL)
+	assert.Equal(t, 30*time.Minute, cfg.OIDC.IDTokenTTL)
+	assert.Equal(t, []string{"openid", "profile", "email", "groups"}, cfg.OIDC.SupportedScopes)
 }
 
 func TestLoad_EmailConfig(t *testing.T) {
