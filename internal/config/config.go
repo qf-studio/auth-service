@@ -22,6 +22,15 @@ type Config struct {
 	RequestLimit RequestLimitConfig
 	Email        EmailConfig
 	DPoP         DPoPConfig
+	MFA          MFAConfig
+}
+
+// MFAConfig holds multi-factor authentication settings.
+type MFAConfig struct {
+	Issuer          string // MFA_ISSUER: issuer name shown in authenticator apps
+	Digits          int    // MFA_DIGITS: number of TOTP digits (6 or 8)
+	Period          int    // MFA_PERIOD: TOTP period in seconds
+	BackupCodeCount int    // MFA_BACKUP_CODE_COUNT: number of backup codes to generate
 }
 
 // DPoPConfig holds DPoP (Demonstrating Proof-of-Possession) settings.
@@ -219,6 +228,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	mfaCfg, err := loadMFA(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -240,6 +253,7 @@ func Load() (*Config, error) {
 		RequestLimit: reqLimit,
 		Email:        email,
 		DPoP:         dpop,
+		MFA:          mfaCfg,
 	}, nil
 }
 
@@ -504,6 +518,35 @@ func loadDPoP(l *loader) (DPoPConfig, error) {
 		Enabled:   enabled,
 		NonceTTL:  nonceTTL,
 		JTIWindow: jtiWindow,
+	}, nil
+}
+
+func loadMFA(l *loader) (MFAConfig, error) {
+	issuer := l.optStr("MFA_ISSUER", "QuantFlow Studio")
+
+	digits, err := l.optInt("MFA_DIGITS", 6)
+	if err != nil {
+		return MFAConfig{}, err
+	}
+	if digits != 6 && digits != 8 {
+		return MFAConfig{}, fmt.Errorf("MFA_DIGITS: must be 6 or 8, got %d", digits)
+	}
+
+	period, err := l.optInt("MFA_PERIOD", 30)
+	if err != nil {
+		return MFAConfig{}, err
+	}
+
+	backupCount, err := l.optInt("MFA_BACKUP_CODE_COUNT", 10)
+	if err != nil {
+		return MFAConfig{}, err
+	}
+
+	return MFAConfig{
+		Issuer:          issuer,
+		Digits:          digits,
+		Period:          period,
+		BackupCodeCount: backupCount,
 	}, nil
 }
 

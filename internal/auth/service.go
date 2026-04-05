@@ -39,6 +39,13 @@ type TokenIssuer interface {
 	Revoke(ctx context.Context, token string) error
 }
 
+// MFAChecker abstracts MFA status checking and token generation.
+// This is a narrow interface satisfied by mfa.Service.
+type MFAChecker interface {
+	IsMFAEnabled(ctx context.Context, userID string) (bool, error)
+	GenerateMFAToken(ctx context.Context, userID string) (string, error)
+}
+
 // Service implements api.AuthService with Redis-backed password reset tokens
 // and PostgreSQL-backed user authentication.
 type Service struct {
@@ -50,6 +57,7 @@ type Service struct {
 	issuer   TokenIssuer
 	hasher   password.Hasher
 	breaches hibp.BreachChecker
+	mfa      MFAChecker
 }
 
 // NewService creates a new auth Service.
@@ -73,6 +81,12 @@ func NewService(
 		hasher:   hasher,
 		breaches: breaches,
 	}
+}
+
+// SetMFAChecker injects the MFA checker after construction to break the
+// circular dependency between auth.Service and mfa.Service.
+func (s *Service) SetMFAChecker(mfa MFAChecker) {
+	s.mfa = mfa
 }
 
 // Register creates a new user account.
@@ -142,6 +156,31 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 			Metadata: map[string]string{"reason": "invalid_password"},
 		})
 		return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
+	}
+
+	// Check MFA status: if enabled, return challenge instead of tokens.
+	if s.mfa != nil {
+		mfaEnabled, mfaErr := s.mfa.IsMFAEnabled(ctx, user.ID)
+		if mfaErr != nil {
+			s.logger.Error("failed to check mfa status", zap.String("user_id", user.ID), zap.Error(mfaErr))
+			// Continue with normal login on MFA check failure (fail-open for availability).
+		} else if mfaEnabled {
+			mfaToken, tokenErr := s.mfa.GenerateMFAToken(ctx, user.ID)
+			if tokenErr != nil {
+				s.logger.Error("failed to generate mfa token", zap.String("user_id", user.ID), zap.Error(tokenErr))
+				return nil, fmt.Errorf("generate mfa token: %w", tokenErr)
+			}
+			s.audit.LogEvent(ctx, audit.Event{
+				Type:     "mfa_challenge_issued",
+				ActorID:  user.ID,
+				TargetID: user.ID,
+			})
+			return &api.AuthResult{
+				MFARequired: true,
+				MFAToken:    mfaToken,
+				UserID:      user.ID,
+			}, nil
+		}
 	}
 
 	// Issue token pair.
