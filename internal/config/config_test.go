@@ -92,6 +92,15 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.False(t, cfg.DPoP.Enabled)
 	assert.Equal(t, 5*time.Minute, cfg.DPoP.NonceTTL)
 	assert.Equal(t, 1*time.Minute, cfg.DPoP.JTIWindow)
+
+	// OAuth defaults
+	assert.False(t, cfg.OAuth.Google.Enabled)
+	assert.Equal(t, "", cfg.OAuth.Google.ClientID)
+	assert.Equal(t, "", cfg.OAuth.Google.ClientSecret)
+	assert.False(t, cfg.OAuth.GitHub.Enabled)
+	assert.False(t, cfg.OAuth.Apple.Enabled)
+	assert.Equal(t, "", cfg.OAuth.StateSecret)
+	assert.Equal(t, "", cfg.OAuth.CallbackBaseURL)
 }
 
 func TestLoad_EmailConfig(t *testing.T) {
@@ -436,6 +445,51 @@ func TestLoad_InvalidLockoutDuration(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "RATE_LIMIT_LOCKOUT_DURATION")
+}
+
+func TestLoad_OAuthCustomValues(t *testing.T) {
+	env := requiredEnv()
+	env["OAUTH_GOOGLE_ENABLED"] = "true"
+	env["OAUTH_GOOGLE_CLIENT_ID"] = "google-id"
+	env["OAUTH_GOOGLE_CLIENT_SECRET"] = "google-secret"
+	env["OAUTH_GITHUB_ENABLED"] = "true"
+	env["OAUTH_GITHUB_CLIENT_ID"] = "github-id"
+	env["OAUTH_GITHUB_CLIENT_SECRET"] = "github-secret"
+	env["OAUTH_APPLE_ENABLED"] = "true"
+	env["OAUTH_APPLE_CLIENT_ID"] = "apple-id"
+	env["OAUTH_APPLE_CLIENT_SECRET"] = "apple-secret"
+	env["OAUTH_STATE_SECRET"] = "hmac-key-123"
+	env["OAUTH_CALLBACK_BASE_URL"] = "https://auth.example.com/callback"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.OAuth.Google.Enabled)
+	assert.Equal(t, "google-id", cfg.OAuth.Google.ClientID)
+	assert.Equal(t, "google-secret", cfg.OAuth.Google.ClientSecret)
+
+	assert.True(t, cfg.OAuth.GitHub.Enabled)
+	assert.Equal(t, "github-id", cfg.OAuth.GitHub.ClientID)
+	assert.Equal(t, "github-secret", cfg.OAuth.GitHub.ClientSecret)
+
+	assert.True(t, cfg.OAuth.Apple.Enabled)
+	assert.Equal(t, "apple-id", cfg.OAuth.Apple.ClientID)
+	assert.Equal(t, "apple-secret", cfg.OAuth.Apple.ClientSecret)
+
+	assert.Equal(t, "hmac-key-123", cfg.OAuth.StateSecret)
+	assert.Equal(t, "https://auth.example.com/callback", cfg.OAuth.CallbackBaseURL)
+}
+
+func TestLoad_OAuthInvalidBoolean(t *testing.T) {
+	env := requiredEnv()
+	env["OAUTH_GOOGLE_ENABLED"] = "nope"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_ENABLED")
+	assert.Contains(t, err.Error(), "invalid boolean")
 }
 
 func TestLoad_DPoPCustomValues(t *testing.T) {

@@ -23,6 +23,23 @@ type Config struct {
 	Email        EmailConfig
 	DPoP         DPoPConfig
 	MFA          MFAConfig
+	OAuth        OAuthConfig
+}
+
+// OAuthProviderConfig holds credentials for a single OAuth provider.
+type OAuthProviderConfig struct {
+	Enabled      bool   // OAUTH_{PROVIDER}_ENABLED
+	ClientID     string // OAUTH_{PROVIDER}_CLIENT_ID
+	ClientSecret string // OAUTH_{PROVIDER}_CLIENT_SECRET
+}
+
+// OAuthConfig holds social-login OAuth settings.
+type OAuthConfig struct {
+	Google          OAuthProviderConfig
+	GitHub          OAuthProviderConfig
+	Apple           OAuthProviderConfig
+	StateSecret     string // OAUTH_STATE_SECRET: HMAC key for state tokens
+	CallbackBaseURL string // OAUTH_CALLBACK_BASE_URL: base URL for redirect URIs
 }
 
 // MFAConfig holds multi-factor authentication settings.
@@ -232,6 +249,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	oauthCfg, err := loadOAuth(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -254,6 +275,7 @@ func Load() (*Config, error) {
 		Email:        email,
 		DPoP:         dpop,
 		MFA:          mfaCfg,
+		OAuth:        oauthCfg,
 	}, nil
 }
 
@@ -547,6 +569,52 @@ func loadMFA(l *loader) (MFAConfig, error) {
 		Digits:          digits,
 		Period:          period,
 		BackupCodeCount: backupCount,
+	}, nil
+}
+
+func loadOAuth(l *loader) (OAuthConfig, error) {
+	stateSecret := l.optStr("OAUTH_STATE_SECRET", "")
+	callbackBaseURL := l.optStr("OAUTH_CALLBACK_BASE_URL", "")
+
+	googleEnabled, err := l.optBool("OAUTH_GOOGLE_ENABLED", false)
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	googleClientID := l.optStr("OAUTH_GOOGLE_CLIENT_ID", "")
+	googleClientSecret := l.optStr("OAUTH_GOOGLE_CLIENT_SECRET", "")
+
+	githubEnabled, err := l.optBool("OAUTH_GITHUB_ENABLED", false)
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	githubClientID := l.optStr("OAUTH_GITHUB_CLIENT_ID", "")
+	githubClientSecret := l.optStr("OAUTH_GITHUB_CLIENT_SECRET", "")
+
+	appleEnabled, err := l.optBool("OAUTH_APPLE_ENABLED", false)
+	if err != nil {
+		return OAuthConfig{}, err
+	}
+	appleClientID := l.optStr("OAUTH_APPLE_CLIENT_ID", "")
+	appleClientSecret := l.optStr("OAUTH_APPLE_CLIENT_SECRET", "")
+
+	return OAuthConfig{
+		Google: OAuthProviderConfig{
+			Enabled:      googleEnabled,
+			ClientID:     googleClientID,
+			ClientSecret: googleClientSecret,
+		},
+		GitHub: OAuthProviderConfig{
+			Enabled:      githubEnabled,
+			ClientID:     githubClientID,
+			ClientSecret: githubClientSecret,
+		},
+		Apple: OAuthProviderConfig{
+			Enabled:      appleEnabled,
+			ClientID:     appleClientID,
+			ClientSecret: appleClientSecret,
+		},
+		StateSecret:     stateSecret,
+		CallbackBaseURL: callbackBaseURL,
 	}, nil
 }
 

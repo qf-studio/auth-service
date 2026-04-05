@@ -23,6 +23,10 @@ var (
 	// Session errors.
 	ErrSessionInactive = errors.New("session inactive due to inactivity")
 
+	// OAuth errors.
+	ErrOAuthAccountNotFound      = errors.New("oauth account not found")
+	ErrOAuthAccountAlreadyLinked = errors.New("oauth account already linked")
+
 	// Authorization errors.
 	ErrInsufficientScope = errors.New("insufficient scope")
 	ErrInsufficientRole  = errors.New("insufficient role")

@@ -41,4 +41,7 @@ var (
 
 	// ErrMFAMaxAttempts indicates the user has exceeded maximum MFA verification attempts.
 	ErrMFAMaxAttempts = errors.New("mfa max attempts exceeded")
+
+	// ErrDuplicateOAuthAccount indicates the provider+provider_user_id pair already exists.
+	ErrDuplicateOAuthAccount = errors.New("duplicate oauth account")
 )
