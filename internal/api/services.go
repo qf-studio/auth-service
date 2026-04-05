@@ -123,6 +123,45 @@ type MFAService interface {
 	GenerateMFAToken(ctx context.Context, userID string) (string, error)
 }
 
+// OAuthCallbackResult contains the result of an OAuth callback exchange.
+// When the user already has MFA enabled, MFARequired and MFAToken are set
+// instead of access/refresh tokens.
+type OAuthCallbackResult struct {
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	TokenType    string `json:"token_type,omitempty"`
+	ExpiresIn    int    `json:"expires_in,omitempty"`
+	UserID       string `json:"user_id,omitempty"`
+	MFARequired  bool   `json:"mfa_required,omitempty"`
+	MFAToken     string `json:"mfa_token,omitempty"`
+	NewAccount   bool   `json:"new_account,omitempty"`
+}
+
+// LinkedProvider describes a social login provider linked to a user account.
+type LinkedProvider struct {
+	Provider string `json:"provider"`
+	Email    string `json:"email,omitempty"`
+	LinkedAt string `json:"linked_at,omitempty"`
+}
+
+// OAuthService defines the operations for social login / OAuth account linking.
+type OAuthService interface {
+	// GetAuthURL returns the provider's authorization URL. The handler supplies
+	// a CSRF state token and PKCE code verifier; the service stores them and
+	// returns the redirect URL.
+	GetAuthURL(ctx context.Context, provider, state, codeVerifier string) (string, error)
+
+	// HandleCallback exchanges the authorization code for tokens, links or
+	// creates the user account, and returns an auth result.
+	HandleCallback(ctx context.Context, provider, code, state string) (*OAuthCallbackResult, error)
+
+	// ListLinkedProviders returns the OAuth providers linked to the given user.
+	ListLinkedProviders(ctx context.Context, userID string) ([]LinkedProvider, error)
+
+	// UnlinkProvider removes the link between the user and the named provider.
+	UnlinkProvider(ctx context.Context, userID, provider string) error
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
@@ -130,6 +169,7 @@ type Services struct {
 	Session SessionService
 	DPoP    DPoPService
 	MFA     MFAService
+	OAuth   OAuthService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

@@ -28,6 +28,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/logger"
 	"github.com/qf-studio/auth-service/internal/metrics"
 	"github.com/qf-studio/auth-service/internal/mfa"
+	"github.com/qf-studio/auth-service/internal/oauth"
 	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/session"
@@ -118,12 +119,20 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Inject MFA checker into auth service to enable MFA challenge on login.
 	authSvc.SetMFAChecker(mfaSvc)
 
+	// ── OAuth ─────────────────────────────────────────────────────────────
+	var oauthSvc api.OAuthService
+	if cfg.OAuth.Google.Enabled || cfg.OAuth.GitHub.Enabled || cfg.OAuth.Apple.Enabled {
+		oauthSvc = oauth.NewService(cfg.OAuth, log)
+		log.Info("OAuth social login enabled")
+	}
+
 	services := &api.Services{
 		Auth:    authSvc,
 		Token:   tokenSvc,
 		Session: sessionSvc,
 		DPoP:    dpopAPISvc,
 		MFA:     mfaSvc,
+		OAuth:   oauthSvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
