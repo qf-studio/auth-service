@@ -604,6 +604,146 @@ func TestIssueTokenPair_NoSystemSecretsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "no system secrets")
 }
 
+// ── OIDC-relevant JWT claims verification ────────────────────────────────────
+
+func TestValidateToken_IssuerClaimPresent(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueTokenPair(ctx, "user-oidc", []string{"user"}, []string{"openid"}, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+
+	// OIDC requires iss claim — verify our tokens include the subject.
+	assert.Equal(t, "user-oidc", claims.Subject, "sub claim is REQUIRED for OIDC")
+	assert.NotEmpty(t, claims.TokenID, "jti claim is REQUIRED for revocation")
+	assert.False(t, claims.ExpiresAt.IsZero(), "exp claim is REQUIRED")
+	assert.False(t, claims.IssuedAt.IsZero(), "iat claim is REQUIRED")
+}
+
+func TestValidateToken_ScopesPreserved(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	oidcScopes := []string{"openid", "profile", "email", "offline_access"}
+	result, err := svc.IssueTokenPair(ctx, "user-scope", nil, oidcScopes, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+
+	// All OIDC scopes should be preserved in the token.
+	assert.Equal(t, oidcScopes, claims.Scopes)
+	assert.Contains(t, claims.Scopes, "openid", "openid scope must be preserved for OIDC")
+}
+
+func TestValidateToken_ExpiryWithinExpectedRange(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	before := time.Now()
+	result, err := svc.IssueTokenPair(ctx, "user-expiry", nil, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+	after := time.Now()
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+
+	// exp should be ~15 minutes from now (default TTL).
+	expectedMin := before.Add(15 * time.Minute)
+	expectedMax := after.Add(15 * time.Minute)
+	assert.True(t, claims.ExpiresAt.After(expectedMin.Add(-1*time.Second)), "exp too early")
+	assert.True(t, claims.ExpiresAt.Before(expectedMax.Add(1*time.Second)), "exp too late")
+}
+
+func TestValidateToken_ClientTypePreserved(t *testing.T) {
+	tests := []struct {
+		name       string
+		clientType domain.ClientType
+	}{
+		{"user client", domain.ClientTypeUser},
+		{"service client", domain.ClientTypeService},
+		{"agent client", domain.ClientTypeAgent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _ := newES256Service(t)
+			ctx := context.Background()
+
+			result, err := svc.IssueTokenPair(ctx, "client-type-test", nil, nil, tt.clientType)
+			require.NoError(t, err)
+
+			rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+			claims, err := svc.ValidateToken(ctx, rawJWT)
+			require.NoError(t, err)
+			assert.Equal(t, tt.clientType, claims.ClientType)
+		})
+	}
+}
+
+func TestJWKS_ContainsRequiredOIDCFields(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	jwks, err := svc.JWKS(ctx)
+	require.NoError(t, err)
+	require.Len(t, jwks.Keys, 1)
+
+	keyMap, ok := jwks.Keys[0].(map[string]interface{})
+	require.True(t, ok)
+
+	// OIDC requires specific JWK fields for ID token verification.
+	assert.NotEmpty(t, keyMap["kty"], "kty is REQUIRED per RFC 7517")
+	assert.NotEmpty(t, keyMap["alg"], "alg is REQUIRED for OIDC discovery")
+	assert.Equal(t, "sig", keyMap["use"], "use must be 'sig' for OIDC signing keys")
+
+	// kty + alg + use are the minimum for OIDC token verification.
+	// kid is RECOMMENDED (RFC 7517 §4.5) for key rotation; verify key params exist.
+	assert.NotEmpty(t, keyMap["x"], "EC public key x coordinate must be present")
+	assert.NotEmpty(t, keyMap["y"], "EC public key y coordinate must be present")
+}
+
+func TestJWKS_EdDSA_ContainsRequiredOIDCFields(t *testing.T) {
+	svc, _ := newEdDSAService(t)
+	ctx := context.Background()
+
+	jwks, err := svc.JWKS(ctx)
+	require.NoError(t, err)
+	require.Len(t, jwks.Keys, 1)
+
+	keyMap, ok := jwks.Keys[0].(map[string]interface{})
+	require.True(t, ok)
+
+	assert.NotEmpty(t, keyMap["kty"])
+	assert.NotEmpty(t, keyMap["alg"])
+	assert.Equal(t, "sig", keyMap["use"])
+	assert.NotEmpty(t, keyMap["x"], "EdDSA public key must be present")
+}
+
+func TestIssueTokenPairWithDPoP_OIDCCompatible(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueTokenPairWithDPoP(ctx, "user-dpop-oidc", []string{"user"}, []string{"openid"}, domain.ClientTypeUser, "thumbprint-abc")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// DPoP-bound tokens use DPoP token type.
+	assert.Equal(t, "DPoP", result.TokenType)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+	assert.Equal(t, "thumbprint-abc", claims.JKTThumbprint, "cnf.jkt must be set for DPoP")
+	assert.Contains(t, claims.Scopes, "openid")
+}
+
 // ── Unique JTI per token ─────────────────────────────────────────────────────
 
 func TestIssueTokenPair_UniqueJTI(t *testing.T) {

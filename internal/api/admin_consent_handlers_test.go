@@ -275,6 +275,186 @@ func TestAdminApproveClient_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// ── Login Accept/Reject edge cases ────────────────────────────────────────────
+
+func TestAdminAcceptLogin_MissingChallenge(t *testing.T) {
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"subject": "user-1",
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/login?accept=true", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminAcceptLogin_MissingSubject(t *testing.T) {
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"remember": true,
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/login?login_challenge=abc&accept=true", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminAcceptLogin_ServiceError(t *testing.T) {
+	svc := &mockConsentService{
+		acceptLoginFn: func(_ context.Context, _ string, _ *api.AcceptLoginRequest) (*api.RedirectResponse, error) {
+			return nil, api.ErrInternalError
+		},
+	}
+	r := newAdminConsentRouter(svc, nil)
+
+	body := map[string]interface{}{
+		"subject": "user-1",
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/login?login_challenge=abc&accept=true", body)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestAdminRejectLogin_MissingChallenge(t *testing.T) {
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"error":             "access_denied",
+		"error_description": "user cancelled",
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/login?accept=false", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminRejectLogin_MissingError(t *testing.T) {
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"error_description": "user cancelled",
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/login?login_challenge=abc&accept=false", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminRejectLogin_ServiceError(t *testing.T) {
+	svc := &mockConsentService{
+		rejectLoginFn: func(_ context.Context, _ string, _ *api.RejectRequest) (*api.RedirectResponse, error) {
+			return nil, api.ErrNotFound
+		},
+	}
+	r := newAdminConsentRouter(svc, nil)
+
+	body := map[string]interface{}{
+		"error":             "access_denied",
+		"error_description": "user cancelled",
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/login?login_challenge=abc&accept=false", body)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ── Consent Accept/Reject edge cases ──────────────────────────────────────────
+
+func TestAdminAcceptConsent_MissingChallenge(t *testing.T) {
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"granted_scopes": []string{"openid"},
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/consent?accept=true", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminAcceptConsent_MissingGrantedScopes(t *testing.T) {
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"remember": true,
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/consent?consent_challenge=abc&accept=true", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminAcceptConsent_ServiceError(t *testing.T) {
+	svc := &mockConsentService{
+		acceptConsentFn: func(_ context.Context, _ string, _ *api.AcceptConsentRequest) (*api.RedirectResponse, error) {
+			return nil, api.ErrInternalError
+		},
+	}
+	r := newAdminConsentRouter(svc, nil)
+
+	body := map[string]interface{}{
+		"granted_scopes": []string{"openid"},
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/consent?consent_challenge=abc&accept=true", body)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestAdminGetConsentRequest_ServiceError(t *testing.T) {
+	svc := &mockConsentService{
+		getConsentRequestFn: func(_ context.Context, _ string) (*api.ConsentRequestInfo, error) {
+			return nil, api.ErrInternalError
+		},
+	}
+	r := newAdminConsentRouter(svc, nil)
+
+	w := doRequest(r, http.MethodGet, "/admin/oauth/auth/requests/consent?consent_challenge=abc", nil)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestAdminRejectConsent_MissingChallenge(t *testing.T) {
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"error": "consent_denied",
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/consent?accept=false", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminRejectConsent_ServiceError(t *testing.T) {
+	svc := &mockConsentService{
+		rejectConsentFn: func(_ context.Context, _ string, _ *api.RejectRequest) (*api.RedirectResponse, error) {
+			return nil, api.ErrNotFound
+		},
+	}
+	r := newAdminConsentRouter(svc, nil)
+
+	body := map[string]interface{}{
+		"error":             "consent_denied",
+		"error_description": "user refused",
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/consent?consent_challenge=abc&accept=false", body)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ── Default accept behavior ────────────────────────────────────────────────────
+
+func TestAdminPutLogin_DefaultAcceptTrue(t *testing.T) {
+	// When accept param is not specified, it defaults to "true".
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"subject": "user-default",
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/login?login_challenge=abc", body)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.RedirectResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp.RedirectTo, "consent", "default should accept")
+}
+
+func TestAdminPutConsent_DefaultAcceptTrue(t *testing.T) {
+	r := newAdminConsentRouter(&mockConsentService{}, nil)
+
+	body := map[string]interface{}{
+		"granted_scopes": []string{"openid"},
+	}
+	w := doRequest(r, http.MethodPut, "/admin/oauth/auth/requests/consent?consent_challenge=abc", body)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.RedirectResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp.RedirectTo, "code=", "default should accept")
+}
+
 // ── Routes not registered when services are nil ────────────────────────────
 
 func TestAdminConsentRoutes_NotRegisteredWhenNil(t *testing.T) {

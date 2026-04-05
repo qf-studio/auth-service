@@ -260,6 +260,291 @@ func TestOIDCUserInfo_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// ── OIDC Discovery Document Field Validation (OpenID Connect Discovery 1.0) ──
+
+func TestOIDCDiscovery_RequiredFieldsPerSpec(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	w := doRequest(router, http.MethodGet, "/.well-known/openid-configuration", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.OIDCDiscoveryResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	// REQUIRED per OpenID Connect Discovery 1.0 §3.
+	assert.NotEmpty(t, resp.Issuer, "issuer is REQUIRED")
+	assert.NotEmpty(t, resp.AuthorizationEndpoint, "authorization_endpoint is REQUIRED")
+	assert.NotEmpty(t, resp.TokenEndpoint, "token_endpoint is REQUIRED")
+	assert.NotEmpty(t, resp.JwksURI, "jwks_uri is REQUIRED")
+	assert.NotEmpty(t, resp.ResponseTypesSupported, "response_types_supported is REQUIRED")
+	assert.NotEmpty(t, resp.SubjectTypesSupported, "subject_types_supported is REQUIRED")
+	assert.NotEmpty(t, resp.IDTokenSigningAlgValuesSupported, "id_token_signing_alg_values_supported is REQUIRED")
+
+	// RECOMMENDED per spec.
+	assert.NotEmpty(t, resp.UserinfoEndpoint, "userinfo_endpoint is RECOMMENDED")
+	assert.NotEmpty(t, resp.ScopesSupported, "scopes_supported is RECOMMENDED")
+	assert.NotEmpty(t, resp.GrantTypesSupported, "grant_types_supported is RECOMMENDED")
+	assert.NotEmpty(t, resp.TokenEndpointAuthMethodsSupported, "token_endpoint_auth_methods_supported is RECOMMENDED")
+
+	// OAuth 2.1 requires PKCE.
+	assert.NotEmpty(t, resp.CodeChallengeMethodsSupported, "code_challenge_methods_supported should be set for OAuth 2.1")
+}
+
+func TestOIDCDiscovery_IssuerMatchesBaseURL(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	w := doRequest(router, http.MethodGet, "/.well-known/openid-configuration", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.OIDCDiscoveryResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Issuer must be a URL using https scheme (per §3).
+	assert.Contains(t, resp.Issuer, "https://", "issuer must use https scheme")
+
+	// All endpoints should be under the issuer's domain.
+	assert.Contains(t, resp.AuthorizationEndpoint, "auth.example.com")
+	assert.Contains(t, resp.TokenEndpoint, "auth.example.com")
+	assert.Contains(t, resp.JwksURI, "auth.example.com")
+}
+
+func TestOIDCDiscovery_ScopesIncludeOpenID(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	w := doRequest(router, http.MethodGet, "/.well-known/openid-configuration", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.OIDCDiscoveryResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// openid scope is mandatory for OIDC.
+	assert.Contains(t, resp.ScopesSupported, "openid", "openid scope is mandatory")
+}
+
+func TestOIDCDiscovery_ResponseTypeCodeSupported(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	w := doRequest(router, http.MethodGet, "/.well-known/openid-configuration", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.OIDCDiscoveryResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// authorization_code flow requires "code" response type.
+	assert.Contains(t, resp.ResponseTypesSupported, "code")
+}
+
+func TestOIDCDiscovery_S256CodeChallengeMethod(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	w := doRequest(router, http.MethodGet, "/.well-known/openid-configuration", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.OIDCDiscoveryResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// OAuth 2.1 mandates S256 PKCE.
+	assert.Contains(t, resp.CodeChallengeMethodsSupported, "S256")
+}
+
+func TestOIDCDiscovery_SigningAlgorithm(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	w := doRequest(router, http.MethodGet, "/.well-known/openid-configuration", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.OIDCDiscoveryResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Must include ES256 (our primary signing algorithm).
+	assert.Contains(t, resp.IDTokenSigningAlgValuesSupported, "ES256")
+}
+
+// ── Authorize with PKCE parameters ────────────────────────────────────────────
+
+func TestOIDCAuthorize_WithPKCEParams(t *testing.T) {
+	var capturedReq *api.AuthorizeRequest
+	svc := &mockOIDCProviderService{
+		authorizeFn: func(_ context.Context, req *api.AuthorizeRequest) (*api.AuthorizeResponse, error) {
+			capturedReq = req
+			return &api.AuthorizeResponse{
+				RedirectTo: "https://login.example.com/login?challenge=pkce123",
+			}, nil
+		},
+	}
+	router := newOIDCTestRouter(svc)
+
+	w := doRequest(router, http.MethodGet,
+		"/oauth/authorize?client_id=abc&redirect_uri=https://app.example.com/cb&response_type=code&scope=openid+profile&state=xyz&nonce=n123&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256",
+		nil)
+	require.Equal(t, http.StatusFound, w.Code)
+
+	require.NotNil(t, capturedReq)
+	assert.Equal(t, "abc", capturedReq.ClientID)
+	assert.Equal(t, "code", capturedReq.ResponseType)
+	assert.Equal(t, "xyz", capturedReq.State)
+	assert.Equal(t, "n123", capturedReq.Nonce)
+	assert.Equal(t, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", capturedReq.CodeChallenge)
+	assert.Equal(t, "S256", capturedReq.CodeChallengeMethod)
+}
+
+func TestOIDCAuthorize_WithState(t *testing.T) {
+	var capturedReq *api.AuthorizeRequest
+	svc := &mockOIDCProviderService{
+		authorizeFn: func(_ context.Context, req *api.AuthorizeRequest) (*api.AuthorizeResponse, error) {
+			capturedReq = req
+			return &api.AuthorizeResponse{RedirectTo: "https://login.example.com/login?challenge=state123"}, nil
+		},
+	}
+	router := newOIDCTestRouter(svc)
+
+	w := doRequest(router, http.MethodGet,
+		"/oauth/authorize?client_id=abc&redirect_uri=https://app.example.com/cb&response_type=code&scope=openid&state=csrf-protect",
+		nil)
+	require.Equal(t, http.StatusFound, w.Code)
+	require.NotNil(t, capturedReq)
+	assert.Equal(t, "csrf-protect", capturedReq.State)
+}
+
+// ── Token Exchange with code_verifier ─────────────────────────────────────────
+
+func TestOIDCToken_WithCodeVerifier(t *testing.T) {
+	var capturedReq *api.CodeExchangeRequest
+	svc := &mockOIDCProviderService{
+		exchangeCodeFn: func(_ context.Context, req *api.CodeExchangeRequest) (*api.OIDCTokenResponse, error) {
+			capturedReq = req
+			return &api.OIDCTokenResponse{
+				AccessToken:  "qf_at_verified",
+				TokenType:    "Bearer",
+				ExpiresIn:    900,
+				IDToken:      "eyJhbGciOiJFUzI1NiJ9.verified.sig",
+			}, nil
+		},
+	}
+	router := newOIDCTestRouter(svc)
+
+	body := map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          "auth_code_pkce",
+		"redirect_uri":  "https://app.example.com/cb",
+		"client_id":     "client-pkce",
+		"code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+	}
+	w := doRequest(router, http.MethodPost, "/oauth/token", body)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	require.NotNil(t, capturedReq)
+	assert.Equal(t, "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", capturedReq.CodeVerifier)
+	assert.Equal(t, "client-pkce", capturedReq.ClientID)
+}
+
+func TestOIDCToken_WithClientSecret(t *testing.T) {
+	var capturedReq *api.CodeExchangeRequest
+	svc := &mockOIDCProviderService{
+		exchangeCodeFn: func(_ context.Context, req *api.CodeExchangeRequest) (*api.OIDCTokenResponse, error) {
+			capturedReq = req
+			return &api.OIDCTokenResponse{
+				AccessToken: "qf_at_secret",
+				TokenType:   "Bearer",
+				ExpiresIn:   900,
+			}, nil
+		},
+	}
+	router := newOIDCTestRouter(svc)
+
+	body := map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          "auth_code_secret",
+		"redirect_uri":  "https://app.example.com/cb",
+		"client_id":     "client-secret",
+		"client_secret": "super-secret",
+	}
+	w := doRequest(router, http.MethodPost, "/oauth/token", body)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	require.NotNil(t, capturedReq)
+	assert.Equal(t, "super-secret", capturedReq.ClientSecret)
+}
+
+func TestOIDCToken_ResponseHeaders(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	body := map[string]string{
+		"grant_type":   "authorization_code",
+		"code":         "auth_code_headers",
+		"redirect_uri": "https://app.example.com/cb",
+		"client_id":    "client-1",
+	}
+	w := doRequest(router, http.MethodPost, "/oauth/token", body)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// RFC 6749 §5.1: Must not be cached.
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", w.Header().Get("Pragma"))
+}
+
+func TestOIDCToken_ResponseContainsScope(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	body := map[string]string{
+		"grant_type":   "authorization_code",
+		"code":         "auth_code_scope",
+		"redirect_uri": "https://app.example.com/cb",
+		"client_id":    "client-1",
+	}
+	w := doRequest(router, http.MethodPost, "/oauth/token", body)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.OIDCTokenResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Scope, "scope should be returned in token response")
+}
+
+// ── UserInfo claim assembly ──────────────────────────────────────────────────
+
+func TestOIDCUserInfo_ClaimsAssembly(t *testing.T) {
+	svc := &mockOIDCProviderService{
+		getUserInfoFn: func(_ context.Context, userID string) (*api.OIDCUserInfoResponse, error) {
+			return &api.OIDCUserInfoResponse{
+				Sub:           userID,
+				Email:         "alice@example.com",
+				EmailVerified: true,
+				Name:          "Alice Wonderland",
+			}, nil
+		},
+	}
+	router := newOIDCTestRouter(svc)
+
+	w := doRequest(router, http.MethodGet, "/userinfo", nil, "X-User-ID", "user-alice")
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.OIDCUserInfoResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Sub is REQUIRED per OIDC Core §5.3.
+	assert.Equal(t, "user-alice", resp.Sub)
+	assert.Equal(t, "alice@example.com", resp.Email)
+	assert.True(t, resp.EmailVerified)
+	assert.Equal(t, "Alice Wonderland", resp.Name)
+}
+
+func TestOIDCUserInfo_MinimalSubOnly(t *testing.T) {
+	svc := &mockOIDCProviderService{
+		getUserInfoFn: func(_ context.Context, userID string) (*api.OIDCUserInfoResponse, error) {
+			return &api.OIDCUserInfoResponse{Sub: userID}, nil
+		},
+	}
+	router := newOIDCTestRouter(svc)
+
+	w := doRequest(router, http.MethodGet, "/userinfo", nil, "X-User-ID", "user-minimal")
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	assert.Equal(t, "user-minimal", raw["sub"])
+}
+
 // ── Routes not registered when OIDC is nil ─────────────────────────────────
 
 func TestOIDCRoutes_NotRegisteredWhenNil(t *testing.T) {
