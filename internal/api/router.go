@@ -54,6 +54,11 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		mfaH = NewMFAHandlers(svc.MFA)
 	}
 
+	var webauthnH *WebAuthnHandlers
+	if svc.WebAuthn != nil {
+		webauthnH = NewWebAuthnHandlers(svc.WebAuthn)
+	}
+
 	// Health probes (no middleware beyond global).
 	hh := newHealthHandlers(healthSvc)
 	r.GET("/health", hh.health)
@@ -78,6 +83,12 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		// MFA verify is public (uses mfa_token, not bearer auth).
 		if mfaH != nil {
 			auth.POST("/mfa/verify", mfaH.Verify)
+		}
+
+		// WebAuthn login routes are public (use mfa_token, not bearer auth).
+		if webauthnH != nil {
+			auth.POST("/mfa/webauthn/login/begin", webauthnH.BeginLogin)
+			auth.POST("/mfa/webauthn/login/verify", webauthnH.VerifyLogin)
 		}
 	}
 
@@ -109,6 +120,14 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		mfa.POST("/confirm", mfaH.Confirm)
 		mfa.POST("/disable", mfaH.Disable)
 		mfa.GET("/status", mfaH.Status)
+	}
+
+	if webauthnH != nil {
+		wa := protected.Group("/mfa/webauthn")
+		wa.POST("/register/begin", webauthnH.BeginRegistration)
+		wa.POST("/register/finish", webauthnH.FinishRegistration)
+		wa.GET("/credentials", webauthnH.ListCredentials)
+		wa.DELETE("/credentials/:id", webauthnH.DeleteCredential)
 	}
 
 	return r

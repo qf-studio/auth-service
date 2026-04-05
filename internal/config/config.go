@@ -23,6 +23,15 @@ type Config struct {
 	Email        EmailConfig
 	DPoP         DPoPConfig
 	MFA          MFAConfig
+	WebAuthn     WebAuthnConfig
+}
+
+// WebAuthnConfig holds WebAuthn (FIDO2) relying party settings.
+type WebAuthnConfig struct {
+	Enabled     bool     // WEBAUTHN_ENABLED: whether WebAuthn MFA is available
+	RPDisplayName string // WEBAUTHN_RP_DISPLAY_NAME: human-readable RP name
+	RPID        string   // WEBAUTHN_RP_ID: relying party identifier (domain)
+	RPOrigins   []string // WEBAUTHN_RP_ORIGINS: allowed origins (comma-separated)
 }
 
 // MFAConfig holds multi-factor authentication settings.
@@ -232,6 +241,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	webauthnCfg, err := loadWebAuthn(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -254,6 +267,7 @@ func Load() (*Config, error) {
 		Email:        email,
 		DPoP:         dpop,
 		MFA:          mfaCfg,
+		WebAuthn:     webauthnCfg,
 	}, nil
 }
 
@@ -547,6 +561,24 @@ func loadMFA(l *loader) (MFAConfig, error) {
 		Digits:          digits,
 		Period:          period,
 		BackupCodeCount: backupCount,
+	}, nil
+}
+
+func loadWebAuthn(l *loader) (WebAuthnConfig, error) {
+	enabled, err := l.optBool("WEBAUTHN_ENABLED", false)
+	if err != nil {
+		return WebAuthnConfig{}, err
+	}
+
+	rpDisplayName := l.optStr("WEBAUTHN_RP_DISPLAY_NAME", "QuantFlow Studio")
+	rpID := l.optStr("WEBAUTHN_RP_ID", "localhost")
+	rpOriginsRaw := l.optStr("WEBAUTHN_RP_ORIGINS", "http://localhost:3000")
+
+	return WebAuthnConfig{
+		Enabled:       enabled,
+		RPDisplayName: rpDisplayName,
+		RPID:          rpID,
+		RPOrigins:     splitCSV(rpOriginsRaw),
 	}, nil
 }
 

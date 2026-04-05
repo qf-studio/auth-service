@@ -146,3 +146,48 @@ func (s *RedisMFAStore) ClearFailedAttempts(ctx context.Context, userID string) 
 	}
 	return nil
 }
+
+// PeekMFAToken retrieves the user ID associated with an MFA token without consuming it.
+// Returns ErrMFATokenNotFound if the token does not exist.
+func (s *RedisMFAStore) PeekMFAToken(ctx context.Context, token string) (string, error) {
+	key := mfaTokenPrefix + token
+	userID, err := s.client.Get(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return "", ErrMFATokenNotFound
+		}
+		return "", fmt.Errorf("peek mfa token: %w", err)
+	}
+	return userID, nil
+}
+
+const (
+	// webauthnSessionPrefix is the Redis key prefix for WebAuthn challenge sessions.
+	webauthnSessionPrefix = "webauthn:session:"
+
+	// defaultWebAuthnSessionTTL is the lifetime of a WebAuthn challenge session (5 minutes).
+	defaultWebAuthnSessionTTL = 5 * time.Minute
+)
+
+// StoreWebAuthnSession stores serialized WebAuthn session data keyed by a session ID.
+func (s *RedisMFAStore) StoreWebAuthnSession(ctx context.Context, sessionID string, data []byte) error {
+	key := webauthnSessionPrefix + sessionID
+	if err := s.client.Set(ctx, key, data, defaultWebAuthnSessionTTL).Err(); err != nil {
+		return fmt.Errorf("store webauthn session: %w", err)
+	}
+	return nil
+}
+
+// ConsumeWebAuthnSession retrieves and deletes WebAuthn session data atomically.
+// Returns ErrNotFound if the session does not exist or has expired.
+func (s *RedisMFAStore) ConsumeWebAuthnSession(ctx context.Context, sessionID string) ([]byte, error) {
+	key := webauthnSessionPrefix + sessionID
+	data, err := s.client.GetDel(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("consume webauthn session: %w", err)
+	}
+	return data, nil
+}

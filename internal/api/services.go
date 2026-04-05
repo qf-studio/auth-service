@@ -123,13 +123,32 @@ type MFAService interface {
 	GenerateMFAToken(ctx context.Context, userID string) (string, error)
 }
 
+// WebAuthnCredentialInfo is a summary of a WebAuthn credential returned by list endpoints.
+type WebAuthnCredentialInfo struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
+// WebAuthnService defines the operations for WebAuthn (FIDO2) MFA.
+type WebAuthnService interface {
+	BeginRegistration(ctx context.Context, userID, email string) (interface{}, error)
+	FinishRegistration(ctx context.Context, userID, email string, body []byte) error
+	BeginLogin(ctx context.Context, mfaToken string) (interface{}, error)
+	FinishLogin(ctx context.Context, mfaToken string, body []byte) (*AuthResult, error)
+	ListCredentials(ctx context.Context, userID string) ([]WebAuthnCredentialInfo, error)
+	DeleteCredential(ctx context.Context, userID, credentialID string) error
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
-	Auth    AuthService
-	Token   TokenService
-	Session SessionService
-	DPoP    DPoPService
-	MFA     MFAService
+	Auth     AuthService
+	Token    TokenService
+	Session  SessionService
+	DPoP     DPoPService
+	MFA      MFAService
+	WebAuthn WebAuthnService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

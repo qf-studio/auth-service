@@ -118,12 +118,39 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Inject MFA checker into auth service to enable MFA challenge on login.
 	authSvc.SetMFAChecker(mfaSvc)
 
+	// ── WebAuthn ─────────────────────────────────────────────────────────
+	var webauthnAPISvc api.WebAuthnService
+	if cfg.WebAuthn.Enabled {
+		webauthnRepo := storage.NewPostgresWebAuthnRepository(pgPool)
+		webauthnSvc, webauthnErr := mfa.NewWebAuthnService(
+			mfa.WebAuthnConfig{
+				RPDisplayName: cfg.WebAuthn.RPDisplayName,
+				RPID:          cfg.WebAuthn.RPID,
+				RPOrigins:     cfg.WebAuthn.RPOrigins,
+			},
+			webauthnRepo,
+			mfaStore,
+			tokenSvc,
+			log,
+			auditSvc,
+		)
+		if webauthnErr != nil {
+			return fmt.Errorf("webauthn service init failed: %w", webauthnErr)
+		}
+		webauthnAPISvc = webauthnSvc
+		log.Info("WebAuthn MFA enabled",
+			zap.String("rp_id", cfg.WebAuthn.RPID),
+			zap.Int("origins", len(cfg.WebAuthn.RPOrigins)),
+		)
+	}
+
 	services := &api.Services{
-		Auth:    authSvc,
-		Token:   tokenSvc,
-		Session: sessionSvc,
-		DPoP:    dpopAPISvc,
-		MFA:     mfaSvc,
+		Auth:     authSvc,
+		Token:    tokenSvc,
+		Session:  sessionSvc,
+		DPoP:     dpopAPISvc,
+		MFA:      mfaSvc,
+		WebAuthn: webauthnAPISvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────

@@ -33,3 +33,19 @@ type MFAStatus struct {
 	Confirmed  bool
 	BackupLeft int // remaining unused backup codes
 }
+
+// WebAuthnCredential represents a registered WebAuthn credential (passkey / security key).
+type WebAuthnCredential struct {
+	ID              string     // UUID primary key
+	UserID          string     // owning user
+	CredentialID    []byte     // raw credential ID from authenticator
+	PublicKey       []byte     // CBOR-encoded public key
+	AttestationType string     // "none", "packed", etc.
+	AAGUID          []byte     // authenticator attestation GUID (16 bytes)
+	SignCount       uint32     // monotonic sign counter for clone detection
+	Transports      []string   // e.g. ["usb", "nfc", "ble", "internal"]
+	Name            string     // user-friendly label
+	CreatedAt       time.Time
+	LastUsedAt      *time.Time
+	DeletedAt       *time.Time
+}
