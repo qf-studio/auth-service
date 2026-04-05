@@ -140,9 +140,62 @@ type AdminTokenService interface {
 	Introspect(ctx context.Context, token string) (*IntrospectionResponse, error)
 }
 
+// --- RBAC response types ---
+
+// AdminPolicy represents a single (subject, object, action) authorization rule.
+type AdminPolicy struct {
+	Subject string `json:"subject"`
+	Object  string `json:"object"`
+	Action  string `json:"action"`
+}
+
+// AdminPolicyList is the response for listing all policies.
+type AdminPolicyList struct {
+	Policies []AdminPolicy `json:"policies"`
+	Total    int           `json:"total"`
+}
+
+// AdminUserRoles represents the role assignments for a user.
+type AdminUserRoles struct {
+	User  string   `json:"user"`
+	Roles []string `json:"roles"`
+}
+
+// --- RBAC request types ---
+
+// CreatePolicyRequest is the request body for adding a policy rule.
+type CreatePolicyRequest struct {
+	Subject string `json:"subject" validate:"required"`
+	Object  string `json:"object"  validate:"required"`
+	Action  string `json:"action"  validate:"required"`
+}
+
+// DeletePolicyRequest is the request body for removing a policy rule.
+type DeletePolicyRequest struct {
+	Subject string `json:"subject" validate:"required"`
+	Object  string `json:"object"  validate:"required"`
+	Action  string `json:"action"  validate:"required"`
+}
+
+// AssignRoleRequest is the request body for assigning a role to a user.
+type AssignRoleRequest struct {
+	User string `json:"user" validate:"required"`
+	Role string `json:"role" validate:"required"`
+}
+
+// AdminRBACService defines admin operations for RBAC policy and role management.
+type AdminRBACService interface {
+	ListPolicies(ctx context.Context) (*AdminPolicyList, error)
+	CreatePolicy(ctx context.Context, req *CreatePolicyRequest) (*AdminPolicy, error)
+	DeletePolicy(ctx context.Context, req *DeletePolicyRequest) error
+	GetUserRoles(ctx context.Context, user string) (*AdminUserRoles, error)
+	AssignRole(ctx context.Context, req *AssignRoleRequest) (*AdminUserRoles, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users   AdminUserService
 	Clients AdminClientService
 	Tokens  AdminTokenService
+	RBAC    AdminRBACService
 }

@@ -32,6 +32,9 @@ const (
 	EventAdminClientDelete  = "admin_client_delete"
 	EventAdminClientRotate  = "admin_client_rotate_secret"
 	EventTokenIntrospect    = "token_introspect"
+	EventAdminRBACCreate    = "admin_rbac_policy_create"
+	EventAdminRBACDelete    = "admin_rbac_policy_delete"
+	EventAdminRBACRoleAssign = "admin_rbac_role_assign"
 )
 
 // Event represents a single audit log entry.
