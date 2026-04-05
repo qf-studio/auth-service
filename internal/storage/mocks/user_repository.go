@@ -9,10 +9,12 @@ import (
 
 // MockUserRepository is a configurable mock for storage.UserRepository.
 type MockUserRepository struct {
-	CreateFn          func(ctx context.Context, user *domain.User) (*domain.User, error)
-	FindByIDFn        func(ctx context.Context, id string) (*domain.User, error)
-	FindByEmailFn     func(ctx context.Context, email string) (*domain.User, error)
-	UpdateLastLoginFn func(ctx context.Context, userID string, timestamp time.Time) error
+	CreateFn                  func(ctx context.Context, user *domain.User) (*domain.User, error)
+	FindByIDFn                func(ctx context.Context, id string) (*domain.User, error)
+	FindByEmailFn             func(ctx context.Context, email string) (*domain.User, error)
+	UpdateLastLoginFn         func(ctx context.Context, userID string, timestamp time.Time) error
+	SetEmailVerifyTokenFn     func(ctx context.Context, userID string, token string, expiresAt time.Time) error
+	ConsumeEmailVerifyTokenFn func(ctx context.Context, token string) (*domain.User, error)
 }
 
 // Create delegates to CreateFn.
@@ -33,4 +35,14 @@ func (m *MockUserRepository) FindByEmail(ctx context.Context, email string) (*do
 // UpdateLastLogin delegates to UpdateLastLoginFn.
 func (m *MockUserRepository) UpdateLastLogin(ctx context.Context, userID string, timestamp time.Time) error {
 	return m.UpdateLastLoginFn(ctx, userID, timestamp)
+}
+
+// SetEmailVerifyToken delegates to SetEmailVerifyTokenFn.
+func (m *MockUserRepository) SetEmailVerifyToken(ctx context.Context, userID string, token string, expiresAt time.Time) error {
+	return m.SetEmailVerifyTokenFn(ctx, userID, token, expiresAt)
+}
+
+// ConsumeEmailVerifyToken delegates to ConsumeEmailVerifyTokenFn.
+func (m *MockUserRepository) ConsumeEmailVerifyToken(ctx context.Context, token string) (*domain.User, error) {
+	return m.ConsumeEmailVerifyTokenFn(ctx, token)
 }

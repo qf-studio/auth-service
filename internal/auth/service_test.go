@@ -46,6 +46,14 @@ func (m *mockUserRepository) UpdateLastLogin(ctx context.Context, userID string,
 	return nil
 }
 
+func (m *mockUserRepository) SetEmailVerifyToken(_ context.Context, _ string, _ string, _ time.Time) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (m *mockUserRepository) ConsumeEmailVerifyToken(_ context.Context, _ string) (*domain.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 type mockRefreshTokenRepository struct {
 	storeFn          func(ctx context.Context, sig, userID string, exp time.Time) error
 	revokeAllForUser func(ctx context.Context, userID string) error
