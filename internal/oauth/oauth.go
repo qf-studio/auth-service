@@ -29,6 +29,7 @@ type Service struct {
 	providers map[string]Provider
 	repo      storage.OAuthAccountRepository
 	tokenSvc  api.TokenService
+	stateMgr  *StateManager
 	log       *zap.Logger
 }
 
@@ -38,6 +39,7 @@ func NewService(
 	repo storage.OAuthAccountRepository,
 	tokenSvc api.TokenService,
 	log *zap.Logger,
+	stateMgr *StateManager,
 	providers ...Provider,
 ) *Service {
 	pm := make(map[string]Provider, len(providers))
@@ -57,6 +59,7 @@ func NewService(
 		providers: pm,
 		repo:      repo,
 		tokenSvc:  tokenSvc,
+		stateMgr:  stateMgr,
 		log:       log,
 	}
 }
@@ -82,6 +85,19 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state stri
 	p, ok := s.providers[provider]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", api.ErrNotFound, domain.ErrOAuthProviderNotSupported.Error())
+	}
+
+	// Validate the signed state parameter and extract the embedded PKCE verifier.
+	if s.stateMgr != nil && state != "" {
+		verifier, err := s.stateMgr.Validate(state)
+		if err != nil {
+			s.log.Warn("OAuth state validation failed",
+				zap.String("provider", provider),
+				zap.Error(err),
+			)
+			return nil, fmt.Errorf("%w: %v", api.ErrUnauthorized, domain.ErrOAuthStateMismatch)
+		}
+		ctx = WithCodeVerifier(ctx, verifier)
 	}
 
 	oauthUser, err := p.ExchangeCode(ctx, code)

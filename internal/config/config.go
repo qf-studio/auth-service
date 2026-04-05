@@ -29,16 +29,19 @@ type Config struct {
 // OAuthProviderConfig holds credentials and settings for a single OAuth provider.
 type OAuthProviderConfig struct {
 	ClientID     string // OAUTH_<PROVIDER>_CLIENT_ID
-	ClientSecret string // OAUTH_<PROVIDER>_CLIENT_SECRET
+	ClientSecret string // OAUTH_<PROVIDER>_CLIENT_SECRET (Apple: path to .p8 private key)
 	RedirectURI  string // OAUTH_<PROVIDER>_REDIRECT_URI
 	Enabled      bool   // OAUTH_<PROVIDER>_ENABLED
+	TeamID       string // OAUTH_<PROVIDER>_TEAM_ID (Apple only)
+	KeyID        string // OAUTH_<PROVIDER>_KEY_ID (Apple only)
 }
 
 // OAuthConfig holds OAuth provider configurations.
 type OAuthConfig struct {
-	Google OAuthProviderConfig
-	GitHub OAuthProviderConfig
-	Apple  OAuthProviderConfig
+	Google      OAuthProviderConfig
+	GitHub      OAuthProviderConfig
+	Apple       OAuthProviderConfig
+	StateSecret string // OAUTH_STATE_SECRET: HMAC key for signing state parameters
 }
 
 // MFAConfig holds multi-factor authentication settings.
@@ -585,10 +588,17 @@ func loadOAuth(l *loader) (OAuthConfig, error) {
 		return OAuthConfig{}, err
 	}
 
+	// State secret is required when any provider is enabled.
+	var stateSecret string
+	if google.Enabled || github.Enabled || apple.Enabled {
+		stateSecret = l.requireStr("OAUTH_STATE_SECRET")
+	}
+
 	return OAuthConfig{
-		Google: google,
-		GitHub: github,
-		Apple:  apple,
+		Google:      google,
+		GitHub:      github,
+		Apple:       apple,
+		StateSecret: stateSecret,
 	}, nil
 }
 
@@ -607,11 +617,17 @@ func loadOAuthProvider(l *loader, provider string) (OAuthProviderConfig, error) 
 	clientSecret := l.requireStr(prefix + "CLIENT_SECRET")
 	redirectURI := l.requireStr(prefix + "REDIRECT_URI")
 
+	// Apple-specific optional fields (ignored for other providers).
+	teamID := l.optStr(prefix+"TEAM_ID", "")
+	keyID := l.optStr(prefix+"KEY_ID", "")
+
 	return OAuthProviderConfig{
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURI:  redirectURI,
 		Enabled:      true,
+		TeamID:       teamID,
+		KeyID:        keyID,
 	}, nil
 }
 
