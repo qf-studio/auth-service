@@ -26,4 +26,12 @@ var (
 	// Authorization errors.
 	ErrInsufficientScope = errors.New("insufficient scope")
 	ErrInsufficientRole  = errors.New("insufficient role")
+
+	// MFA errors.
+	ErrMFARequired    = errors.New("MFA verification required")
+	ErrMFANotEnabled  = errors.New("MFA not enabled for user")
+	ErrMFAAlreadyEnabled = errors.New("MFA already enabled for user")
+	ErrInvalidTOTP    = errors.New("invalid TOTP code")
+	ErrBackupCodeUsed = errors.New("backup code already used")
+	ErrMFAMaxAttempts = errors.New("MFA max verification attempts exceeded")
 )

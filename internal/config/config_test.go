@@ -92,6 +92,13 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.False(t, cfg.DPoP.Enabled)
 	assert.Equal(t, 5*time.Minute, cfg.DPoP.NonceTTL)
 	assert.Equal(t, 1*time.Minute, cfg.DPoP.JTIWindow)
+
+	// MFA defaults
+	assert.Equal(t, "QuantFlow Studio", cfg.MFA.Issuer)
+	assert.Equal(t, 5, cfg.MFA.MaxAttempts)
+	assert.Equal(t, 15*time.Minute, cfg.MFA.LockoutDuration)
+	assert.Equal(t, 10, cfg.MFA.BackupCodeCount)
+	assert.Equal(t, 5*time.Minute, cfg.MFA.TokenTTL)
 }
 
 func TestLoad_EmailConfig(t *testing.T) {
@@ -461,6 +468,45 @@ func TestLoad_InvalidDPoPNonceTTL(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DPOP_NONCE_TTL")
+}
+
+func TestLoad_MFACustomValues(t *testing.T) {
+	env := requiredEnv()
+	env["MFA_ISSUER"] = "MyApp"
+	env["MFA_MAX_ATTEMPTS"] = "3"
+	env["MFA_LOCKOUT_DURATION"] = "30m"
+	env["MFA_BACKUP_CODE_COUNT"] = "8"
+	env["MFA_TOKEN_TTL"] = "10m"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "MyApp", cfg.MFA.Issuer)
+	assert.Equal(t, 3, cfg.MFA.MaxAttempts)
+	assert.Equal(t, 30*time.Minute, cfg.MFA.LockoutDuration)
+	assert.Equal(t, 8, cfg.MFA.BackupCodeCount)
+	assert.Equal(t, 10*time.Minute, cfg.MFA.TokenTTL)
+}
+
+func TestLoad_InvalidMFALockoutDuration(t *testing.T) {
+	env := requiredEnv()
+	env["MFA_LOCKOUT_DURATION"] = "invalid"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MFA_LOCKOUT_DURATION")
+}
+
+func TestLoad_InvalidMFATokenTTL(t *testing.T) {
+	env := requiredEnv()
+	env["MFA_TOKEN_TTL"] = "invalid"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MFA_TOKEN_TTL")
 }
 
 func TestLoad_InvalidDPoPJTIWindow(t *testing.T) {

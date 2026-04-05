@@ -22,6 +22,16 @@ type Config struct {
 	RequestLimit RequestLimitConfig
 	Email        EmailConfig
 	DPoP         DPoPConfig
+	MFA          MFAConfig
+}
+
+// MFAConfig holds multi-factor authentication settings.
+type MFAConfig struct {
+	Issuer          string        // MFA_ISSUER: name shown in authenticator apps
+	MaxAttempts     int           // MFA_MAX_ATTEMPTS: max verification attempts before lockout
+	LockoutDuration time.Duration // MFA_LOCKOUT_DURATION: duration of MFA lockout after max attempts
+	BackupCodeCount int           // MFA_BACKUP_CODE_COUNT: number of backup codes to generate
+	TokenTTL        time.Duration // MFA_TOKEN_TTL: lifetime of MFA verification token
 }
 
 // DPoPConfig holds DPoP (Demonstrating Proof-of-Possession) settings.
@@ -219,6 +229,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	mfa, err := loadMFA(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -240,6 +254,7 @@ func Load() (*Config, error) {
 		RequestLimit: reqLimit,
 		Email:        email,
 		DPoP:         dpop,
+		MFA:          mfa,
 	}, nil
 }
 
@@ -504,6 +519,40 @@ func loadDPoP(l *loader) (DPoPConfig, error) {
 		Enabled:   enabled,
 		NonceTTL:  nonceTTL,
 		JTIWindow: jtiWindow,
+	}, nil
+}
+
+func loadMFA(l *loader) (MFAConfig, error) {
+	issuer := l.optStr("MFA_ISSUER", "QuantFlow Studio")
+
+	maxAttempts, err := l.optInt("MFA_MAX_ATTEMPTS", 5)
+	if err != nil {
+		return MFAConfig{}, err
+	}
+
+	lockoutDurStr := l.optStr("MFA_LOCKOUT_DURATION", "15m")
+	lockoutDur, err := parseDuration(lockoutDurStr)
+	if err != nil {
+		return MFAConfig{}, fmt.Errorf("MFA_LOCKOUT_DURATION: %w", err)
+	}
+
+	backupCodeCount, err := l.optInt("MFA_BACKUP_CODE_COUNT", 10)
+	if err != nil {
+		return MFAConfig{}, err
+	}
+
+	tokenTTLStr := l.optStr("MFA_TOKEN_TTL", "5m")
+	tokenTTL, err := parseDuration(tokenTTLStr)
+	if err != nil {
+		return MFAConfig{}, fmt.Errorf("MFA_TOKEN_TTL: %w", err)
+	}
+
+	return MFAConfig{
+		Issuer:          issuer,
+		MaxAttempts:     maxAttempts,
+		LockoutDuration: lockoutDur,
+		BackupCodeCount: backupCodeCount,
+		TokenTTL:        tokenTTL,
 	}, nil
 }
 
