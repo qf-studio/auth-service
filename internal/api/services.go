@@ -133,6 +133,147 @@ type OAuthService interface {
 	UnlinkAccount(ctx context.Context, userID, provider string) error
 }
 
+// --- OIDC Provider types ---
+
+// OIDCDiscoveryResponse is the OpenID Connect discovery document (RFC 8414).
+type OIDCDiscoveryResponse struct {
+	Issuer                           string   `json:"issuer"`
+	AuthorizationEndpoint            string   `json:"authorization_endpoint"`
+	TokenEndpoint                    string   `json:"token_endpoint"`
+	UserinfoEndpoint                 string   `json:"userinfo_endpoint"`
+	JwksURI                          string   `json:"jwks_uri"`
+	ScopesSupported                  []string `json:"scopes_supported"`
+	ResponseTypesSupported           []string `json:"response_types_supported"`
+	GrantTypesSupported              []string `json:"grant_types_supported"`
+	SubjectTypesSupported            []string `json:"subject_types_supported"`
+	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
+	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	CodeChallengeMethodsSupported    []string `json:"code_challenge_methods_supported"`
+}
+
+// AuthorizeRequest represents the parameters for an OAuth2 authorization request.
+type AuthorizeRequest struct {
+	ClientID            string `form:"client_id"             binding:"required"`
+	RedirectURI         string `form:"redirect_uri"          binding:"required"`
+	ResponseType        string `form:"response_type"         binding:"required"`
+	Scope               string `form:"scope"                 binding:"required"`
+	State               string `form:"state"`
+	Nonce               string `form:"nonce"`
+	CodeChallenge       string `form:"code_challenge"`
+	CodeChallengeMethod string `form:"code_challenge_method"`
+}
+
+// AuthorizeResponse is returned by the authorization endpoint.
+type AuthorizeResponse struct {
+	RedirectTo string `json:"redirect_to"`
+}
+
+// CodeExchangeRequest represents the token request for authorization_code grant.
+type CodeExchangeRequest struct {
+	GrantType    string `json:"grant_type"    binding:"required"`
+	Code         string `json:"code"          binding:"required"`
+	RedirectURI  string `json:"redirect_uri"  binding:"required"`
+	ClientID     string `json:"client_id"     binding:"required"`
+	ClientSecret string `json:"client_secret"`
+	CodeVerifier string `json:"code_verifier"`
+}
+
+// OIDCTokenResponse is the token response including an optional ID token.
+type OIDCTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	IDToken      string `json:"id_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+}
+
+// OIDCUserInfoResponse represents the UserInfo endpoint response (OIDC Core §5.3).
+type OIDCUserInfoResponse struct {
+	Sub           string `json:"sub"`
+	Email         string `json:"email,omitempty"`
+	EmailVerified bool   `json:"email_verified,omitempty"`
+	Name          string `json:"name,omitempty"`
+}
+
+// OIDCProviderService defines operations for the OIDC provider (authorization server).
+type OIDCProviderService interface {
+	// GetDiscovery returns the OpenID Connect discovery document.
+	GetDiscovery(ctx context.Context) (*OIDCDiscoveryResponse, error)
+	// Authorize initiates the authorization code flow and returns a redirect URL.
+	Authorize(ctx context.Context, req *AuthorizeRequest) (*AuthorizeResponse, error)
+	// ExchangeCode exchanges an authorization code for tokens.
+	ExchangeCode(ctx context.Context, req *CodeExchangeRequest) (*OIDCTokenResponse, error)
+	// GetUserInfo returns claims about the authenticated user.
+	GetUserInfo(ctx context.Context, userID string) (*OIDCUserInfoResponse, error)
+}
+
+// --- Consent flow types ---
+
+// LoginRequestInfo describes a pending login request shown to the consent UI.
+type LoginRequestInfo struct {
+	Challenge string `json:"challenge"`
+	ClientID  string `json:"client_id"`
+	Scope     string `json:"scope"`
+	RequestURL string `json:"request_url"`
+}
+
+// AcceptLoginRequest is the body for accepting a login request.
+type AcceptLoginRequest struct {
+	Subject  string `json:"subject"  binding:"required"`
+	Remember bool   `json:"remember"`
+}
+
+// ConsentRequestInfo describes a pending consent request shown to the consent UI.
+type ConsentRequestInfo struct {
+	Challenge       string   `json:"challenge"`
+	ClientID        string   `json:"client_id"`
+	RequestedScopes []string `json:"requested_scopes"`
+	Subject         string   `json:"subject"`
+}
+
+// AcceptConsentRequest is the body for accepting a consent request.
+type AcceptConsentRequest struct {
+	GrantedScopes []string `json:"granted_scopes" binding:"required"`
+	Remember      bool     `json:"remember"`
+}
+
+// RejectRequest is the body for rejecting a login or consent request.
+type RejectRequest struct {
+	Error            string `json:"error"             binding:"required"`
+	ErrorDescription string `json:"error_description"`
+}
+
+// RedirectResponse contains the URL to redirect to after a consent decision.
+type RedirectResponse struct {
+	RedirectTo string `json:"redirect_to"`
+}
+
+// ConsentService defines the admin-side operations for the login/consent flow.
+type ConsentService interface {
+	GetLoginRequest(ctx context.Context, challenge string) (*LoginRequestInfo, error)
+	AcceptLogin(ctx context.Context, challenge string, req *AcceptLoginRequest) (*RedirectResponse, error)
+	RejectLogin(ctx context.Context, challenge string, req *RejectRequest) (*RedirectResponse, error)
+	GetConsentRequest(ctx context.Context, challenge string) (*ConsentRequestInfo, error)
+	AcceptConsent(ctx context.Context, challenge string, req *AcceptConsentRequest) (*RedirectResponse, error)
+	RejectConsent(ctx context.Context, challenge string, req *RejectRequest) (*RedirectResponse, error)
+}
+
+// ClientApprovalInfo represents the approval status of a third-party client.
+type ClientApprovalInfo struct {
+	ClientID   string `json:"client_id"`
+	ClientName string `json:"client_name"`
+	Approved   bool   `json:"approved"`
+	ApprovedAt *time.Time `json:"approved_at,omitempty"`
+	ApprovedBy string     `json:"approved_by,omitempty"`
+}
+
+// AdminClientApprovalService defines admin operations for third-party client approval.
+type AdminClientApprovalService interface {
+	CreateThirdPartyClient(ctx context.Context, req *CreateClientRequest) (*AdminClientWithSecret, error)
+	ApproveClient(ctx context.Context, clientID string) (*ClientApprovalInfo, error)
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
@@ -141,6 +282,7 @@ type Services struct {
 	DPoP    DPoPService
 	MFA     MFAService
 	OAuth   OAuthService
+	OIDC    OIDCProviderService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

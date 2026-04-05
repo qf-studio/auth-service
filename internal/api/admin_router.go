@@ -103,6 +103,26 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		admin.POST("/tokens/introspect", tokenH.Introspect)
 	}
 
+	// OAuth consent flow (Hydra-style login/consent admin API).
+	if svc.Consent != nil || svc.ClientApproval != nil {
+		consentH := NewAdminConsentHandlers(svc.Consent, svc.ClientApproval)
+
+		if svc.Consent != nil {
+			oauthAuth := admin.Group("/oauth/auth/requests")
+			oauthAuth.GET("/login", consentH.GetLoginRequest)
+			oauthAuth.PUT("/login", consentH.PutLoginRequest)
+			oauthAuth.GET("/consent", consentH.GetConsentRequest)
+			oauthAuth.PUT("/consent", consentH.PutConsentRequest)
+		}
+
+		// Third-party client approval workflow.
+		// Client creation uses the existing POST /admin/clients endpoint;
+		// the approve endpoint activates pending third-party clients.
+		if svc.ClientApproval != nil {
+			admin.GET("/clients/:id/approve", consentH.ApproveClient)
+		}
+	}
+
 	return r
 }
 
