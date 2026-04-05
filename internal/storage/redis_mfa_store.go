@@ -16,6 +16,9 @@ const (
 	// mfaFailedPrefix is the Redis key prefix for failed MFA attempt counters.
 	mfaFailedPrefix = "mfa:failed:"
 
+	// webauthnSessionPrefix is the Redis key prefix for WebAuthn ceremony session data.
+	webauthnSessionPrefix = "mfa:webauthn:session:"
+
 	// defaultMFATokenTTL is the lifetime of a temporary MFA token (5 minutes).
 	defaultMFATokenTTL = 5 * time.Minute
 
@@ -24,14 +27,18 @@ const (
 
 	// defaultMaxMFAAttempts is the maximum allowed failed MFA attempts before lockout.
 	defaultMaxMFAAttempts = 5
+
+	// defaultWebAuthnSessionTTL is the lifetime of a WebAuthn ceremony session (5 minutes).
+	defaultWebAuthnSessionTTL = 5 * time.Minute
 )
 
 // RedisMFAStore manages temporary MFA tokens and failed-attempt tracking in Redis.
 type RedisMFAStore struct {
-	client       redis.Cmdable
-	tokenTTL     time.Duration
-	failedTTL    time.Duration
-	maxAttempts  int
+	client            redis.Cmdable
+	tokenTTL          time.Duration
+	failedTTL         time.Duration
+	maxAttempts       int
+	webauthnSessionTTL time.Duration
 }
 
 // RedisMFAStoreOption configures the RedisMFAStore.
@@ -52,13 +59,19 @@ func WithMaxMFAAttempts(n int) RedisMFAStoreOption {
 	return func(s *RedisMFAStore) { s.maxAttempts = n }
 }
 
+// WithWebAuthnSessionTTL overrides the default WebAuthn session TTL.
+func WithWebAuthnSessionTTL(d time.Duration) RedisMFAStoreOption {
+	return func(s *RedisMFAStore) { s.webauthnSessionTTL = d }
+}
+
 // NewRedisMFAStore creates a new Redis-backed MFA token store.
 func NewRedisMFAStore(client redis.Cmdable, opts ...RedisMFAStoreOption) *RedisMFAStore {
 	s := &RedisMFAStore{
-		client:      client,
-		tokenTTL:    defaultMFATokenTTL,
-		failedTTL:   defaultMFAFailedTTL,
-		maxAttempts: defaultMaxMFAAttempts,
+		client:             client,
+		tokenTTL:           defaultMFATokenTTL,
+		failedTTL:          defaultMFAFailedTTL,
+		maxAttempts:        defaultMaxMFAAttempts,
+		webauthnSessionTTL: defaultWebAuthnSessionTTL,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -145,4 +158,28 @@ func (s *RedisMFAStore) ClearFailedAttempts(ctx context.Context, userID string) 
 		return fmt.Errorf("clear mfa failed attempts: %w", err)
 	}
 	return nil
+}
+
+// StoreWebAuthnSession saves WebAuthn ceremony session data (JSON-encoded) keyed by userID + purpose.
+// The session is single-use and expires after the configured TTL.
+func (s *RedisMFAStore) StoreWebAuthnSession(ctx context.Context, userID, purpose string, data []byte) error {
+	key := webauthnSessionPrefix + purpose + ":" + userID
+	if err := s.client.Set(ctx, key, data, s.webauthnSessionTTL).Err(); err != nil {
+		return fmt.Errorf("store webauthn session: %w", err)
+	}
+	return nil
+}
+
+// ConsumeWebAuthnSession retrieves and deletes the WebAuthn ceremony session data.
+// Returns ErrNotFound if the session does not exist or has expired.
+func (s *RedisMFAStore) ConsumeWebAuthnSession(ctx context.Context, userID, purpose string) ([]byte, error) {
+	key := webauthnSessionPrefix + purpose + ":" + userID
+	data, err := s.client.GetDel(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("consume webauthn session: %w", err)
+	}
+	return data, nil
 }
