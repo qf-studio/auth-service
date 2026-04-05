@@ -461,6 +461,129 @@ func TestValidateRequest_LoginRequest(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestNewValidator_TokenRequest_TokenExchangeGrantType(t *testing.T) {
+	v := domain.NewValidator()
+
+	tests := []struct {
+		name    string
+		req     domain.TokenRequest
+		wantErr bool
+	}{
+		{
+			name:    "token-exchange grant type accepted",
+			req:     domain.TokenRequest{GrantType: domain.GrantTypeTokenExchange},
+			wantErr: false,
+		},
+		{
+			name:    "refresh_token grant type still accepted",
+			req:     domain.TokenRequest{GrantType: "refresh_token", RefreshToken: "qf_rt_abc"},
+			wantErr: false,
+		},
+		{
+			name:    "client_credentials grant type still accepted",
+			req:     domain.TokenRequest{GrantType: "client_credentials", ClientID: "id", ClientSecret: "secret"},
+			wantErr: false,
+		},
+		{
+			name:    "unknown grant type rejected",
+			req:     domain.TokenRequest{GrantType: "password"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := v.Struct(tt.req)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestNewValidator_TokenExchangeRequest(t *testing.T) {
+	v := domain.NewValidator()
+
+	tests := []struct {
+		name    string
+		req     domain.TokenExchangeRequest
+		wantErr bool
+	}{
+		{
+			name: "valid minimal request",
+			req: domain.TokenExchangeRequest{
+				SubjectToken:     "qf_at_abc123",
+				SubjectTokenType: domain.TokenTypeAccessToken,
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid full request with actor",
+			req: domain.TokenExchangeRequest{
+				SubjectToken:       "qf_at_subject",
+				SubjectTokenType:   domain.TokenTypeAccessToken,
+				ActorToken:         "qf_at_actor",
+				ActorTokenType:     domain.TokenTypeAccessToken,
+				Audience:           "https://api.example.com",
+				Scope:              "read:users",
+				RequestedTokenType: domain.TokenTypeAccessToken,
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid request with requested_token_type only",
+			req: domain.TokenExchangeRequest{
+				SubjectToken:       "qf_at_abc123",
+				SubjectTokenType:   domain.TokenTypeJWT,
+				RequestedTokenType: domain.TokenTypeIDToken,
+			},
+			wantErr: false,
+		},
+		{
+			name:    "missing subject_token",
+			req:     domain.TokenExchangeRequest{SubjectTokenType: domain.TokenTypeAccessToken},
+			wantErr: true,
+		},
+		{
+			name:    "missing subject_token_type",
+			req:     domain.TokenExchangeRequest{SubjectToken: "qf_at_abc123"},
+			wantErr: true,
+		},
+		{
+			name: "actor_token present but actor_token_type missing",
+			req: domain.TokenExchangeRequest{
+				SubjectToken:     "qf_at_subject",
+				SubjectTokenType: domain.TokenTypeAccessToken,
+				ActorToken:       "qf_at_actor",
+				// ActorTokenType intentionally omitted
+			},
+			wantErr: true,
+		},
+		{
+			name: "actor_token_type without actor_token is allowed",
+			req: domain.TokenExchangeRequest{
+				SubjectToken:     "qf_at_abc123",
+				SubjectTokenType: domain.TokenTypeAccessToken,
+				ActorTokenType:   domain.TokenTypeAccessToken,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := v.Struct(tt.req)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestValidateRequest_EmptyBody(t *testing.T) {
 	v := domain.NewValidator()
 	router := gin.New()

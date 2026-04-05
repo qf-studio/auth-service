@@ -45,12 +45,27 @@ type PasswordResetConfirmRequest struct {
 }
 
 // TokenRequest is the validated request body for the unified /auth/token endpoint.
-// It dispatches based on grant_type: "refresh_token" or "client_credentials".
+// It dispatches based on grant_type: "refresh_token", "client_credentials", or
+// the RFC 8693 token-exchange grant type (urn:ietf:params:oauth:grant-type:token-exchange).
 type TokenRequest struct {
-	GrantType    string `json:"grant_type"    validate:"required,oneof=refresh_token client_credentials"`
+	GrantType    string `json:"grant_type"    validate:"required,oneof=refresh_token client_credentials urn:ietf:params:oauth:grant-type:token-exchange"`
 	RefreshToken string `json:"refresh_token" validate:"required_if=GrantType refresh_token"`
 	ClientID     string `json:"client_id"     validate:"required_if=GrantType client_credentials"`
 	ClientSecret string `json:"client_secret" validate:"required_if=GrantType client_credentials"`
+}
+
+// TokenExchangeRequest is the validated request body for RFC 8693 token exchange.
+// subject_token and subject_token_type are required per §2.1.
+// actor_token_type is required when actor_token is present.
+// https://www.rfc-editor.org/rfc/rfc8693#section-2.1
+type TokenExchangeRequest struct {
+	SubjectToken       string `json:"subject_token"        validate:"required"`
+	SubjectTokenType   string `json:"subject_token_type"   validate:"required"`
+	ActorToken         string `json:"actor_token,omitempty"`
+	ActorTokenType     string `json:"actor_token_type,omitempty" validate:"required_with=ActorToken"`
+	Audience           string `json:"audience,omitempty"`
+	Scope              string `json:"scope,omitempty"`
+	RequestedTokenType string `json:"requested_token_type,omitempty"`
 }
 
 // RevokeRequest is the validated request body for token revocation.
