@@ -28,6 +28,14 @@ type JWKSResponse struct {
 	Keys []interface{} `json:"keys"`
 }
 
+// TokenExchangeResult is the RFC 8693 response for a token exchange.
+type TokenExchangeResult struct {
+	AccessToken     string `json:"access_token"`
+	IssuedTokenType string `json:"issued_token_type"`
+	TokenType       string `json:"token_type"`
+	ExpiresIn       int    `json:"expires_in"`
+}
+
 // AuthService defines the operations for authentication and user management.
 type AuthService interface {
 	Register(ctx context.Context, email, password, name string) (*UserInfo, error)
@@ -40,10 +48,22 @@ type AuthService interface {
 	LogoutAll(ctx context.Context, userID string) error
 }
 
+// TokenExchangeRequest contains the RFC 8693 token exchange parameters.
+type TokenExchangeRequest struct {
+	SubjectToken     string
+	SubjectTokenType string
+	ActorToken       string
+	ActorTokenType   string
+	RequestedTokenType string
+	Audience         string
+	Scope            string
+}
+
 // TokenService defines the operations for token management.
 type TokenService interface {
 	Refresh(ctx context.Context, refreshToken string) (*AuthResult, error)
 	ClientCredentials(ctx context.Context, clientID, clientSecret string) (*AuthResult, error)
+	TokenExchange(ctx context.Context, req *TokenExchangeRequest) (*TokenExchangeResult, error)
 	Revoke(ctx context.Context, token string) error
 	JWKS(ctx context.Context) (*JWKSResponse, error)
 }

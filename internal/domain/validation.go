@@ -45,12 +45,20 @@ type PasswordResetConfirmRequest struct {
 }
 
 // TokenRequest is the validated request body for the unified /auth/token endpoint.
-// It dispatches based on grant_type: "refresh_token" or "client_credentials".
+// It dispatches based on grant_type: "refresh_token", "client_credentials",
+// or "urn:ietf:params:oauth:grant-type:token-exchange" (RFC 8693).
 type TokenRequest struct {
-	GrantType    string `json:"grant_type"    validate:"required,oneof=refresh_token client_credentials"`
-	RefreshToken string `json:"refresh_token" validate:"required_if=GrantType refresh_token"`
-	ClientID     string `json:"client_id"     validate:"required_if=GrantType client_credentials"`
-	ClientSecret string `json:"client_secret" validate:"required_if=GrantType client_credentials"`
+	GrantType          string `json:"grant_type"           validate:"required,oneof=refresh_token client_credentials urn:ietf:params:oauth:grant-type:token-exchange"`
+	RefreshToken       string `json:"refresh_token"        validate:"required_if=GrantType refresh_token"`
+	ClientID           string `json:"client_id"            validate:"required_if=GrantType client_credentials"`
+	ClientSecret       string `json:"client_secret"        validate:"required_if=GrantType client_credentials"`
+	SubjectToken       string `json:"subject_token"        validate:"required_if=GrantType urn:ietf:params:oauth:grant-type:token-exchange"`
+	SubjectTokenType   string `json:"subject_token_type"   validate:"required_if=GrantType urn:ietf:params:oauth:grant-type:token-exchange"`
+	ActorToken         string `json:"actor_token,omitempty"`
+	ActorTokenType     string `json:"actor_token_type,omitempty"`
+	RequestedTokenType string `json:"requested_token_type,omitempty"`
+	Audience           string `json:"audience,omitempty"`
+	Scope              string `json:"scope,omitempty"`
 }
 
 // RevokeRequest is the validated request body for token revocation.

@@ -158,6 +158,7 @@ func extractBearerToken(c *gin.Context) string {
 
 // Sentinel errors that service implementations should return.
 var (
+	ErrBadRequest    = errors.New("bad request")
 	ErrUnauthorized  = errors.New("unauthorized")
 	ErrNotFound      = errors.New("not found")
 	ErrConflict      = errors.New("conflict")
@@ -168,6 +169,8 @@ var (
 // handleServiceError maps service-layer sentinel errors to HTTP error responses.
 func handleServiceError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, ErrBadRequest):
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, err.Error())
 	case errors.Is(err, ErrUnauthorized):
 		domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized, err.Error())
 	case errors.Is(err, ErrNotFound):

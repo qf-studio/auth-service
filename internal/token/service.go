@@ -160,6 +160,63 @@ func (s *Service) ClientCredentials(_ context.Context, _, _ string) (*api.AuthRe
 	return nil, fmt.Errorf("client credentials not yet implemented: %w", api.ErrInternalError)
 }
 
+// TokenExchange implements RFC 8693 token exchange. It validates the subject
+// token, then issues a new access token for the subject. Only access_token
+// subject_token_type is supported in Phase 1.
+func (s *Service) TokenExchange(ctx context.Context, req *api.TokenExchangeRequest) (*api.TokenExchangeResult, error) {
+	// Phase 1: only accept access tokens as subject tokens.
+	if req.SubjectTokenType != domain.TokenTypeAccessToken {
+		return nil, fmt.Errorf("unsupported subject_token_type: %w", api.ErrBadRequest)
+	}
+
+	// Determine the requested token type; default to access_token per RFC 8693 §2.1.
+	requestedType := req.RequestedTokenType
+	if requestedType == "" {
+		requestedType = domain.TokenTypeAccessToken
+	}
+	if requestedType != domain.TokenTypeAccessToken {
+		return nil, fmt.Errorf("unsupported requested_token_type: %w", api.ErrBadRequest)
+	}
+
+	// Validate the incoming subject token.
+	subjectClaims, err := s.ValidateToken(ctx, strings.TrimPrefix(req.SubjectToken, accessTokenPrefix))
+	if err != nil {
+		return nil, fmt.Errorf("invalid subject_token: %w", api.ErrUnauthorized)
+	}
+
+	// Check revocation.
+	revoked, err := s.IsRevoked(ctx, subjectClaims.TokenID)
+	if err != nil {
+		return nil, fmt.Errorf("check revocation: %w", err)
+	}
+	if revoked {
+		return nil, fmt.Errorf("subject_token revoked: %w", api.ErrUnauthorized)
+	}
+
+	// Issue a new access token for the same subject.
+	accessToken, err := s.issueAccessToken(subjectClaims.Subject, subjectClaims.Roles, subjectClaims.Scopes, subjectClaims.ClientType)
+	if err != nil {
+		return nil, fmt.Errorf("issue exchanged token: %w", err)
+	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventTokenExchange,
+		ActorID:  subjectClaims.Subject,
+		TargetID: subjectClaims.Subject,
+		Metadata: map[string]string{
+			"subject_token_type":   req.SubjectTokenType,
+			"requested_token_type": requestedType,
+		},
+	})
+
+	return &api.TokenExchangeResult{
+		AccessToken:     accessToken,
+		IssuedTokenType: domain.TokenTypeAccessToken,
+		TokenType:       "Bearer",
+		ExpiresIn:       int(s.cfg.AccessTokenTTL.Seconds()),
+	}, nil
+}
+
 // Revoke invalidates a token by adding its JTI to the Redis blocklist.
 func (s *Service) Revoke(ctx context.Context, rawToken string) error {
 	// Try as access token first.

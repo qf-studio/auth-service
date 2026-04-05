@@ -22,6 +22,16 @@ func NewTokenHandlers(token TokenService) *TokenHandlers {
 func (h *TokenHandlers) Token(c *gin.Context) {
 	req := c.MustGet("validated_request").(*domain.TokenRequest)
 
+	switch req.GrantType {
+	case domain.GrantTypeTokenExchange:
+		h.handleTokenExchange(c, req)
+	default:
+		h.handleStandardGrant(c, req)
+	}
+}
+
+// handleStandardGrant dispatches refresh_token and client_credentials grants.
+func (h *TokenHandlers) handleStandardGrant(c *gin.Context, req *domain.TokenRequest) {
 	var result *AuthResult
 	var err error
 
@@ -35,6 +45,27 @@ func (h *TokenHandlers) Token(c *gin.Context) {
 		return
 	}
 
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// handleTokenExchange handles the RFC 8693 token exchange grant type.
+func (h *TokenHandlers) handleTokenExchange(c *gin.Context, req *domain.TokenRequest) {
+	exchangeReq := &TokenExchangeRequest{
+		SubjectToken:       req.SubjectToken,
+		SubjectTokenType:   req.SubjectTokenType,
+		ActorToken:         req.ActorToken,
+		ActorTokenType:     req.ActorTokenType,
+		RequestedTokenType: req.RequestedTokenType,
+		Audience:           req.Audience,
+		Scope:              req.Scope,
+	}
+
+	result, err := h.token.TokenExchange(c.Request.Context(), exchangeReq)
 	if err != nil {
 		handleServiceError(c, err)
 		return

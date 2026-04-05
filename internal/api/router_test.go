@@ -99,6 +99,7 @@ func (m *mockAuthService) LogoutAll(ctx context.Context, userID string) error {
 type mockTokenService struct {
 	refreshFn           func(ctx context.Context, refreshToken string) (*api.AuthResult, error)
 	clientCredentialsFn func(ctx context.Context, clientID, clientSecret string) (*api.AuthResult, error)
+	tokenExchangeFn     func(ctx context.Context, req *api.TokenExchangeRequest) (*api.TokenExchangeResult, error)
 	revokeFn            func(ctx context.Context, token string) error
 	jwksFn              func(ctx context.Context) (*api.JWKSResponse, error)
 }
@@ -123,6 +124,18 @@ func (m *mockTokenService) ClientCredentials(ctx context.Context, clientID, clie
 		AccessToken: "qf_at_client",
 		TokenType:   "Bearer",
 		ExpiresIn:   3600,
+	}, nil
+}
+
+func (m *mockTokenService) TokenExchange(ctx context.Context, req *api.TokenExchangeRequest) (*api.TokenExchangeResult, error) {
+	if m.tokenExchangeFn != nil {
+		return m.tokenExchangeFn(ctx, req)
+	}
+	return &api.TokenExchangeResult{
+		AccessToken:     "qf_at_exchanged",
+		IssuedTokenType: "urn:ietf:params:oauth:token-type:access_token",
+		TokenType:       "Bearer",
+		ExpiresIn:       3600,
 	}, nil
 }
 
@@ -401,6 +414,104 @@ func TestToken_RefreshServiceError(t *testing.T) {
 	w := doRequest(router, http.MethodPost, "/auth/token", body)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// --- Token Exchange tests ---
+
+func TestToken_TokenExchangeGrant(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{
+		"grant_type":         "urn:ietf:params:oauth:grant-type:token-exchange",
+		"subject_token":      "qf_at_some_access_token",
+		"subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/token", body)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.TokenExchangeResult
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "qf_at_exchanged", resp.AccessToken)
+	assert.Equal(t, "urn:ietf:params:oauth:token-type:access_token", resp.IssuedTokenType)
+	assert.Equal(t, "Bearer", resp.TokenType)
+	assert.Equal(t, 3600, resp.ExpiresIn)
+}
+
+func TestToken_TokenExchangeMissingSubjectToken(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{
+		"grant_type":         "urn:ietf:params:oauth:grant-type:token-exchange",
+		"subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/token", body)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
+
+func TestToken_TokenExchangeMissingSubjectTokenType(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{
+		"grant_type":    "urn:ietf:params:oauth:grant-type:token-exchange",
+		"subject_token": "qf_at_some_access_token",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/token", body)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
+
+func TestToken_TokenExchangeServiceError(t *testing.T) {
+	tokenSvc := &mockTokenService{
+		tokenExchangeFn: func(_ context.Context, _ *api.TokenExchangeRequest) (*api.TokenExchangeResult, error) {
+			return nil, fmt.Errorf("invalid subject_token: %w", api.ErrUnauthorized)
+		},
+	}
+	router := newTestRouter(&mockAuthService{}, tokenSvc)
+
+	body := map[string]string{
+		"grant_type":         "urn:ietf:params:oauth:grant-type:token-exchange",
+		"subject_token":      "qf_at_expired",
+		"subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/token", body)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestToken_TokenExchangeWithOptionalParams(t *testing.T) {
+	var captured *api.TokenExchangeRequest
+	tokenSvc := &mockTokenService{
+		tokenExchangeFn: func(_ context.Context, req *api.TokenExchangeRequest) (*api.TokenExchangeResult, error) {
+			captured = req
+			return &api.TokenExchangeResult{
+				AccessToken:     "qf_at_exchanged_scoped",
+				IssuedTokenType: "urn:ietf:params:oauth:token-type:access_token",
+				TokenType:       "Bearer",
+				ExpiresIn:       1800,
+			}, nil
+		},
+	}
+	router := newTestRouter(&mockAuthService{}, tokenSvc)
+
+	body := map[string]string{
+		"grant_type":           "urn:ietf:params:oauth:grant-type:token-exchange",
+		"subject_token":        "qf_at_some_access_token",
+		"subject_token_type":   "urn:ietf:params:oauth:token-type:access_token",
+		"audience":             "https://api.example.com",
+		"scope":                "read write",
+		"requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/token", body)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, captured)
+	assert.Equal(t, "qf_at_some_access_token", captured.SubjectToken)
+	assert.Equal(t, "urn:ietf:params:oauth:token-type:access_token", captured.SubjectTokenType)
+	assert.Equal(t, "https://api.example.com", captured.Audience)
+	assert.Equal(t, "read write", captured.Scope)
+	assert.Equal(t, "urn:ietf:params:oauth:token-type:access_token", captured.RequestedTokenType)
 }
 
 // --- Revoke tests ---
