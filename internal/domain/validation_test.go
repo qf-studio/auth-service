@@ -287,6 +287,38 @@ func TestNewValidator_PasswordResetConfirmRequest(t *testing.T) {
 	}
 }
 
+func TestNewValidator_VerifyEmailRequest(t *testing.T) {
+	v := domain.NewValidator()
+
+	tests := []struct {
+		name    string
+		req     domain.VerifyEmailRequest
+		wantErr bool
+	}{
+		{
+			name:    "valid token",
+			req:     domain.VerifyEmailRequest{Token: "verify-token-abc123"},
+			wantErr: false,
+		},
+		{
+			name:    "missing token",
+			req:     domain.VerifyEmailRequest{},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := v.Struct(tt.req)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 // --- Middleware integration tests ---
 
 func TestValidateRequest_ValidBody(t *testing.T) {

@@ -4,18 +4,21 @@ import "time"
 
 // User represents a user account in the system.
 type User struct {
-	ID           string
-	Email        string
-	PasswordHash string
-	Name         string
-	Roles        []string
-	Locked       bool
-	LockedAt     *time.Time
-	LockedReason string
-	LastLoginAt  *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	DeletedAt    *time.Time
+	ID                        string
+	Email                     string
+	PasswordHash              string
+	Name                      string
+	Roles                     []string
+	Locked                    bool
+	LockedAt                  *time.Time
+	LockedReason              string
+	EmailVerified             bool
+	EmailVerifyToken          *string
+	EmailVerifyTokenExpiresAt *time.Time
+	LastLoginAt               *time.Time
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	DeletedAt                 *time.Time
 }
 
 // IsActive returns true if the user is not locked and not soft-deleted.

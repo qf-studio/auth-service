@@ -37,14 +37,15 @@ func NewPostgresAdminUserRepository(pool *pgxpool.Pool) *PostgresAdminUserReposi
 	return &PostgresAdminUserRepository{pool: pool}
 }
 
-const userColumns = `id, email, password_hash, name, roles, locked, locked_at, locked_reason, last_login_at, created_at, updated_at, deleted_at`
+const userColumns = `id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, last_login_at, created_at, updated_at, deleted_at`
 
 func scanUser(row pgx.Row) (*domain.User, error) {
 	u := &domain.User{}
 	err := row.Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Roles,
-		&u.Locked, &u.LockedAt, &u.LockedReason, &u.LastLoginAt,
-		&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
+		&u.Locked, &u.LockedAt, &u.LockedReason,
+		&u.EmailVerified, &u.EmailVerifyToken, &u.EmailVerifyTokenExpiresAt,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -88,8 +89,9 @@ func (r *PostgresAdminUserRepository) List(ctx context.Context, limit, offset in
 		u := &domain.User{}
 		if err := rows.Scan(
 			&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Roles,
-			&u.Locked, &u.LockedAt, &u.LockedReason, &u.LastLoginAt,
-			&u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
+			&u.Locked, &u.LockedAt, &u.LockedReason,
+			&u.EmailVerified, &u.EmailVerifyToken, &u.EmailVerifyTokenExpiresAt,
+			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan user: %w", err)
 		}
