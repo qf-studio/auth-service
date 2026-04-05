@@ -42,7 +42,17 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 
 	v := domain.NewValidator()
 	authH := NewAuthHandlers(svc.Auth, svc.Session)
-	tokenH := NewTokenHandlers(svc.Token)
+
+	// Build request URI function for DPoP proof validation.
+	requestURIFn := func(c *gin.Context) string {
+		scheme := "https"
+		if c.Request.TLS == nil {
+			scheme = "http"
+		}
+		return scheme + "://" + c.Request.Host + c.Request.URL.Path
+	}
+
+	tokenH := NewTokenHandlers(svc.Token, svc.DPoPToken, svc.DPoPValidator, requestURIFn)
 
 	var sessionH *SessionHandlers
 	if svc.Session != nil {
@@ -78,6 +88,9 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 	}
 	if mw != nil && mw.Auth != nil {
 		protected.Use(mw.Auth)
+	}
+	if mw != nil && mw.DPoP != nil {
+		protected.Use(mw.DPoP)
 	}
 	protected.GET("/me", authH.Me)
 	protected.PUT("/me/password", validateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)

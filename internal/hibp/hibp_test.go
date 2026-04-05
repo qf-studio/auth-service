@@ -54,10 +54,10 @@ func TestIsBreached_APIError(t *testing.T) {
 
 func TestMatchesSuffix(t *testing.T) {
 	tests := []struct {
-		name    string
-		body    string
-		suffix  string
-		want    bool
+		name   string
+		body   string
+		suffix string
+		want   bool
 	}{
 		{
 			name:   "match",

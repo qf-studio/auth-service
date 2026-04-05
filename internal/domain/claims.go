@@ -34,4 +34,8 @@ type TokenClaims struct {
 	// IssuedAt is the token issuance time from the JWT iat claim.
 	// Zero value means not set.
 	IssuedAt time.Time
+
+	// JWKThumbprint is the DPoP JWK thumbprint (cnf.jkt) bound to this token.
+	// Empty string means the token is not DPoP-bound (plain Bearer).
+	JWKThumbprint string
 }

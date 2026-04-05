@@ -109,7 +109,14 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 
 // IssueTokenPair generates an access/refresh token pair for the given subject.
 func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error) {
-	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType)
+	return s.IssueTokenPairDPoP(ctx, subject, roles, scopes, clientType, "")
+}
+
+// IssueTokenPairDPoP generates an access/refresh token pair with optional DPoP binding.
+// If dpopThumbprint is non-empty, the access token includes a cnf.jkt claim and
+// the returned token_type is "DPoP" instead of "Bearer".
+func (s *Service) IssueTokenPairDPoP(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, dpopThumbprint string) (*api.AuthResult, error) {
+	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, dpopThumbprint)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
 	}
@@ -119,10 +126,15 @@ func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, sco
 		return nil, fmt.Errorf("issue refresh token: %w", err)
 	}
 
+	tokenType := "Bearer"
+	if dpopThumbprint != "" {
+		tokenType = "DPoP"
+	}
+
 	return &api.AuthResult{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
-		TokenType:    "Bearer",
+		TokenType:    tokenType,
 		ExpiresIn:    int(s.cfg.AccessTokenTTL.Seconds()),
 	}, nil
 }
@@ -157,6 +169,36 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (*api.Aut
 // Stub: client verification depends on client repository (future issue).
 func (s *Service) ClientCredentials(_ context.Context, _, _ string) (*api.AuthResult, error) {
 	// TODO(GH-XX): implement client credentials grant with client repository lookup.
+	return nil, fmt.Errorf("client credentials not yet implemented: %w", api.ErrInternalError)
+}
+
+// RefreshDPoP exchanges a refresh token for a new DPoP-bound token pair.
+func (s *Service) RefreshDPoP(ctx context.Context, rawRefreshToken, dpopThumbprint string) (*api.AuthResult, error) {
+	subject, err := s.validateRefreshToken(ctx, rawRefreshToken)
+	if err != nil {
+		return nil, fmt.Errorf("invalid refresh token: %w", api.ErrUnauthorized)
+	}
+
+	s.deleteRefreshToken(ctx, rawRefreshToken)
+
+	result, err := s.IssueTokenPairDPoP(ctx, subject, nil, nil, domain.ClientTypeUser, dpopThumbprint)
+	if err != nil {
+		return nil, err
+	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventTokenRefresh,
+		ActorID:  subject,
+		TargetID: subject,
+		Metadata: map[string]string{"dpop_bound": "true"},
+	})
+
+	return result, nil
+}
+
+// ClientCredentialsDPoP issues a DPoP-bound token for service-to-service authentication.
+// Stub: client verification depends on client repository (future issue).
+func (s *Service) ClientCredentialsDPoP(_ context.Context, _, _, _ string) (*api.AuthResult, error) {
 	return nil, fmt.Errorf("client credentials not yet implemented: %w", api.ErrInternalError)
 }
 
@@ -239,12 +281,18 @@ func (s *Service) IsRevoked(ctx context.Context, tokenID string) (bool, error) {
 
 // ── Internal: Access Token ───────────────────────────────────────────────────
 
+// cnfClaim represents the JWT Confirmation (cnf) claim for DPoP binding (RFC 9449).
+type cnfClaim struct {
+	JKT string `json:"jkt"` // JWK SHA-256 Thumbprint
+}
+
 // customClaims extends jwt.RegisteredClaims with our application-specific fields.
 type customClaims struct {
 	jwt.RegisteredClaims
-	Roles      []string `json:"roles,omitempty"`
-	Scopes     []string `json:"scopes,omitempty"`
-	ClientType string   `json:"client_type"`
+	Roles      []string  `json:"roles,omitempty"`
+	Scopes     []string  `json:"scopes,omitempty"`
+	ClientType string    `json:"client_type"`
+	Cnf        *cnfClaim `json:"cnf,omitempty"`
 }
 
 // GetJTI is a helper to extract the JTI from RegisteredClaims.
@@ -252,7 +300,7 @@ func (c *customClaims) GetJTI() (string, error) {
 	return c.ID, nil
 }
 
-func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType) (string, error) {
+func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType, dpopThumbprint string) (string, error) {
 	jti, err := generateRandomID(jtiBytes)
 	if err != nil {
 		return "", fmt.Errorf("generate jti: %w", err)
@@ -270,6 +318,10 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 		Roles:      roles,
 		Scopes:     scopes,
 		ClientType: string(clientType),
+	}
+
+	if dpopThumbprint != "" {
+		claims.Cnf = &cnfClaim{JKT: dpopThumbprint}
 	}
 
 	token := jwt.NewWithClaims(s.signingMethod, claims)
@@ -333,6 +385,9 @@ func claimsToDomain(c *customClaims) (*domain.TokenClaims, error) {
 	}
 	if c.IssuedAt != nil {
 		claims.IssuedAt = c.IssuedAt.Time
+	}
+	if c.Cnf != nil {
+		claims.JWKThumbprint = c.Cnf.JKT
 	}
 
 	return claims, nil
@@ -547,3 +602,4 @@ func generateRandomBytes(n int) ([]byte, error) {
 
 // Ensure Service implements the required interfaces at compile time.
 var _ api.TokenService = (*Service)(nil)
+var _ api.DPoPTokenService = (*Service)(nil)

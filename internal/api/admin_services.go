@@ -31,14 +31,14 @@ type AdminUserList struct {
 
 // AdminClient represents an OAuth2 client in admin API responses.
 type AdminClient struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	ClientType  string     `json:"client_type"`
-	Scopes      []string   `json:"scopes"`
-	RedirectURIs []string  `json:"redirect_uris,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	ClientType   string     `json:"client_type"`
+	Scopes       []string   `json:"scopes"`
+	RedirectURIs []string   `json:"redirect_uris,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
 }
 
 // AdminClientWithSecret is returned only on create and secret rotation.

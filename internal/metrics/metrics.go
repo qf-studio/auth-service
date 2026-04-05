@@ -115,18 +115,18 @@ func (c *Collector) Middleware() gin.HandlerFunc {
 
 // JSONSnapshot is the structure returned by JSONExport.
 type JSONSnapshot struct {
-	TotalRequests  int64                  `json:"total_requests"`
-	StatusCodes    map[string]int64       `json:"status_codes"`
-	Endpoints      map[string]int64       `json:"endpoints"`
-	Duration       DurationSnapshot       `json:"duration"`
-	AuthEvents     map[string]int64       `json:"auth_events"`
+	TotalRequests int64            `json:"total_requests"`
+	StatusCodes   map[string]int64 `json:"status_codes"`
+	Endpoints     map[string]int64 `json:"endpoints"`
+	Duration      DurationSnapshot `json:"duration"`
+	AuthEvents    map[string]int64 `json:"auth_events"`
 }
 
 // DurationSnapshot holds histogram data for JSON export.
 type DurationSnapshot struct {
-	Count   int64              `json:"count"`
-	SumMs   float64            `json:"sum_ms"`
-	Buckets []BucketSnapshot   `json:"buckets"`
+	Count   int64            `json:"count"`
+	SumMs   float64          `json:"sum_ms"`
+	Buckets []BucketSnapshot `json:"buckets"`
 }
 
 // BucketSnapshot represents one histogram bucket boundary and its cumulative count.

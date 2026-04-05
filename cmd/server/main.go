@@ -21,6 +21,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
+	"github.com/qf-studio/auth-service/internal/dpop"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -91,10 +92,22 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	sessionStore := session.NewMemoryStore()
 	sessionSvc := session.NewService(sessionStore)
 
+	// ── DPoP ─────────────────────────────────────────────────────────────
+	dpopSvc := dpop.NewService(cfg.DPoP, redisClient, log)
+
 	services := &api.Services{
 		Auth:    authSvc,
 		Token:   tokenSvc,
 		Session: sessionSvc,
+	}
+
+	if cfg.DPoP.Enabled {
+		services.DPoPToken = tokenSvc
+		services.DPoPValidator = dpop.NewHandlerAdapter(dpopSvc)
+		log.Info("DPoP proof-of-possession enabled",
+			zap.Duration("nonce_ttl", cfg.DPoP.NonceTTL),
+			zap.Duration("jti_window", cfg.DPoP.JTIWindow),
+		)
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -120,6 +133,15 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
 
+	// Build request URI function for DPoP middleware.
+	requestURIFn := func(c *gin.Context) string {
+		scheme := "https"
+		if c.Request.TLS == nil {
+			scheme = "http"
+		}
+		return scheme + "://" + c.Request.Host + c.Request.URL.Path
+	}
+
 	mw := &api.MiddlewareStack{
 		CORS:            middleware.CORS(cfg.CORS),
 		CorrelationID:   middleware.CorrelationID(log),
@@ -128,6 +150,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
 		APIKey:          middleware.APIKeyMiddleware(adminAPIKeySvc),
 		Auth:            middleware.AuthMiddleware(tokenSvc),
+		DPoP:            middleware.DPoPMiddleware(dpop.NewMiddlewareAdapter(dpopSvc), requestURIFn),
 		Metrics:         metricsCollector.Middleware(),
 	}
 
