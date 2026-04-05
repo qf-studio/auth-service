@@ -25,17 +25,17 @@ import (
 )
 
 const (
-	// nonceKeyPrefix is the Redis key prefix for DPoP nonces.
-	nonceKeyPrefix = "dpop:nonce:"
+	// svcNonceKeyPrefix is the Redis key prefix for DPoP nonces (Service implementation).
+	svcNonceKeyPrefix = "dpop:nonce:"
 
-	// jtiKeyPrefix is the Redis key prefix for JTI replay protection.
-	jtiKeyPrefix = "dpop:jti:"
+	// svcJTIKeyPrefix is the Redis key prefix for JTI replay protection (Service implementation).
+	svcJTIKeyPrefix = "dpop:jti:"
 
-	// maxClockSkew allows a small amount of clock drift for iat validation.
-	maxClockSkew = 30 * time.Second
+	// svcMaxClockSkew allows a small amount of clock drift for iat validation.
+	svcMaxClockSkew = 30 * time.Second
 
-	// maxProofAge is the maximum age of a DPoP proof from issuance.
-	maxProofAge = 5 * time.Minute
+	// svcMaxProofAge is the maximum age of a DPoP proof from issuance.
+	svcMaxProofAge = 5 * time.Minute
 )
 
 // ProofClaims contains the validated claims extracted from a DPoP proof JWT.
@@ -100,7 +100,7 @@ func (s *Service) ValidateProof(ctx context.Context, proofJWT, httpMethod, httpU
 		return nil, fmt.Errorf("missing jwk header")
 	}
 
-	pubKey, err := parseJWK(jwkRaw)
+	pubKey, err := svcParseJWK(jwkRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parse jwk: %w", err)
 	}
@@ -144,10 +144,10 @@ func (s *Service) ValidateProof(ctx context.Context, proofJWT, httpMethod, httpU
 	iat := time.Unix(int64(iatFloat), 0)
 	now := time.Now()
 
-	if now.Add(maxClockSkew).Before(iat) {
+	if now.Add(svcMaxClockSkew).Before(iat) {
 		return nil, fmt.Errorf("DPoP proof issued in the future")
 	}
-	if now.Sub(iat) > maxProofAge {
+	if now.Sub(iat) > svcMaxProofAge {
 		return nil, fmt.Errorf("DPoP proof too old (issued %s ago)", now.Sub(iat))
 	}
 
@@ -190,7 +190,7 @@ func (s *Service) IssueNonce(ctx context.Context) (string, error) {
 	}
 	nonce := base64.RawURLEncoding.EncodeToString(b)
 
-	key := nonceKeyPrefix + nonce
+	key := svcNonceKeyPrefix + nonce
 	if err := s.redis.Set(ctx, key, "1", s.cfg.NonceTTL).Err(); err != nil {
 		return "", fmt.Errorf("store nonce: %w", err)
 	}
@@ -200,7 +200,7 @@ func (s *Service) IssueNonce(ctx context.Context) (string, error) {
 
 // validateNonce checks whether a nonce exists in Redis.
 func (s *Service) validateNonce(ctx context.Context, nonce string) (bool, error) {
-	key := nonceKeyPrefix + nonce
+	key := svcNonceKeyPrefix + nonce
 	n, err := s.redis.Exists(ctx, key).Result()
 	if err != nil {
 		return false, err
@@ -210,7 +210,7 @@ func (s *Service) validateNonce(ctx context.Context, nonce string) (bool, error)
 
 // checkAndStoreJTI ensures the JTI hasn't been seen within the replay window.
 func (s *Service) checkAndStoreJTI(ctx context.Context, jti string) error {
-	key := jtiKeyPrefix + jti
+	key := svcJTIKeyPrefix + jti
 	set, err := s.redis.SetNX(ctx, key, "1", s.cfg.JTIWindow).Result()
 	if err != nil {
 		return fmt.Errorf("JTI replay check: %w", err)
@@ -221,8 +221,8 @@ func (s *Service) checkAndStoreJTI(ctx context.Context, jti string) error {
 	return nil
 }
 
-// parseJWK extracts a crypto.PublicKey from a JWK map in the JWT header.
-func parseJWK(raw interface{}) (crypto.PublicKey, error) {
+// svcParseJWK extracts a crypto.PublicKey from a JWK map in the JWT header.
+func svcParseJWK(raw interface{}) (crypto.PublicKey, error) {
 	jwkMap, ok := raw.(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("jwk is not an object")
@@ -232,15 +232,15 @@ func parseJWK(raw interface{}) (crypto.PublicKey, error) {
 
 	switch kty {
 	case "EC":
-		return parseECPublicKey(jwkMap)
+		return svcParseECPublicKey(jwkMap)
 	case "OKP":
-		return parseOKPPublicKey(jwkMap)
+		return svcParseOKPPublicKey(jwkMap)
 	default:
 		return nil, fmt.Errorf("unsupported key type: %q", kty)
 	}
 }
 
-func parseECPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
+func svcParseECPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
 	crv, _ := jwk["crv"].(string)
 	if crv != "P-256" {
 		return nil, fmt.Errorf("unsupported EC curve: %q (only P-256 supported)", crv)
@@ -271,7 +271,7 @@ func parseECPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
 	return key, nil
 }
 
-func parseOKPPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
+func svcParseOKPPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
 	crv, _ := jwk["crv"].(string)
 	if crv != "Ed25519" {
 		return nil, fmt.Errorf("unsupported OKP curve: %q", crv)

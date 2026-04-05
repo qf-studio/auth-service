@@ -241,7 +241,7 @@ func TestIssueNonce(t *testing.T) {
 	assert.NotEmpty(t, nonce)
 
 	// Verify the nonce exists in Redis.
-	key := nonceKeyPrefix + nonce
+	key := svcNonceKeyPrefix + nonce
 	val, err := mr.Get(key)
 	require.NoError(t, err)
 	assert.Equal(t, "1", val)
