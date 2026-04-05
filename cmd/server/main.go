@@ -120,12 +120,25 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	authSvc.SetMFAChecker(mfaSvc)
 
 	// ── OAuth ─────────────────────────────────────────────────────────────
-	// Collect enabled OAuth providers. Concrete provider implementations
-	// (Google, GitHub, Apple) are registered in subsequent issues; the
-	// service and handlers are wired now so that provider registration is
-	// the only remaining step.
+	oauthRepo := storage.NewPostgresOAuthAccountRepository(pgPool)
+	oauthStateGen := oauth.NewHMACStateGenerator(
+		[]byte(cfg.JWT.SystemSecrets[0]), // Reuse first system secret for state HMAC.
+		10*time.Minute,
+	)
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+
 	var oauthProviders []oauth.Provider
-	oauthSvc := oauth.NewService(cfg.OAuth, nil, tokenSvc, log, oauthProviders...)
+	if cfg.OAuth.Google.Enabled {
+		oauthProviders = append(oauthProviders, oauth.NewGoogleProvider(cfg.OAuth.Google, httpClient, oauthStateGen))
+	}
+	if cfg.OAuth.GitHub.Enabled {
+		oauthProviders = append(oauthProviders, oauth.NewGitHubProvider(cfg.OAuth.GitHub, httpClient, oauthStateGen))
+	}
+	if cfg.OAuth.Apple.Enabled {
+		oauthProviders = append(oauthProviders, oauth.NewAppleProvider(cfg.OAuth.Apple, httpClient, oauthStateGen))
+	}
+
+	oauthSvc := oauth.NewService(cfg.OAuth, oauthRepo, tokenSvc, userRepo, oauthStateGen, log, oauthProviders...)
 
 	services := &api.Services{
 		Auth:    authSvc,

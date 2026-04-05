@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -606,6 +607,16 @@ func loadOAuthProvider(l *loader, provider string) (OAuthProviderConfig, error) 
 	clientID := l.requireStr(prefix + "CLIENT_ID")
 	clientSecret := l.requireStr(prefix + "CLIENT_SECRET")
 	redirectURI := l.requireStr(prefix + "REDIRECT_URI")
+
+	if redirectURI != "" {
+		u, parseErr := url.Parse(redirectURI)
+		if parseErr != nil || u.Scheme == "" || u.Host == "" {
+			return OAuthProviderConfig{}, fmt.Errorf("%sREDIRECT_URI: invalid URL %q", prefix, redirectURI)
+		}
+		if u.Scheme != "https" && u.Scheme != "http" {
+			return OAuthProviderConfig{}, fmt.Errorf("%sREDIRECT_URI: scheme must be http or https, got %q", prefix, u.Scheme)
+		}
+	}
 
 	return OAuthProviderConfig{
 		ClientID:     clientID,

@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
@@ -24,11 +26,23 @@ type Provider interface {
 	ExchangeCode(ctx context.Context, code string) (*domain.OAuthUser, error)
 }
 
+// TokenIssuer abstracts token pair creation for the OAuth service.
+type TokenIssuer interface {
+	IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error)
+}
+
+// UserFinder looks up users by email for account linking during OAuth flows.
+type UserFinder interface {
+	FindByEmail(ctx context.Context, email string) (*domain.User, error)
+}
+
 // Service orchestrates OAuth authentication flows.
 type Service struct {
 	providers map[string]Provider
 	repo      storage.OAuthAccountRepository
-	tokenSvc  api.TokenService
+	issuer    TokenIssuer
+	users     UserFinder
+	stateGen  StateGenerator
 	log       *zap.Logger
 }
 
@@ -36,7 +50,9 @@ type Service struct {
 func NewService(
 	cfg config.OAuthConfig,
 	repo storage.OAuthAccountRepository,
-	tokenSvc api.TokenService,
+	issuer TokenIssuer,
+	users UserFinder,
+	stateGen StateGenerator,
 	log *zap.Logger,
 	providers ...Provider,
 ) *Service {
@@ -56,7 +72,9 @@ func NewService(
 	return &Service{
 		providers: pm,
 		repo:      repo,
-		tokenSvc:  tokenSvc,
+		issuer:    issuer,
+		users:     users,
+		stateGen:  stateGen,
 		log:       log,
 	}
 }
@@ -84,6 +102,15 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state stri
 		return nil, fmt.Errorf("%w: %s", api.ErrNotFound, domain.ErrOAuthProviderNotSupported.Error())
 	}
 
+	// Validate CSRF state token.
+	if state == "" {
+		return nil, fmt.Errorf("%w: %v", api.ErrUnauthorized, domain.ErrOAuthStateMismatch)
+	}
+	if err := s.stateGen.Validate(state); err != nil {
+		s.log.Warn("OAuth state validation failed", zap.String("provider", provider), zap.Error(err))
+		return nil, fmt.Errorf("%w: %v", api.ErrUnauthorized, domain.ErrOAuthStateMismatch)
+	}
+
 	oauthUser, err := p.ExchangeCode(ctx, code)
 	if err != nil {
 		s.log.Error("OAuth code exchange failed",
@@ -104,15 +131,50 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state stri
 			zap.String("provider", provider),
 			zap.String("user_id", existing.UserID),
 		)
-		// Return a placeholder result — actual token issuance depends on
-		// integration with the auth service (implemented in a subsequent issue).
-		return &api.AuthResult{
-			UserID: existing.UserID,
-		}, nil
+		result, err := s.issuer.IssueTokenPair(ctx, existing.UserID, nil, nil, domain.ClientTypeUser)
+		if err != nil {
+			return nil, fmt.Errorf("issue token pair: %w", err)
+		}
+		return result, nil
 	}
 
-	// No linked account found — the full account creation/linking flow
-	// is handled in a subsequent issue. Return an error for now.
+	// No linked account — try to find an existing user by email and link.
+	if oauthUser.Email != "" {
+		user, err := s.users.FindByEmail(ctx, oauthUser.Email)
+		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("find user by email: %w", err)
+		}
+		if user != nil {
+			// Link the OAuth account to the existing user.
+			account := &domain.OAuthAccount{
+				ID:             uuid.New().String(),
+				UserID:         user.ID,
+				Provider:       provider,
+				ProviderUserID: oauthUser.ProviderUserID,
+				Email:          oauthUser.Email,
+				CreatedAt:      time.Now().UTC(),
+			}
+			if _, err := s.repo.Create(ctx, account); err != nil {
+				if errors.Is(err, storage.ErrDuplicateOAuthAccount) {
+					return nil, fmt.Errorf("%w: %v", api.ErrConflict, domain.ErrOAuthAccountAlreadyLinked)
+				}
+				return nil, fmt.Errorf("create oauth account: %w", err)
+			}
+
+			s.log.Info("OAuth account linked to existing user",
+				zap.String("provider", provider),
+				zap.String("user_id", user.ID),
+			)
+
+			result, err := s.issuer.IssueTokenPair(ctx, user.ID, user.Roles, nil, domain.ClientTypeUser)
+			if err != nil {
+				return nil, fmt.Errorf("issue token pair: %w", err)
+			}
+			return result, nil
+		}
+	}
+
+	// No linked account and no matching user by email.
 	s.log.Info("OAuth callback for unlinked provider user",
 		zap.String("provider", provider),
 		zap.String("provider_user_id", oauthUser.ProviderUserID),
