@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "github.com/qf-studio/auth-service/proto/auth/v1;authv1";
+
+import "google/protobuf/timestamp.proto";
+
+// AuthService provides token validation, user lookup, and permission checks.
+service AuthService {
+  // ValidateToken verifies a token and returns its claims.
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+
+  // GetUser retrieves user details by ID.
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+
+  // CheckPermission evaluates whether a subject may perform an action on an object.
+  rpc CheckPermission(CheckPermissionRequest) returns (CheckPermissionResponse);
+
+  // IntrospectToken returns full token metadata (RFC 7662-style).
+  rpc IntrospectToken(IntrospectTokenRequest) returns (IntrospectTokenResponse);
+}
+
+// Health implements grpc.health.v1.Health for load-balancer probes.
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// ---------- ValidateToken ----------
+
+message ValidateTokenRequest {
+  // The raw access token (including prefix, e.g. "qf_at_...").
+  string access_token = 1;
+}
+
+message ValidateTokenResponse {
+  bool valid = 1;
+  TokenClaims claims = 2;
+}
+
+// ---------- GetUser ----------
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+// ---------- CheckPermission ----------
+
+message CheckPermissionRequest {
+  // Casbin triple: subject, object, action.
+  string subject = 1;
+  string object = 2;
+  string action = 3;
+}
+
+message CheckPermissionResponse {
+  bool allowed = 1;
+}
+
+// ---------- IntrospectToken ----------
+
+message IntrospectTokenRequest {
+  string token = 1;
+}
+
+message IntrospectTokenResponse {
+  bool active = 1;
+  TokenClaims claims = 2;
+}
+
+// ---------- Shared messages ----------
+
+// TokenClaims mirrors domain.TokenClaims.
+message TokenClaims {
+  string subject = 1;
+  repeated string roles = 2;
+  repeated string scopes = 3;
+  string client_type = 4;
+  string token_id = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  google.protobuf.Timestamp issued_at = 7;
+  string jkt_thumbprint = 8;
+}
+
+// User mirrors domain.User (public fields only — no password hash).
+message User {
+  string id = 1;
+  string email = 2;
+  string name = 3;
+  repeated string roles = 4;
+  bool locked = 5;
+  bool email_verified = 6;
+  google.protobuf.Timestamp last_login_at = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// ---------- Health ----------
+
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  ServingStatus status = 1;
+}
