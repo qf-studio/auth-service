@@ -35,6 +35,9 @@ type TenantConfig struct {
 	ResolutionMode string        // TENANT_RESOLUTION_MODE: "subdomain", "header", or "both" (default "both")
 	BaseDomain     string        // TENANT_BASE_DOMAIN: base domain for subdomain parsing (e.g. "auth.quantflow.studio")
 	CacheTTL       time.Duration // TENANT_CACHE_TTL: how long to cache tenant lookups
+	SlugMinLength  int           // TENANT_SLUG_MIN_LENGTH: minimum slug length for new tenants (default 2)
+	SlugMaxLength  int           // TENANT_SLUG_MAX_LENGTH: maximum slug length for new tenants (default 63)
+	NameMaxLength  int           // TENANT_NAME_MAX_LENGTH: maximum display name length (default 128)
 }
 
 // SAMLConfig holds SAML Service Provider settings.
@@ -736,11 +739,27 @@ func loadTenant(l *loader) (TenantConfig, error) {
 		return TenantConfig{}, fmt.Errorf("TENANT_CACHE_TTL: %w", err)
 	}
 
+	slugMinLen, err := l.optInt("TENANT_SLUG_MIN_LENGTH", 2)
+	if err != nil {
+		return TenantConfig{}, err
+	}
+	slugMaxLen, err := l.optInt("TENANT_SLUG_MAX_LENGTH", 63)
+	if err != nil {
+		return TenantConfig{}, err
+	}
+	nameMaxLen, err := l.optInt("TENANT_NAME_MAX_LENGTH", 128)
+	if err != nil {
+		return TenantConfig{}, err
+	}
+
 	return TenantConfig{
 		DefaultID:      defaultID,
 		ResolutionMode: mode,
 		BaseDomain:     baseDomain,
 		CacheTTL:       cacheTTL,
+		SlugMinLength:  slugMinLen,
+		SlugMaxLength:  slugMaxLen,
+		NameMaxLength:  nameMaxLen,
 	}, nil
 }
 

@@ -14,4 +14,5 @@ func TestInterfaceCompliance(t *testing.T) {
 	var _ storage.ClientRepository = (*mocks.MockClientRepository)(nil)
 	var _ storage.RefreshTokenRepository = (*mocks.MockRefreshTokenRepository)(nil)
 	var _ storage.OAuthAccountRepository = (*mocks.MockOAuthAccountRepository)(nil)
+	var _ storage.TenantRepository = (*mocks.MockTenantRepository)(nil)
 }
