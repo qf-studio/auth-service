@@ -47,4 +47,13 @@ var (
 	ErrOAuthAccountNotFound      = errors.New("oauth account not found")
 	ErrOAuthStateMismatch        = errors.New("oauth state mismatch")
 	ErrOAuthCodeExchangeFailed   = errors.New("oauth code exchange failed")
+
+	// SAML errors.
+	ErrSAMLResponseInvalid      = errors.New("saml response invalid")
+	ErrSAMLAssertionExpired     = errors.New("saml assertion expired")
+	ErrSAMLSignatureInvalid     = errors.New("saml signature invalid")
+	ErrSAMLIdPNotConfigured     = errors.New("saml idp not configured")
+	ErrSAMLIdentityNotFound     = errors.New("saml identity not found")
+	ErrSAMLIdentityAlreadyLinked = errors.New("saml identity already linked")
+	ErrSAMLRequestIDMismatch    = errors.New("saml request id mismatch")
 )
