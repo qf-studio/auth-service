@@ -22,6 +22,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/dpop"
+	authgrpc "github.com/qf-studio/auth-service/internal/grpc"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -221,6 +222,17 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Metrics: metricsCollector,
 	}
 
+	// ── gRPC server ──────────────────────────────────────────────────────
+	grpcSrv, err := authgrpc.New(cfg.GRPC, authgrpc.Deps{
+		Logger: log,
+	})
+	if err != nil {
+		return fmt.Errorf("grpc server init failed: %w", err)
+	}
+	if err := grpcSrv.Start(); err != nil {
+		return fmt.Errorf("grpc server start failed: %w", err)
+	}
+
 	// ── HTTP servers ──────────────────────────────────────────────────────
 	publicRouter := api.NewPublicRouter(services, mw, healthSvc)
 	adminRouter := api.NewAdminRouter(adminServices, adminDeps)
@@ -236,10 +248,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Closers are released in order after HTTP drains: Redis first.
-	// Decision: Redis is listed before any future DB closer so that
-	// token-revocation lookups during drain can still reach the cache.
+	// Closers are released in order after HTTP drains.
+	// gRPC is drained first, then audit flushes, then Redis.
 	closers := []httpserver.Closer{
+		grpcSrv,
 		auditSvc,
 		&redisCloser{client: redisClient},
 	}
@@ -252,6 +264,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	log.Info("auth service started",
 		zap.Int("public_port", cfg.App.PublicPort),
 		zap.Int("admin_port", cfg.App.AdminPort),
+		zap.Int("grpc_port", cfg.GRPC.Port),
 		zap.String("env", cfg.App.Env),
 	)
 

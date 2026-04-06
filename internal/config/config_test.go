@@ -102,6 +102,16 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.Equal(t, "http://localhost:4000", cfg.OIDC.IssuerURL)
 	assert.Equal(t, 1*time.Hour, cfg.OIDC.IDTokenTTL)
 	assert.Equal(t, []string{"openid", "profile", "email", "offline_access"}, cfg.OIDC.SupportedScopes)
+
+	// GRPC defaults
+	assert.Equal(t, 4002, cfg.GRPC.Port)
+	assert.Empty(t, cfg.GRPC.TLSCertPath)
+	assert.Empty(t, cfg.GRPC.TLSKeyPath)
+	assert.Equal(t, 2*time.Hour, cfg.GRPC.KeepaliveTime)
+	assert.Equal(t, 20*time.Second, cfg.GRPC.KeepaliveTimeout)
+	assert.Equal(t, 5*time.Minute, cfg.GRPC.MaxConnectionIdle)
+	assert.Equal(t, 30*time.Minute, cfg.GRPC.MaxConnectionAge)
+	assert.Equal(t, 10*time.Second, cfg.GRPC.MaxConnectionAgeGrace)
 }
 
 func TestLoad_OIDCConfig(t *testing.T) {
@@ -561,6 +571,51 @@ func TestLoad_OAuthInvalidEnabled(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_ENABLED")
+}
+
+func TestLoad_GRPCCustomValues(t *testing.T) {
+	env := requiredEnv()
+	env["GRPC_PORT"] = "5002"
+	env["GRPC_TLS_CERT_PATH"] = "/certs/grpc.crt"
+	env["GRPC_TLS_KEY_PATH"] = "/certs/grpc.key"
+	env["GRPC_KEEPALIVE_TIME"] = "1h"
+	env["GRPC_KEEPALIVE_TIMEOUT"] = "10s"
+	env["GRPC_MAX_CONNECTION_IDLE"] = "10m"
+	env["GRPC_MAX_CONNECTION_AGE"] = "1h"
+	env["GRPC_MAX_CONNECTION_AGE_GRACE"] = "30s"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 5002, cfg.GRPC.Port)
+	assert.Equal(t, "/certs/grpc.crt", cfg.GRPC.TLSCertPath)
+	assert.Equal(t, "/certs/grpc.key", cfg.GRPC.TLSKeyPath)
+	assert.Equal(t, 1*time.Hour, cfg.GRPC.KeepaliveTime)
+	assert.Equal(t, 10*time.Second, cfg.GRPC.KeepaliveTimeout)
+	assert.Equal(t, 10*time.Minute, cfg.GRPC.MaxConnectionIdle)
+	assert.Equal(t, 1*time.Hour, cfg.GRPC.MaxConnectionAge)
+	assert.Equal(t, 30*time.Second, cfg.GRPC.MaxConnectionAgeGrace)
+}
+
+func TestLoad_GRPCInvalidKeepaliveTime(t *testing.T) {
+	env := requiredEnv()
+	env["GRPC_KEEPALIVE_TIME"] = "invalid"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GRPC_KEEPALIVE_TIME")
+}
+
+func TestLoad_GRPCInvalidPort(t *testing.T) {
+	env := requiredEnv()
+	env["GRPC_PORT"] = "not_a_number"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GRPC_PORT")
 }
 
 func BenchmarkLoad(b *testing.B) {

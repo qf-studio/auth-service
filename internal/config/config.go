@@ -25,6 +25,19 @@ type Config struct {
 	MFA          MFAConfig
 	OAuth        OAuthConfig
 	OIDC         OIDCConfig
+	GRPC         GRPCConfig
+}
+
+// GRPCConfig holds gRPC server settings.
+type GRPCConfig struct {
+	Port                  int           // GRPC_PORT: gRPC listen port (default 4002)
+	TLSCertPath           string        // GRPC_TLS_CERT_PATH: path to TLS certificate
+	TLSKeyPath            string        // GRPC_TLS_KEY_PATH: path to TLS private key
+	KeepaliveTime         time.Duration // GRPC_KEEPALIVE_TIME: ping interval for idle connections
+	KeepaliveTimeout      time.Duration // GRPC_KEEPALIVE_TIMEOUT: wait for ping ack before closing
+	MaxConnectionIdle     time.Duration // GRPC_MAX_CONNECTION_IDLE: close idle connections after this
+	MaxConnectionAge      time.Duration // GRPC_MAX_CONNECTION_AGE: max lifetime of a connection
+	MaxConnectionAgeGrace time.Duration // GRPC_MAX_CONNECTION_AGE_GRACE: grace period after max age
 }
 
 // OIDCConfig holds OpenID Connect provider settings.
@@ -267,6 +280,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	grpcCfg, err := loadGRPC(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -291,6 +308,7 @@ func Load() (*Config, error) {
 		MFA:          mfaCfg,
 		OAuth:        oauthCfg,
 		OIDC:         oidcCfg,
+		GRPC:         grpcCfg,
 	}, nil
 }
 
@@ -660,6 +678,57 @@ func loadOIDC(l *loader) (OIDCConfig, error) {
 		IssuerURL:       issuerURL,
 		IDTokenTTL:      idTokenTTL,
 		SupportedScopes: scopes,
+	}, nil
+}
+
+func loadGRPC(l *loader) (GRPCConfig, error) {
+	port, err := l.optInt("GRPC_PORT", 4002)
+	if err != nil {
+		return GRPCConfig{}, err
+	}
+
+	tlsCertPath := l.optStr("GRPC_TLS_CERT_PATH", "")
+	tlsKeyPath := l.optStr("GRPC_TLS_KEY_PATH", "")
+
+	keepaliveTimeStr := l.optStr("GRPC_KEEPALIVE_TIME", "2h")
+	keepaliveTime, err := parseDuration(keepaliveTimeStr)
+	if err != nil {
+		return GRPCConfig{}, fmt.Errorf("GRPC_KEEPALIVE_TIME: %w", err)
+	}
+
+	keepaliveTimeoutStr := l.optStr("GRPC_KEEPALIVE_TIMEOUT", "20s")
+	keepaliveTimeout, err := parseDuration(keepaliveTimeoutStr)
+	if err != nil {
+		return GRPCConfig{}, fmt.Errorf("GRPC_KEEPALIVE_TIMEOUT: %w", err)
+	}
+
+	maxIdleStr := l.optStr("GRPC_MAX_CONNECTION_IDLE", "5m")
+	maxIdle, err := parseDuration(maxIdleStr)
+	if err != nil {
+		return GRPCConfig{}, fmt.Errorf("GRPC_MAX_CONNECTION_IDLE: %w", err)
+	}
+
+	maxAgeStr := l.optStr("GRPC_MAX_CONNECTION_AGE", "30m")
+	maxAge, err := parseDuration(maxAgeStr)
+	if err != nil {
+		return GRPCConfig{}, fmt.Errorf("GRPC_MAX_CONNECTION_AGE: %w", err)
+	}
+
+	maxAgeGraceStr := l.optStr("GRPC_MAX_CONNECTION_AGE_GRACE", "10s")
+	maxAgeGrace, err := parseDuration(maxAgeGraceStr)
+	if err != nil {
+		return GRPCConfig{}, fmt.Errorf("GRPC_MAX_CONNECTION_AGE_GRACE: %w", err)
+	}
+
+	return GRPCConfig{
+		Port:                  port,
+		TLSCertPath:           tlsCertPath,
+		TLSKeyPath:            tlsKeyPath,
+		KeepaliveTime:         keepaliveTime,
+		KeepaliveTimeout:      keepaliveTimeout,
+		MaxConnectionIdle:     maxIdle,
+		MaxConnectionAge:      maxAge,
+		MaxConnectionAgeGrace: maxAgeGrace,
 	}, nil
 }
 
