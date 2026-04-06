@@ -23,6 +23,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/dpop"
 	grpcserver "github.com/qf-studio/auth-service/internal/grpc"
+	"github.com/qf-studio/auth-service/internal/rbac"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -222,9 +223,14 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Metrics: metricsCollector,
 	}
 
+	// ── RBAC ─────────────────────────────────────────────────────────────
+	rbacAdapter := rbac.NewPgAdapter(pgPool)
+	rbacSvc, err := rbac.NewService(rbacAdapter, log)
+	if err != nil {
+		return fmt.Errorf("rbac service init failed: %w", err)
+	}
+
 	// ── gRPC server ──────────────────────────────────────────────────────
-	// RBAC enforcer is wired when the RBAC service is initialized in main.
-	// Until then, CheckPermission calls will return codes.Internal.
 	grpcSrv, err := grpcserver.NewServer(grpcserver.ServerDeps{
 		TokenSvc:  tokenSvc,
 		UserRepo:  userRepo,
@@ -232,6 +238,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Logger:    log,
 		Port:      cfg.App.GRPCPort,
 		Metrics:   metricsCollector,
+		RBACSvc:   rbacSvc,
 	})
 	if err != nil {
 		return fmt.Errorf("grpc server init failed: %w", err)
