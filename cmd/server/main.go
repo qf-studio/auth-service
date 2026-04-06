@@ -159,6 +159,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Depends on the credential vault database schema and AES-256-GCM encryption layer.
 	var brokerTokenSvc api.BrokerTokenService
 
+	// SAML service is registered in a subsequent issue.
+	// Depends on the SAML SP implementation in internal/saml/.
+	var samlSvc api.SAMLService
+
 	services := &api.Services{
 		Auth:    authSvc,
 		Token:   tokenSvc,
@@ -168,6 +172,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		OAuth:   oauthSvc,
 		OIDC:    oidcSvc,
 		Broker:  brokerTokenSvc,
+		SAML:    samlSvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -226,6 +231,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Depends on the credential vault database schema and AES-256-GCM encryption layer.
 	var adminBrokerSvc api.AdminBrokerService
 
+	// Admin SAML service is registered in a subsequent issue.
+	// Depends on the SAML IdP configuration storage in internal/saml/.
+	var adminSAMLSvc api.AdminSAMLService
+
 	adminServices := &api.AdminServices{
 		Users:          adminUserSvc,
 		Clients:        adminClientSvc,
@@ -236,6 +245,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		ClientApproval: clientApprovalSvc,
 		Webhooks:       adminWebhookSvc,
 		Brokers:        adminBrokerSvc,
+		SAML:           adminSAMLSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

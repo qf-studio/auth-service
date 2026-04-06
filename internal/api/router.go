@@ -108,6 +108,14 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 			auth.GET("/oauth/:provider", oauthH.Redirect)
 			auth.GET("/oauth/:provider/callback", oauthH.Callback)
 		}
+
+		// SAML SSO endpoints (public, no auth required).
+		if svc.SAML != nil {
+			samlH := NewSAMLHandlers(svc.SAML)
+			auth.GET("/saml/metadata", samlH.Metadata)
+			auth.GET("/saml/login", samlH.Login)
+			auth.POST("/saml/acs", samlH.ACS)
+		}
 	}
 
 	// Protected auth routes (require API key or auth middleware).

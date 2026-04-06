@@ -52,6 +52,16 @@ const (
 	EventAdminBrokerCredentialRotate = "admin_broker_credential_rotate"
 	EventBrokerTokenIssue            = "broker_token_issue"
 	EventBrokerTokenDenied           = "broker_token_denied"
+
+	// SAML events.
+	EventSAMLLogin            = "saml_login"
+	EventSAMLLoginFailure     = "saml_login_failure"
+	EventSAMLJITProvision     = "saml_jit_provision"
+	EventAdminSAMLIdPCreate   = "admin_saml_idp_create"
+	EventAdminSAMLIdPUpdate   = "admin_saml_idp_update"
+	EventAdminSAMLIdPDelete   = "admin_saml_idp_delete"
+	EventAdminSAMLIdPMetadata = "admin_saml_idp_metadata_import"
+	EventAdminSAMLAttrMap     = "admin_saml_attribute_mapping"
 )
 
 // Event represents a single audit log entry.

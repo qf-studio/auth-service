@@ -380,6 +380,76 @@ type AdminBrokerService interface {
 	RotateCredential(ctx context.Context, credentialID string) (*AdminBrokerCredentialWithSecret, error)
 }
 
+// --- SAML IdP admin types ---
+
+// AdminSAMLIdP represents a SAML Identity Provider configuration in admin API responses.
+type AdminSAMLIdP struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	EntityID         string            `json:"entity_id"`
+	MetadataURL      string            `json:"metadata_url,omitempty"`
+	SSOURL           string            `json:"sso_url"`
+	SLOURL           string            `json:"slo_url,omitempty"`
+	Certificate      string            `json:"certificate"`
+	AttributeMapping map[string]string `json:"attribute_mapping,omitempty"`
+	Enabled          bool              `json:"enabled"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+// AdminSAMLIdPList is the paginated response for listing IdP configurations.
+type AdminSAMLIdPList struct {
+	IdPs    []AdminSAMLIdP `json:"idps"`
+	Total   int            `json:"total"`
+	Page    int            `json:"page"`
+	PerPage int            `json:"per_page"`
+}
+
+// CreateSAMLIdPRequest is the request body for creating a SAML IdP configuration.
+type CreateSAMLIdPRequest struct {
+	Name        string `json:"name"         validate:"required,min=1,max=255"`
+	EntityID    string `json:"entity_id"    validate:"required,min=1,max=1024"`
+	SSOURL      string `json:"sso_url"      validate:"required,url"`
+	SLOURL      string `json:"slo_url"      validate:"omitempty,url"`
+	Certificate string `json:"certificate"  validate:"required"`
+	MetadataURL string `json:"metadata_url" validate:"omitempty,url"`
+	Enabled     *bool  `json:"enabled"      validate:"omitempty"`
+}
+
+// UpdateSAMLIdPRequest is the request body for updating a SAML IdP configuration.
+type UpdateSAMLIdPRequest struct {
+	Name        *string `json:"name"         validate:"omitempty,min=1,max=255"`
+	EntityID    *string `json:"entity_id"    validate:"omitempty,min=1,max=1024"`
+	SSOURL      *string `json:"sso_url"      validate:"omitempty,url"`
+	SLOURL      *string `json:"slo_url"      validate:"omitempty,url"`
+	Certificate *string `json:"certificate"  validate:"omitempty"`
+	MetadataURL *string `json:"metadata_url" validate:"omitempty,url"`
+	Enabled     *bool   `json:"enabled"      validate:"omitempty"`
+}
+
+// ImportSAMLMetadataRequest is the request body for importing IdP metadata XML.
+type ImportSAMLMetadataRequest struct {
+	MetadataXML string `json:"metadata_xml" validate:"required"`
+}
+
+// SAMLAttributeMappingRequest is the request body for configuring attribute mapping.
+type SAMLAttributeMappingRequest struct {
+	AttributeMapping map[string]string `json:"attribute_mapping" validate:"required"`
+}
+
+// AdminSAMLService defines admin operations for SAML IdP configuration management.
+type AdminSAMLService interface {
+	ListIdPs(ctx context.Context, page, perPage int) (*AdminSAMLIdPList, error)
+	GetIdP(ctx context.Context, idpID string) (*AdminSAMLIdP, error)
+	CreateIdP(ctx context.Context, req *CreateSAMLIdPRequest) (*AdminSAMLIdP, error)
+	UpdateIdP(ctx context.Context, idpID string, req *UpdateSAMLIdPRequest) (*AdminSAMLIdP, error)
+	DeleteIdP(ctx context.Context, idpID string) error
+	ImportMetadata(ctx context.Context, idpID string, req *ImportSAMLMetadataRequest) (*AdminSAMLIdP, error)
+	ExportMetadata(ctx context.Context, idpID string) ([]byte, error)
+	UpdateAttributeMapping(ctx context.Context, idpID string, req *SAMLAttributeMappingRequest) (*AdminSAMLIdP, error)
+	GetAttributeMapping(ctx context.Context, idpID string) (map[string]string, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users          AdminUserService
@@ -391,4 +461,5 @@ type AdminServices struct {
 	ClientApproval AdminClientApprovalService
 	Webhooks       AdminWebhookService
 	Brokers        AdminBrokerService
+	SAML           AdminSAMLService
 }
