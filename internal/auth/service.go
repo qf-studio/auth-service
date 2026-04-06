@@ -58,6 +58,7 @@ type Service struct {
 	hasher   password.Hasher
 	breaches hibp.BreachChecker
 	mfa      MFAChecker
+	policy   *password.PolicyValidator
 }
 
 // NewService creates a new auth Service.
@@ -80,7 +81,13 @@ func NewService(
 		issuer:   issuer,
 		hasher:   hasher,
 		breaches: breaches,
+		policy:   password.NewPolicyValidator(password.DefaultPolicy(), hasher),
 	}
+}
+
+// SetPasswordPolicy replaces the default password policy validator.
+func (s *Service) SetPasswordPolicy(pv *password.PolicyValidator) {
+	s.policy = pv
 }
 
 // SetMFAChecker injects the MFA checker after construction to break the
@@ -89,14 +96,45 @@ func (s *Service) SetMFAChecker(mfa MFAChecker) {
 	s.mfa = mfa
 }
 
-// Register creates a new user account.
-// Stub: full implementation depends on PostgreSQL user repository (future issue).
-func (s *Service) Register(ctx context.Context, email, _, name string) (*api.UserInfo, error) {
-	// TODO(GH-XX): wire PostgreSQL user repository for persistence.
+// Register creates a new user account with policy-aware password validation.
+func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.UserInfo, error) {
+	if err := s.policy.ValidatePassword(pwd); err != nil {
+		return nil, fmt.Errorf("password policy: %w", err)
+	}
+
+	hash, err := s.hasher.Hash(pwd)
+	if err != nil {
+		return nil, fmt.Errorf("hash password: %w", err)
+	}
+
+	now := time.Now().UTC()
+	user := &domain.User{
+		ID:                fmt.Sprintf("usr_%s", generateID()),
+		Email:             email,
+		PasswordHash:      hash,
+		Name:              name,
+		Roles:             []string{"user"},
+		PasswordChangedAt: &now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	created, err := s.users.Create(ctx, user)
+	if err != nil {
+		return nil, fmt.Errorf("create user: %w", err)
+	}
+
+	// Seed password history with initial hash.
+	if s.policy.HistoryCount() > 0 {
+		if histErr := s.users.AddPasswordHistory(ctx, created.ID, hash); histErr != nil {
+			s.logger.Error("failed to seed password history", zap.String("user_id", created.ID), zap.Error(histErr))
+		}
+	}
+
 	info := &api.UserInfo{
-		ID:    "stub-user-id",
-		Email: email,
-		Name:  name,
+		ID:    created.ID,
+		Email: created.Email,
+		Name:  created.Name,
 	}
 	s.audit.LogEvent(ctx, audit.Event{
 		Type:     audit.EventRegister,
@@ -156,6 +194,46 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 			Metadata: map[string]string{"reason": "invalid_password"},
 		})
 		return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
+	}
+
+	// Transparent hash upgrade: re-hash bcrypt → argon2id on successful login.
+	if s.hasher.NeedsUpgrade(user.PasswordHash) {
+		newHash, hashErr := s.hasher.Hash(pwd)
+		if hashErr != nil {
+			s.logger.Error("failed to re-hash password", zap.String("user_id", user.ID), zap.Error(hashErr))
+		} else {
+			if upErr := s.users.UpdatePasswordHash(ctx, user.ID, newHash); upErr != nil {
+				s.logger.Error("failed to persist upgraded hash", zap.String("user_id", user.ID), zap.Error(upErr))
+			} else {
+				s.audit.LogEvent(ctx, audit.Event{
+					Type:     audit.EventHashUpgraded,
+					ActorID:  user.ID,
+					TargetID: user.ID,
+					Metadata: map[string]string{"from": "bcrypt", "to": "argon2id"},
+				})
+			}
+		}
+	}
+
+	// Check force_password_change flag.
+	if user.ForcePasswordChange {
+		return &api.AuthResult{
+			UserID:              user.ID,
+			ForcePasswordChange: true,
+		}, nil
+	}
+
+	// Check password expiration.
+	if s.policy.IsExpired(user.PasswordChangedAt) {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventPasswordExpired,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+		})
+		return &api.AuthResult{
+			UserID:              user.ID,
+			ForcePasswordChange: true,
+		}, nil
 	}
 
 	// Check MFA status: if enabled, return challenge instead of tokens.
@@ -257,9 +335,55 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 		return fmt.Errorf("retrieve reset token: %w", err)
 	}
 
-	// TODO(GH-XX): hash newPassword with Argon2id and update in PostgreSQL.
-	// TODO(GH-XX): revoke all sessions for this user.
-	_ = newPassword
+	// Validate new password against policy.
+	if err := s.policy.ValidatePassword(newPassword); err != nil {
+		return fmt.Errorf("password policy: %w", err)
+	}
+
+	// Find user to get current hash for history.
+	user, err := s.users.FindByEmail(ctx, email)
+	if err != nil {
+		s.logger.Error("failed to find user for password reset", zap.String("email", email), zap.Error(err))
+		return fmt.Errorf("find user: %w", err)
+	}
+
+	// Check password history for reuse.
+	if s.policy.HistoryCount() > 0 {
+		history, histErr := s.users.GetPasswordHistory(ctx, user.ID, s.policy.HistoryCount())
+		if histErr != nil {
+			s.logger.Error("failed to get password history", zap.String("user_id", user.ID), zap.Error(histErr))
+		} else if reuseErr := s.policy.CheckHistory(newPassword, history); reuseErr != nil {
+			s.audit.LogEvent(ctx, audit.Event{
+				Type:     audit.EventPasswordReused,
+				ActorID:  user.ID,
+				TargetID: user.ID,
+			})
+			return fmt.Errorf("password reuse: %w", reuseErr)
+		}
+	}
+
+	// Hash new password.
+	newHash, hashErr := s.hasher.Hash(newPassword)
+	if hashErr != nil {
+		return fmt.Errorf("hash new password: %w", hashErr)
+	}
+
+	// Save old hash to history.
+	if s.policy.HistoryCount() > 0 {
+		if histErr := s.users.AddPasswordHistory(ctx, user.ID, user.PasswordHash); histErr != nil {
+			s.logger.Error("failed to add password history", zap.String("user_id", user.ID), zap.Error(histErr))
+		}
+	}
+
+	// Update password hash in database.
+	if err := s.users.UpdatePasswordHash(ctx, user.ID, newHash); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+
+	// Revoke all sessions for this user.
+	if err := s.tokens.RevokeAllForUser(ctx, user.ID); err != nil {
+		s.logger.Error("failed to revoke sessions after password reset", zap.String("user_id", user.ID), zap.Error(err))
+	}
 
 	s.logger.Info("password reset confirmed", zap.String("email", email))
 
@@ -283,15 +407,65 @@ func (s *Service) GetMe(_ context.Context, userID string) (*api.UserInfo, error)
 }
 
 // ChangePassword changes the authenticated user's password.
-// Stub: full implementation depends on PostgreSQL user repository.
-func (s *Service) ChangePassword(ctx context.Context, userID, _, _ string) error {
-	// TODO(GH-XX): wire PostgreSQL user repository + Argon2 verification.
+// Validates old password, checks policy, checks history, then updates.
+func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
+	user, err := s.users.FindByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("find user: %w", err)
+	}
+
+	// Verify old password.
+	match, err := s.hasher.Verify(oldPassword, user.PasswordHash)
+	if err != nil {
+		return fmt.Errorf("verify old password: %w", err)
+	}
+	if !match {
+		return fmt.Errorf("old password incorrect: %w", api.ErrUnauthorized)
+	}
+
+	// Validate new password against policy.
+	if err := s.policy.ValidatePassword(newPassword); err != nil {
+		return fmt.Errorf("password policy: %w", err)
+	}
+
+	// Check password history for reuse.
+	if s.policy.HistoryCount() > 0 {
+		history, histErr := s.users.GetPasswordHistory(ctx, userID, s.policy.HistoryCount())
+		if histErr != nil {
+			s.logger.Error("failed to get password history", zap.String("user_id", userID), zap.Error(histErr))
+		} else if reuseErr := s.policy.CheckHistory(newPassword, history); reuseErr != nil {
+			s.audit.LogEvent(ctx, audit.Event{
+				Type:     audit.EventPasswordReused,
+				ActorID:  userID,
+				TargetID: userID,
+			})
+			return fmt.Errorf("password reuse: %w", reuseErr)
+		}
+	}
+
+	// Hash and store new password.
+	newHash, err := s.hasher.Hash(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash new password: %w", err)
+	}
+
+	// Save old hash to history before updating.
+	if s.policy.HistoryCount() > 0 {
+		if histErr := s.users.AddPasswordHistory(ctx, userID, user.PasswordHash); histErr != nil {
+			s.logger.Error("failed to add password history", zap.String("user_id", userID), zap.Error(histErr))
+		}
+	}
+
+	if err := s.users.UpdatePasswordHash(ctx, userID, newHash); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+
 	s.audit.LogEvent(ctx, audit.Event{
 		Type:     audit.EventPasswordChange,
 		ActorID:  userID,
 		TargetID: userID,
 	})
-	return fmt.Errorf("change password not yet implemented: %w", api.ErrInternalError)
+	return nil
 }
 
 // Logout terminates a single session by revoking the access token via Redis
@@ -343,4 +517,11 @@ func generateResetToken() (string, error) {
 		return "", fmt.Errorf("crypto/rand: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// generateID produces a short random hex ID for user IDs.
+func generateID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
