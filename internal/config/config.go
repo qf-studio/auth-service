@@ -26,6 +26,15 @@ type Config struct {
 	OAuth        OAuthConfig
 	OIDC         OIDCConfig
 	SAML         SAMLConfig
+	Tenant       TenantConfig
+}
+
+// TenantConfig holds multi-tenancy resolution settings.
+type TenantConfig struct {
+	DefaultID      string        // TENANT_DEFAULT_ID: fallback tenant when none resolved
+	ResolutionMode string        // TENANT_RESOLUTION_MODE: "subdomain", "header", or "both" (default "both")
+	BaseDomain     string        // TENANT_BASE_DOMAIN: base domain for subdomain parsing (e.g. "auth.quantflow.studio")
+	CacheTTL       time.Duration // TENANT_CACHE_TTL: how long to cache tenant lookups
 }
 
 // SAMLConfig holds SAML Service Provider settings.
@@ -282,6 +291,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	tenantCfg, err := loadTenant(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -307,6 +320,7 @@ func Load() (*Config, error) {
 		OAuth:        oauthCfg,
 		OIDC:         oidcCfg,
 		SAML:         samlCfg,
+		Tenant:       tenantCfg,
 	}, nil
 }
 
@@ -704,6 +718,29 @@ func loadSAML(l *loader) (SAMLConfig, error) {
 		ACSURL:   acsURL,
 		KeyPath:  keyPath,
 		CertPath: certPath,
+	}, nil
+}
+
+func loadTenant(l *loader) (TenantConfig, error) {
+	defaultID := l.optStr("TENANT_DEFAULT_ID", "")
+	mode := l.optStr("TENANT_RESOLUTION_MODE", "both")
+	baseDomain := l.optStr("TENANT_BASE_DOMAIN", "")
+
+	if mode != "subdomain" && mode != "header" && mode != "both" {
+		return TenantConfig{}, fmt.Errorf("TENANT_RESOLUTION_MODE: unsupported value %q (must be subdomain, header, or both)", mode)
+	}
+
+	cacheTTLStr := l.optStr("TENANT_CACHE_TTL", "5m")
+	cacheTTL, err := parseDuration(cacheTTLStr)
+	if err != nil {
+		return TenantConfig{}, fmt.Errorf("TENANT_CACHE_TTL: %w", err)
+	}
+
+	return TenantConfig{
+		DefaultID:      defaultID,
+		ResolutionMode: mode,
+		BaseDomain:     baseDomain,
+		CacheTTL:       cacheTTL,
 	}, nil
 }
 
