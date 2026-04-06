@@ -50,4 +50,10 @@ var (
 
 	// ErrDuplicateClientRARType indicates the client-to-type association already exists.
 	ErrDuplicateClientRARType = errors.New("duplicate client rar type association")
+
+	// ErrDuplicateSAMLIdP indicates a SAML IdP with the same entity ID already exists.
+	ErrDuplicateSAMLIdP = errors.New("duplicate saml idp entity id")
+
+	// ErrDuplicateSAMLAccount indicates a SAML account with the same IdP + NameID already exists.
+	ErrDuplicateSAMLAccount = errors.New("duplicate saml account")
 )
