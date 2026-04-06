@@ -41,6 +41,11 @@ var (
 	ErrRARTooManyActions   = errors.New("too many actions in authorization detail")
 	ErrRARTooManyDataTypes = errors.New("too many datatypes in authorization detail")
 
+	// Tenant errors.
+	ErrTenantNotFound  = errors.New("tenant not found")
+	ErrTenantSuspended = errors.New("tenant suspended")
+	ErrTenantDeleted   = errors.New("tenant deleted")
+
 	// OAuth errors.
 	ErrOAuthProviderNotSupported = errors.New("oauth provider not supported")
 	ErrOAuthAccountAlreadyLinked = errors.New("oauth account already linked")

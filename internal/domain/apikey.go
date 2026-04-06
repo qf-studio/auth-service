@@ -15,6 +15,7 @@ const (
 // APIKey represents an API key for service-to-service or agent authentication.
 type APIKey struct {
 	ID                   uuid.UUID  `json:"id"                          db:"id"`
+	TenantID             uuid.UUID  `json:"tenant_id"                   db:"tenant_id"`
 	ClientID             uuid.UUID  `json:"client_id"                   db:"client_id"`
 	Name                 string     `json:"name"                        db:"name"`
 	KeyHash              string     `json:"-"                           db:"key_hash"`

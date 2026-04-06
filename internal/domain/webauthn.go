@@ -1,11 +1,16 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // WebAuthnCredential represents a stored WebAuthn credential (public key credential source).
 type WebAuthnCredential struct {
-	ID              string // UUID primary key
-	UserID          string // FK to users table
+	ID       string    // UUID primary key
+	TenantID uuid.UUID // FK to tenants table
+	UserID   string    // FK to users table
 	CredentialID    []byte // Raw credential ID from authenticator
 	PublicKey       []byte // COSE-encoded public key
 	AttestationType string // Attestation format (e.g. "none", "packed")
