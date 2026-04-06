@@ -80,9 +80,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Repositories ─────────────────────────────────────────────────────
 	userRepo := storage.NewPostgresUserRepository(pgPool)
 	refreshTokenRepo := storage.NewPostgresRefreshTokenRepository(pgPool)
+	auditRepo := storage.NewPostgresAuditRepository(pgPool)
 
 	// ── Audit ─────────────────────────────────────────────────────────────
-	auditSvc := audit.NewService(log, 1024)
+	auditSvc := audit.NewService(log, 1024, auditRepo)
 
 	// ── Services ─────────────────────────────────────────────────────────
 	hasher := password.New([]byte(cfg.Argon2.Pepper))

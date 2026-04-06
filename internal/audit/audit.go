@@ -8,7 +8,16 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/qf-studio/auth-service/internal/domain"
 )
+
+// Repository is the interface used by the audit Service to persist events.
+// It is intentionally narrow (write-only) — query methods live on
+// storage.AuditRepository which the API layer will consume directly.
+type Repository interface {
+	Create(ctx context.Context, entry *domain.AuditLog) error
+}
 
 // Event types for all auditable operations.
 const (
@@ -65,18 +74,21 @@ type EventLogger interface {
 // drained on Close so nothing is lost during graceful shutdown.
 type Service struct {
 	logger *zap.Logger
+	repo   Repository
 	ch     chan Event
 	done   chan struct{}
 }
 
 // NewService creates an audit Service with the given buffer size.
-// Events exceeding the buffer are logged and dropped (non-blocking).
-func NewService(logger *zap.Logger, bufferSize int) *Service {
+// If repo is nil the service still logs events via zap but does not persist them.
+// Events exceeding the buffer are logged at warn level and dropped (non-blocking).
+func NewService(logger *zap.Logger, bufferSize int, repo Repository) *Service {
 	if bufferSize <= 0 {
 		bufferSize = 1024
 	}
 	s := &Service{
 		logger: logger,
+		repo:   repo,
 		ch:     make(chan Event, bufferSize),
 		done:   make(chan struct{}),
 	}
@@ -111,25 +123,54 @@ func (s *Service) Close() error {
 // Name returns the closer label for shutdown logging.
 func (s *Service) Name() string { return "audit" }
 
-// drain reads events from the channel and logs them via zap structured fields.
-// In a future iteration this will persist to the audit_log table via a repository.
+// drain reads events from the channel, persists them to the database via the
+// repository, and logs them via zap structured fields. If persistence fails the
+// event is still logged so that no audit data is silently lost.
 func (s *Service) drain() {
 	defer close(s.done)
 	for ev := range s.ch {
-		fields := []zap.Field{
-			zap.String("audit_event", ev.Type),
-			zap.String("actor_id", ev.ActorID),
-			zap.String("target_id", ev.TargetID),
-			zap.Time("event_time", ev.Timestamp),
-		}
-		if ev.IP != "" {
-			fields = append(fields, zap.String("ip", ev.IP))
-		}
-		for k, v := range ev.Metadata {
-			fields = append(fields, zap.String("meta_"+k, v))
-		}
-		s.logger.Info("audit", fields...)
+		s.persist(ev)
+		s.logEvent(ev)
 	}
+}
+
+// persist writes the event to the repository. Errors are logged but never
+// propagated — the drain loop must not stall on transient DB issues.
+func (s *Service) persist(ev Event) {
+	if s.repo == nil {
+		return
+	}
+	entry := &domain.AuditLog{
+		EventType: ev.Type,
+		ActorID:   ev.ActorID,
+		TargetID:  ev.TargetID,
+		IP:        ev.IP,
+		Metadata:  ev.Metadata,
+		CreatedAt: ev.Timestamp,
+	}
+	if err := s.repo.Create(context.Background(), entry); err != nil {
+		s.logger.Error("audit persist failed",
+			zap.String("event_type", ev.Type),
+			zap.Error(err),
+		)
+	}
+}
+
+// logEvent emits the event as a structured zap log line.
+func (s *Service) logEvent(ev Event) {
+	fields := []zap.Field{
+		zap.String("audit_event", ev.Type),
+		zap.String("actor_id", ev.ActorID),
+		zap.String("target_id", ev.TargetID),
+		zap.Time("event_time", ev.Timestamp),
+	}
+	if ev.IP != "" {
+		fields = append(fields, zap.String("ip", ev.IP))
+	}
+	for k, v := range ev.Metadata {
+		fields = append(fields, zap.String("meta_"+k, v))
+	}
+	s.logger.Info("audit", fields...)
 }
 
 // NopLogger is a no-op implementation of EventLogger for use in tests.

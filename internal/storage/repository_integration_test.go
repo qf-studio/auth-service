@@ -118,11 +118,21 @@ func createTables(t *testing.T, pool *pgxpool.Pool) {
 			used_at    TIMESTAMPTZ,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+
+		CREATE TABLE IF NOT EXISTS audit_logs (
+			id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+			event_type  TEXT        NOT NULL,
+			actor_id    TEXT        NOT NULL DEFAULT '',
+			target_id   TEXT        NOT NULL DEFAULT '',
+			ip          TEXT        NOT NULL DEFAULT '',
+			metadata    JSONB       NOT NULL DEFAULT '{}',
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
 	`)
 	require.NoError(t, err)
 
 	// Clean tables before each test file run.
-	_, err = pool.Exec(ctx, `TRUNCATE users, refresh_tokens, clients, mfa_secrets, mfa_backup_codes`)
+	_, err = pool.Exec(ctx, `TRUNCATE users, refresh_tokens, clients, mfa_secrets, mfa_backup_codes, audit_logs`)
 	require.NoError(t, err)
 }
 
