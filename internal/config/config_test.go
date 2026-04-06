@@ -102,6 +102,10 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.Equal(t, "http://localhost:4000", cfg.OIDC.IssuerURL)
 	assert.Equal(t, 1*time.Hour, cfg.OIDC.IDTokenTTL)
 	assert.Equal(t, []string{"openid", "profile", "email", "offline_access"}, cfg.OIDC.SupportedScopes)
+
+	// SAML defaults (disabled)
+	assert.False(t, cfg.SAML.Enabled)
+	assert.Empty(t, cfg.SAML.EntityID)
 }
 
 func TestLoad_OIDCConfig(t *testing.T) {
@@ -561,6 +565,49 @@ func TestLoad_OAuthInvalidEnabled(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_ENABLED")
+}
+
+func TestLoad_SAMLEnabled(t *testing.T) {
+	env := requiredEnv()
+	env["SAML_ENABLED"] = "true"
+	env["SAML_ENTITY_ID"] = "https://sp.example.com/saml/metadata"
+	env["SAML_ACS_URL"] = "https://sp.example.com/saml/acs"
+	env["SAML_KEY_PATH"] = "/etc/saml/sp.key"
+	env["SAML_CERT_PATH"] = "/etc/saml/sp.crt"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.SAML.Enabled)
+	assert.Equal(t, "https://sp.example.com/saml/metadata", cfg.SAML.EntityID)
+	assert.Equal(t, "https://sp.example.com/saml/acs", cfg.SAML.ACSURL)
+	assert.Equal(t, "/etc/saml/sp.key", cfg.SAML.KeyPath)
+	assert.Equal(t, "/etc/saml/sp.crt", cfg.SAML.CertPath)
+}
+
+func TestLoad_SAMLEnabledMissingFields(t *testing.T) {
+	env := requiredEnv()
+	env["SAML_ENABLED"] = "true"
+	// Missing SAML_ENTITY_ID, SAML_ACS_URL, SAML_KEY_PATH, SAML_CERT_PATH
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SAML_ENTITY_ID")
+	assert.Contains(t, err.Error(), "SAML_ACS_URL")
+	assert.Contains(t, err.Error(), "SAML_KEY_PATH")
+	assert.Contains(t, err.Error(), "SAML_CERT_PATH")
+}
+
+func TestLoad_SAMLInvalidEnabled(t *testing.T) {
+	env := requiredEnv()
+	env["SAML_ENABLED"] = "notbool"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SAML_ENABLED")
 }
 
 func BenchmarkLoad(b *testing.B) {

@@ -25,6 +25,16 @@ type Config struct {
 	MFA          MFAConfig
 	OAuth        OAuthConfig
 	OIDC         OIDCConfig
+	SAML         SAMLConfig
+}
+
+// SAMLConfig holds SAML Service Provider settings.
+type SAMLConfig struct {
+	Enabled    bool   // SAML_ENABLED: whether SAML SSO is active
+	EntityID   string // SAML_ENTITY_ID: the SP entity identifier
+	ACSURL     string // SAML_ACS_URL: Assertion Consumer Service URL
+	KeyPath    string // SAML_KEY_PATH: path to SP private key file
+	CertPath   string // SAML_CERT_PATH: path to SP certificate file
 }
 
 // OIDCConfig holds OpenID Connect provider settings.
@@ -268,6 +278,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	samlCfg, err := loadSAML(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -292,6 +306,7 @@ func Load() (*Config, error) {
 		MFA:          mfaCfg,
 		OAuth:        oauthCfg,
 		OIDC:         oidcCfg,
+		SAML:         samlCfg,
 	}, nil
 }
 
@@ -666,6 +681,29 @@ func loadOIDC(l *loader) (OIDCConfig, error) {
 		IssuerURL:       issuerURL,
 		IDTokenTTL:      idTokenTTL,
 		SupportedScopes: scopes,
+	}, nil
+}
+
+func loadSAML(l *loader) (SAMLConfig, error) {
+	enabled, err := l.optBool("SAML_ENABLED", false)
+	if err != nil {
+		return SAMLConfig{}, err
+	}
+	if !enabled {
+		return SAMLConfig{Enabled: false}, nil
+	}
+
+	entityID := l.requireStr("SAML_ENTITY_ID")
+	acsURL := l.requireStr("SAML_ACS_URL")
+	keyPath := l.requireStr("SAML_KEY_PATH")
+	certPath := l.requireStr("SAML_CERT_PATH")
+
+	return SAMLConfig{
+		Enabled:  true,
+		EntityID: entityID,
+		ACSURL:   acsURL,
+		KeyPath:  keyPath,
+		CertPath: certPath,
 	}, nil
 }
 
