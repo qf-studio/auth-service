@@ -1,13 +1,22 @@
 {
   "hooks": {
-    "PostToolUse": [
+    "PreToolUse": [
       {
-        "matcher": "Write|Edit|Bash|Task",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_DIR}/hooks/monitor-tokens.py\"",
-            "timeout": 5
+            "command": "/var/folders/_8/nnsxrdhn46x08pb886hrggv00000gn/T/pilot-hooks-3367293168/pilot-bash-guard.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/var/folders/_8/nnsxrdhn46x08pb886hrggv00000gn/T/pilot-hooks-3367293168/pilot-stop-gate.sh"
           }
         ]
       }
