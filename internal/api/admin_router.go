@@ -58,6 +58,14 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 			users.DELETE("/:id", userH.Delete)
 			users.POST("/:id/lock", userH.Lock)
 			users.POST("/:id/unlock", userH.Unlock)
+			users.GET("/:id/activity", userH.Activity)
+
+			// Bulk operations.
+			bulk := users.Group("/bulk")
+			bulk.POST("/lock", userH.BulkLock)
+			bulk.POST("/unlock", userH.BulkUnlock)
+			bulk.POST("/suspend", userH.BulkSuspend)
+			bulk.POST("/assign-role", userH.BulkAssignRole)
 		}
 	}
 

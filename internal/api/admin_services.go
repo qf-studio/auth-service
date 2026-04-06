@@ -122,6 +122,41 @@ type LockUserRequest struct {
 	Reason string `json:"reason" validate:"required,min=1,max=500"`
 }
 
+// BulkUserActionRequest is the request body for bulk user operations.
+type BulkUserActionRequest struct {
+	UserIDs []string `json:"user_ids" validate:"required,min=1,max=100,dive,required"`
+	Reason  string   `json:"reason"   validate:"omitempty,max=500"`
+}
+
+// BulkAssignRoleRequest is the request body for bulk role assignment.
+type BulkAssignRoleRequest struct {
+	UserIDs []string `json:"user_ids" validate:"required,min=1,max=100,dive,required"`
+	Role    string   `json:"role"     validate:"required,oneof=admin user"`
+}
+
+// BulkActionResult is the response for bulk operations.
+type BulkActionResult struct {
+	Affected int64 `json:"affected"`
+}
+
+// UserActivityEntry represents a single audit event in a user's activity timeline.
+type UserActivityEntry struct {
+	ID        string            `json:"id"`
+	EventType string            `json:"event_type"`
+	ActorID   string            `json:"actor_id,omitempty"`
+	IP        string            `json:"ip,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// UserActivityTimeline is the paginated response for user activity.
+type UserActivityTimeline struct {
+	Events  []UserActivityEntry `json:"events"`
+	Total   int                 `json:"total"`
+	Page    int                 `json:"page"`
+	PerPage int                 `json:"per_page"`
+}
+
 // CreateClientRequest is the request body for creating an OAuth2 client.
 type CreateClientRequest struct {
 	Name         string   `json:"name"          validate:"required,min=1,max=255"`
@@ -163,12 +198,18 @@ type UpdateAPIKeyRequest struct {
 // AdminUserService defines admin operations for user management.
 type AdminUserService interface {
 	ListUsers(ctx context.Context, page, perPage int, status string) (*AdminUserList, error)
+	SearchUsers(ctx context.Context, page, perPage int, email, role, status string, createdAfter, createdBefore *time.Time) (*AdminUserList, error)
 	GetUser(ctx context.Context, userID string) (*AdminUser, error)
 	CreateUser(ctx context.Context, req *CreateUserRequest) (*AdminUser, error)
 	UpdateUser(ctx context.Context, userID string, req *UpdateUserRequest) (*AdminUser, error)
 	DeleteUser(ctx context.Context, userID string) error
 	LockUser(ctx context.Context, userID string, reason string) (*AdminUser, error)
 	UnlockUser(ctx context.Context, userID string) (*AdminUser, error)
+	BulkLock(ctx context.Context, req *BulkUserActionRequest) (*BulkActionResult, error)
+	BulkUnlock(ctx context.Context, req *BulkUserActionRequest) (*BulkActionResult, error)
+	BulkSuspend(ctx context.Context, req *BulkUserActionRequest) (*BulkActionResult, error)
+	BulkAssignRole(ctx context.Context, req *BulkAssignRoleRequest) (*BulkActionResult, error)
+	GetActivity(ctx context.Context, userID string, page, perPage int) (*UserActivityTimeline, error)
 }
 
 // AdminClientService defines admin operations for OAuth2 client management.
