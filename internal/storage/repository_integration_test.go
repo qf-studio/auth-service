@@ -118,11 +118,28 @@ func createTables(t *testing.T, pool *pgxpool.Pool) {
 			used_at    TIMESTAMPTZ,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+
+		CREATE TABLE IF NOT EXISTS rar_resource_types (
+			id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+			type              TEXT        NOT NULL UNIQUE,
+			description       TEXT        NOT NULL DEFAULT '',
+			allowed_actions   TEXT[]      NOT NULL DEFAULT '{}',
+			allowed_datatypes TEXT[]      NOT NULL DEFAULT '{}',
+			created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+
+		CREATE TABLE IF NOT EXISTS client_rar_allowed_types (
+			client_id        UUID        NOT NULL REFERENCES clients (id) ON DELETE CASCADE,
+			resource_type_id UUID        NOT NULL REFERENCES rar_resource_types (id) ON DELETE CASCADE,
+			created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (client_id, resource_type_id)
+		);
 	`)
 	require.NoError(t, err)
 
 	// Clean tables before each test file run.
-	_, err = pool.Exec(ctx, `TRUNCATE users, refresh_tokens, clients, mfa_secrets, mfa_backup_codes`)
+	_, err = pool.Exec(ctx, `TRUNCATE users, refresh_tokens, clients, mfa_secrets, mfa_backup_codes, rar_resource_types, client_rar_allowed_types`)
 	require.NoError(t, err)
 }
 

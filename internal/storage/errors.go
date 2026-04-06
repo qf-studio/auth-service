@@ -44,4 +44,10 @@ var (
 
 	// ErrDuplicateOAuthAccount indicates an OAuth account with the same provider and provider user ID already exists.
 	ErrDuplicateOAuthAccount = errors.New("duplicate oauth account")
+
+	// ErrDuplicateRARType indicates a resource type with the same type identifier already exists.
+	ErrDuplicateRARType = errors.New("duplicate rar resource type")
+
+	// ErrDuplicateClientRARType indicates the client-to-type association already exists.
+	ErrDuplicateClientRARType = errors.New("duplicate client rar type association")
 )
