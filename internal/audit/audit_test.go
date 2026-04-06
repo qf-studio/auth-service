@@ -97,6 +97,94 @@ func TestService_Name(t *testing.T) {
 	_ = svc.Close()
 }
 
+func TestService_PersistsToRepository(t *testing.T) {
+	core, _ := observer.New(zap.InfoLevel)
+	logger := zap.New(core)
+
+	var persisted []*RepositoryEntry
+	repo := &mockRepo{
+		insertFn: func(_ context.Context, entry *RepositoryEntry) error {
+			persisted = append(persisted, entry)
+			return nil
+		},
+	}
+
+	svc := NewService(logger, 64)
+	svc.SetRepository(repo)
+
+	svc.LogEvent(context.Background(), Event{
+		Type:     EventLoginFailure,
+		ActorID:  "user-1",
+		TargetID: "user-1",
+		IP:       "10.0.0.1",
+	})
+
+	err := svc.Close()
+	require.NoError(t, err)
+
+	require.Len(t, persisted, 1)
+	assert.Equal(t, EventLoginFailure, persisted[0].EventType)
+	assert.Equal(t, "user-1", persisted[0].ActorID)
+	assert.Equal(t, "warning", persisted[0].Severity)
+	assert.Equal(t, "10.0.0.1", persisted[0].IP)
+}
+
+func TestService_PersistError_DoesNotBlock(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	logger := zap.New(core)
+
+	repo := &mockRepo{
+		insertFn: func(_ context.Context, _ *RepositoryEntry) error {
+			return assert.AnError
+		},
+	}
+
+	svc := NewService(logger, 64)
+	svc.SetRepository(repo)
+
+	svc.LogEvent(context.Background(), Event{
+		Type:    EventLoginSuccess,
+		ActorID: "user-1",
+	})
+
+	err := svc.Close()
+	require.NoError(t, err)
+
+	// Should have logged a warning about persist failure.
+	require.Equal(t, 1, logs.Len())
+	assert.Equal(t, "audit persist failed", logs.All()[0].Message)
+}
+
+func TestSeverityForEvent(t *testing.T) {
+	tests := []struct {
+		event    string
+		expected string
+	}{
+		{EventLoginFailure, "warning"},
+		{EventPasswordReused, "warning"},
+		{EventMFAMaxAttempts, "warning"},
+		{EventAdminUserLock, "high"},
+		{EventAdminUserDelete, "high"},
+		{EventLoginSuccess, "info"},
+		{EventRegister, "info"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.expected, severityForEvent(tt.event), "event: %s", tt.event)
+	}
+}
+
+// mockRepo implements audit.Repository for tests.
+type mockRepo struct {
+	insertFn func(ctx context.Context, entry *RepositoryEntry) error
+}
+
+func (m *mockRepo) Insert(ctx context.Context, entry *RepositoryEntry) error {
+	if m.insertFn != nil {
+		return m.insertFn(ctx, entry)
+	}
+	return nil
+}
+
 func TestNopLogger_DoesNotPanic(t *testing.T) {
 	nop := NopLogger{}
 	nop.LogEvent(context.Background(), Event{

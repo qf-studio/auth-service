@@ -283,6 +283,61 @@ type AdminWebhookService interface {
 	TestWebhook(ctx context.Context, webhookID string, req *TestWebhookRequest) (*TestWebhookResponse, error)
 }
 
+// --- Dashboard types ---
+
+// DashboardOverview is the response for GET /admin/dashboard/overview.
+type DashboardOverview struct {
+	ActiveSessions  int64   `json:"active_sessions"`
+	ActiveUsers24h  int64   `json:"active_users_24h"`
+	TotalUsers      int     `json:"total_users"`
+	TotalClients    int     `json:"total_clients"`
+	AuthSuccessRate float64 `json:"auth_success_rate"`
+	MFAAdoptionRate float64 `json:"mfa_adoption_rate"`
+	SystemHealth    string  `json:"system_health"`
+}
+
+// DashboardSecurity is the response for GET /admin/dashboard/security.
+type DashboardSecurity struct {
+	FailedLogins24h      int64            `json:"failed_logins_24h"`
+	TopTargetedAccounts  []AuditCountItem `json:"top_targeted_accounts"`
+	TopSourceIPs         []AuditCountItem `json:"top_source_ips"`
+	LockedAccounts       int              `json:"locked_accounts"`
+	RecentSecurityEvents []AuditLogEntry  `json:"recent_security_events"`
+}
+
+// AuditCountItem is a generic ID + count pair.
+type AuditCountItem struct {
+	ID    string `json:"id"`
+	Count int64  `json:"count"`
+}
+
+// AuditLogEntry represents a single audit log entry in API responses.
+type AuditLogEntry struct {
+	ID        string            `json:"id"`
+	EventType string            `json:"event_type"`
+	ActorID   string            `json:"actor_id"`
+	TargetID  string            `json:"target_id"`
+	IP        string            `json:"ip"`
+	Severity  string            `json:"severity"`
+	Metadata  map[string]string `json:"metadata"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// AuditLogList is the paginated response for GET /admin/audit-logs.
+type AuditLogList struct {
+	Entries []AuditLogEntry `json:"entries"`
+	Total   int             `json:"total"`
+	Page    int             `json:"page"`
+	PerPage int             `json:"per_page"`
+}
+
+// AdminDashboardService defines admin operations for dashboard and audit log viewing.
+type AdminDashboardService interface {
+	Overview(ctx context.Context) (*DashboardOverview, error)
+	Security(ctx context.Context) (*DashboardSecurity, error)
+	ListAuditLogs(ctx context.Context, page, perPage int, action, actorID, severity string, startDate, endDate *time.Time) (*AuditLogList, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users          AdminUserService
@@ -293,4 +348,5 @@ type AdminServices struct {
 	Consent        ConsentService
 	ClientApproval AdminClientApprovalService
 	Webhooks       AdminWebhookService
+	Dashboard      AdminDashboardService
 }

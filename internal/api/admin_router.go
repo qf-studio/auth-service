@@ -113,6 +113,17 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// Dashboard and audit logs.
+	if svc.Dashboard != nil {
+		dashH := NewAdminDashboardHandlers(svc.Dashboard)
+		dashboard := admin.Group("/dashboard")
+		{
+			dashboard.GET("/overview", dashH.Overview)
+			dashboard.GET("/security", dashH.Security)
+		}
+		admin.GET("/audit-logs", dashH.ListAuditLogs)
+	}
+
 	// Token introspection.
 	if svc.Tokens != nil {
 		tokenH := NewAdminTokenHandlers(svc.Tokens)

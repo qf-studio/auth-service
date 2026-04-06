@@ -82,7 +82,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	refreshTokenRepo := storage.NewPostgresRefreshTokenRepository(pgPool)
 
 	// ── Audit ─────────────────────────────────────────────────────────────
+	auditRepo := storage.NewPostgresAuditRepository(pgPool)
 	auditSvc := audit.NewService(log, 1024)
+	auditSvc.SetRepository(storage.NewAuditRepositoryAdapter(auditRepo))
 
 	// ── Services ─────────────────────────────────────────────────────────
 	hasher := password.New([]byte(cfg.Argon2.Pepper))
@@ -192,6 +194,8 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
 	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, hasher, log, auditSvc)
 	adminWebhookSvc := admin.NewWebhookService(webhookRepo, webhookDeliveryRepo, webhookDispatcher, log, auditSvc)
+	dashboardRepo := storage.NewPostgresDashboardRepository(pgPool)
+	adminDashboardSvc := admin.NewDashboardService(auditRepo, dashboardRepo, metricsCollector, healthSvc, log)
 
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
@@ -226,6 +230,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Consent:        consentSvc,
 		ClientApproval: clientApprovalSvc,
 		Webhooks:       adminWebhookSvc,
+		Dashboard:      adminDashboardSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

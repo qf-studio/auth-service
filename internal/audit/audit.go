@@ -44,6 +44,7 @@ const (
 	EventAdminWebhookDelete = "admin_webhook_delete"
 	EventAdminWebhookTest   = "admin_webhook_test"
 	EventAdminWebhookRetry  = "admin_webhook_retry"
+	EventMFAMaxAttempts     = "mfa_max_attempts"
 )
 
 // Event represents a single audit log entry.
@@ -61,10 +62,28 @@ type EventLogger interface {
 	LogEvent(ctx context.Context, event Event)
 }
 
+// Repository is an optional persistence backend for audit events.
+// When set on Service, events are written to the database in addition to zap.
+type Repository interface {
+	Insert(ctx context.Context, entry *RepositoryEntry) error
+}
+
+// RepositoryEntry is the data shape expected by the persistence layer.
+type RepositoryEntry struct {
+	EventType string
+	ActorID   string
+	TargetID  string
+	IP        string
+	Severity  string
+	Metadata  map[string]string
+	CreatedAt time.Time
+}
+
 // Service implements EventLogger with an async buffered channel. Events are
 // drained on Close so nothing is lost during graceful shutdown.
 type Service struct {
 	logger *zap.Logger
+	repo   Repository
 	ch     chan Event
 	done   chan struct{}
 }
@@ -82,6 +101,12 @@ func NewService(logger *zap.Logger, bufferSize int) *Service {
 	}
 	go s.drain()
 	return s
+}
+
+// SetRepository attaches a persistence backend. Must be called before events
+// are emitted (typically during bootstrap, before traffic starts).
+func (s *Service) SetRepository(repo Repository) {
+	s.repo = repo
 }
 
 // LogEvent enqueues an audit event. It is non-blocking; if the buffer is full
@@ -111,8 +136,21 @@ func (s *Service) Close() error {
 // Name returns the closer label for shutdown logging.
 func (s *Service) Name() string { return "audit" }
 
-// drain reads events from the channel and logs them via zap structured fields.
-// In a future iteration this will persist to the audit_log table via a repository.
+// severityForEvent returns a severity level based on the event type.
+func severityForEvent(eventType string) string {
+	switch eventType {
+	case EventLoginFailure, EventPasswordReused, EventMFAMaxAttempts:
+		return "warning"
+	case EventAdminUserLock, EventAdminUserDelete, EventAdminClientDelete,
+		EventAdminAPIKeyRevoke, EventAdminWebhookDelete:
+		return "high"
+	default:
+		return "info"
+	}
+}
+
+// drain reads events from the channel, logs them via zap, and optionally
+// persists them to the audit_logs table via the repository.
 func (s *Service) drain() {
 	defer close(s.done)
 	for ev := range s.ch {
@@ -129,6 +167,24 @@ func (s *Service) drain() {
 			fields = append(fields, zap.String("meta_"+k, v))
 		}
 		s.logger.Info("audit", fields...)
+
+		if s.repo != nil {
+			entry := &RepositoryEntry{
+				EventType: ev.Type,
+				ActorID:   ev.ActorID,
+				TargetID:  ev.TargetID,
+				IP:        ev.IP,
+				Severity:  severityForEvent(ev.Type),
+				Metadata:  ev.Metadata,
+				CreatedAt: ev.Timestamp,
+			}
+			if err := s.repo.Insert(context.Background(), entry); err != nil {
+				s.logger.Warn("audit persist failed",
+					zap.String("event_type", ev.Type),
+					zap.Error(err),
+				)
+			}
+		}
 	}
 }
 
