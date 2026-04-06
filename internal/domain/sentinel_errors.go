@@ -33,4 +33,10 @@ var (
 	ErrOAuthAccountNotFound      = errors.New("oauth account not found")
 	ErrOAuthStateMismatch        = errors.New("oauth state mismatch")
 	ErrOAuthCodeExchangeFailed   = errors.New("oauth code exchange failed")
+
+	// Password policy errors.
+	ErrPasswordPolicyNotFound  = errors.New("password policy not found")
+	ErrPasswordPolicyViolation = errors.New("password policy violation")
+	ErrPasswordReused          = errors.New("password reused")
+	ErrPasswordExpired         = errors.New("password expired")
 )

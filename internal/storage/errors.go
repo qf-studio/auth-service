@@ -44,4 +44,13 @@ var (
 
 	// ErrDuplicateOAuthAccount indicates an OAuth account with the same provider and provider user ID already exists.
 	ErrDuplicateOAuthAccount = errors.New("duplicate oauth account")
+
+	// ErrPasswordPolicyViolation indicates the password does not meet the active policy requirements.
+	ErrPasswordPolicyViolation = errors.New("password policy violation")
+
+	// ErrPasswordReused indicates the password matches a previously used password within the history window.
+	ErrPasswordReused = errors.New("password reused")
+
+	// ErrPasswordExpired indicates the user's password has exceeded the maximum age.
+	ErrPasswordExpired = errors.New("password expired")
 )

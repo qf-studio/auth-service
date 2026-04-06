@@ -48,21 +48,23 @@ func NewPostgresUserRepository(pool *pgxpool.Pool) *PostgresUserRepository {
 // Create inserts a new user row. Returns ErrDuplicateEmail if the email is already taken.
 func (r *PostgresUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
 	query := `
-		INSERT INTO users (id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, last_login_at, created_at, updated_at, deleted_at`
+		INSERT INTO users (id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, password_changed_at, force_password_change, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		RETURNING id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, last_login_at, password_changed_at, force_password_change, created_at, updated_at, deleted_at`
 
 	out := &domain.User{}
 	err := r.pool.QueryRow(ctx, query,
 		user.ID, user.Email, user.PasswordHash, user.Name, user.Roles,
 		user.Locked, user.LockedAt, user.LockedReason,
 		user.EmailVerified, user.EmailVerifyToken, user.EmailVerifyTokenExpiresAt,
+		user.PasswordChangedAt, user.ForcePasswordChange,
 		user.CreatedAt, user.UpdatedAt,
 	).Scan(
 		&out.ID, &out.Email, &out.PasswordHash, &out.Name, &out.Roles,
 		&out.Locked, &out.LockedAt, &out.LockedReason,
 		&out.EmailVerified, &out.EmailVerifyToken, &out.EmailVerifyTokenExpiresAt,
-		&out.LastLoginAt, &out.CreatedAt, &out.UpdatedAt, &out.DeletedAt,
+		&out.LastLoginAt, &out.PasswordChangedAt, &out.ForcePasswordChange,
+		&out.CreatedAt, &out.UpdatedAt, &out.DeletedAt,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -106,7 +108,8 @@ func (r *PostgresUserRepository) findByColumn(ctx context.Context, column, value
 	query := fmt.Sprintf(`
 		SELECT id, email, password_hash, name, roles, locked, locked_at, locked_reason,
 		       email_verified, email_verify_token, email_verify_token_expires_at,
-		       last_login_at, created_at, updated_at, deleted_at
+		       last_login_at, password_changed_at, force_password_change,
+		       created_at, updated_at, deleted_at
 		FROM users
 		WHERE %s = $1`, column)
 
@@ -115,7 +118,8 @@ func (r *PostgresUserRepository) findByColumn(ctx context.Context, column, value
 		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
 		&user.Locked, &user.LockedAt, &user.LockedReason,
 		&user.EmailVerified, &user.EmailVerifyToken, &user.EmailVerifyTokenExpiresAt,
-		&user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
+		&user.LastLoginAt, &user.PasswordChangedAt, &user.ForcePasswordChange,
+		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -153,7 +157,8 @@ func (r *PostgresUserRepository) ConsumeEmailVerifyToken(ctx context.Context, to
 		WHERE email_verify_token = $2 AND deleted_at IS NULL
 		RETURNING id, email, password_hash, name, roles, locked, locked_at, locked_reason,
 		          email_verified, email_verify_token, email_verify_token_expires_at,
-		          last_login_at, created_at, updated_at, deleted_at`
+		          last_login_at, password_changed_at, force_password_change,
+		          created_at, updated_at, deleted_at`
 
 	now := time.Now().UTC()
 	user := &domain.User{}
@@ -161,7 +166,8 @@ func (r *PostgresUserRepository) ConsumeEmailVerifyToken(ctx context.Context, to
 		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
 		&user.Locked, &user.LockedAt, &user.LockedReason,
 		&user.EmailVerified, &user.EmailVerifyToken, &user.EmailVerifyTokenExpiresAt,
-		&user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
+		&user.LastLoginAt, &user.PasswordChangedAt, &user.ForcePasswordChange,
+		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
