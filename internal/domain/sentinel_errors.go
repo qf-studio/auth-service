@@ -33,4 +33,11 @@ var (
 	ErrOAuthAccountNotFound      = errors.New("oauth account not found")
 	ErrOAuthStateMismatch        = errors.New("oauth state mismatch")
 	ErrOAuthCodeExchangeFailed   = errors.New("oauth code exchange failed")
+
+	// Validation errors.
+	ErrValidationRequired = errors.New("field is required")
+	ErrValidationInvalid  = errors.New("field is invalid")
+
+	// Webhook errors.
+	ErrWebhookNotFound = errors.New("webhook not found")
 )

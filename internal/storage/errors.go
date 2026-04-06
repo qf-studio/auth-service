@@ -44,4 +44,7 @@ var (
 
 	// ErrDuplicateOAuthAccount indicates an OAuth account with the same provider and provider user ID already exists.
 	ErrDuplicateOAuthAccount = errors.New("duplicate oauth account")
+
+	// ErrDuplicateWebhook indicates a webhook with the same URL already exists.
+	ErrDuplicateWebhook = errors.New("duplicate webhook")
 )
