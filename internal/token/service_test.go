@@ -587,6 +587,130 @@ func TestEndToEnd_IssueValidateRevokeCheck(t *testing.T) {
 	assert.NotEqual(t, claims.TokenID, newClaims.TokenID)
 }
 
+// ── Benchmarks ───────────────────────────────────────────────────────────────
+
+func newBenchES256Service(b *testing.B) *token.Service {
+	b.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	mr := miniredis.RunT(b)
+	rc := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	b.Cleanup(func() { _ = rc.Close() })
+	cfg := config.JWTConfig{
+		Algorithm:       "ES256",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 7 * 24 * time.Hour,
+		SystemSecrets:   []string{"bench-secret"},
+	}
+	svc, err := token.NewServiceFromKey(cfg, key, rc, zap.NewNop(), audit.NopLogger{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return svc
+}
+
+func BenchmarkIssueTokenPair(b *testing.B) {
+	svc := newBenchES256Service(b)
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := svc.IssueTokenPair(ctx, "bench-user", []string{"user"}, []string{"read:all"}, domain.ClientTypeUser)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateToken(b *testing.B) {
+	svc := newBenchES256Service(b)
+	ctx := context.Background()
+	result, err := svc.IssueTokenPair(ctx, "bench-user", []string{"user"}, []string{"read:all"}, domain.ClientTypeUser)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := svc.ValidateToken(ctx, rawJWT)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRefresh(b *testing.B) {
+	// Each iteration needs a fresh refresh token since Refresh() rotates tokens.
+	// We pre-issue b.N token pairs before the timer starts.
+	svc := newBenchES256Service(b)
+	ctx := context.Background()
+
+	tokens := make([]string, b.N)
+	for i := 0; i < b.N; i++ {
+		result, err := svc.IssueTokenPair(ctx, "bench-user", []string{"user"}, nil, domain.ClientTypeUser)
+		if err != nil {
+			b.Fatal(err)
+		}
+		tokens[i] = result.RefreshToken
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := svc.Refresh(ctx, tokens[i])
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkIsRevoked_NotRevoked(b *testing.B) {
+	svc := newBenchES256Service(b)
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := svc.IsRevoked(ctx, "nonexistent-jti-bench")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkIsRevoked_Revoked(b *testing.B) {
+	svc := newBenchES256Service(b)
+	ctx := context.Background()
+	result, err := svc.IssueTokenPair(ctx, "bench-user", nil, nil, domain.ClientTypeUser)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := svc.Revoke(ctx, result.AccessToken); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := svc.IsRevoked(ctx, claims.TokenID)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkJWKS(b *testing.B) {
+	svc := newBenchES256Service(b)
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := svc.JWKS(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // ── IssueTokenPair with no system secrets ────────────────────────────────────
 
 func TestIssueTokenPair_NoSystemSecretsError(t *testing.T) {

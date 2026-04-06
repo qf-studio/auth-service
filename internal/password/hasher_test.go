@@ -128,3 +128,59 @@ func TestHash_EmptyPassword(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, hash)
 }
+
+// ── Benchmarks ────────────────────────────────────────────────────────────────
+
+func BenchmarkHash_NoPepper(b *testing.B) {
+	h := password.New(nil)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := h.Hash("correct-horse-battery-staple")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkHash_WithPepper(b *testing.B) {
+	pepper := []byte("bench-pepper-key-32-bytes-long!!")
+	h := password.New(pepper)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := h.Hash("correct-horse-battery-staple")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkVerify_NoPepper(b *testing.B) {
+	h := password.New(nil)
+	hash, err := h.Hash("correct-horse-battery-staple")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := h.Verify("correct-horse-battery-staple", hash)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkVerify_WithPepper(b *testing.B) {
+	pepper := []byte("bench-pepper-key-32-bytes-long!!")
+	h := password.New(pepper)
+	hash, err := h.Hash("correct-horse-battery-staple")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := h.Verify("correct-horse-battery-staple", hash)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
