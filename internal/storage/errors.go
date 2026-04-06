@@ -44,4 +44,10 @@ var (
 
 	// ErrDuplicateOAuthAccount indicates an OAuth account with the same provider and provider user ID already exists.
 	ErrDuplicateOAuthAccount = errors.New("duplicate oauth account")
+
+	// ErrDuplicateConsent indicates a consent record of this type already exists for the user.
+	ErrDuplicateConsent = errors.New("duplicate consent record")
+
+	// ErrDeletionAlreadyRequested indicates a pending deletion request already exists for this user.
+	ErrDeletionAlreadyRequested = errors.New("deletion already requested")
 )
