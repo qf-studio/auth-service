@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "github.com/qf-studio/auth-service/proto/auth/v1;authv1";
+
+import "google/protobuf/timestamp.proto";
+
+// AuthService provides token validation and permission checking for
+// QuantFlow Studio internal services.
+service AuthService {
+  // ValidateToken verifies an access token and returns its claims.
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+
+  // CheckPermission evaluates whether a subject may perform an action
+  // on a resource, using the RBAC policy engine.
+  rpc CheckPermission(CheckPermissionRequest) returns (CheckPermissionResponse);
+}
+
+message ValidateTokenRequest {
+  // The raw access token string (including qf_at_ prefix).
+  string token = 1;
+}
+
+message ValidateTokenResponse {
+  // Whether the token is valid and not revoked.
+  bool valid = 1;
+
+  // Token claims, populated only when valid is true.
+  TokenClaims claims = 2;
+}
+
+// TokenClaims mirrors domain.TokenClaims.
+message TokenClaims {
+  string subject = 1;
+  repeated string roles = 2;
+  repeated string scopes = 3;
+  string client_type = 4;
+  string token_id = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  google.protobuf.Timestamp issued_at = 7;
+  string jkt_thumbprint = 8;
+}
+
+message CheckPermissionRequest {
+  // Subject identifier (user ID or client ID).
+  string subject = 1;
+
+  // Resource being accessed (e.g., "users", "tokens").
+  string object = 2;
+
+  // Action being performed (e.g., "read", "write", "delete").
+  string action = 3;
+}
+
+message CheckPermissionResponse {
+  // Whether the action is allowed.
+  bool allowed = 1;
+}
