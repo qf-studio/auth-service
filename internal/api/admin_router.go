@@ -113,6 +113,19 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// RAR type management.
+	if svc.RAR != nil {
+		rarH := NewAdminRARHandlers(svc.RAR)
+		rarTypes := admin.Group("/rar/types")
+		{
+			rarTypes.GET("", rarH.List)
+			rarTypes.GET("/:type", rarH.Get)
+			rarTypes.POST("", rarH.Create)
+			rarTypes.PATCH("/:type", rarH.Update)
+			rarTypes.DELETE("/:type", rarH.Delete)
+		}
+	}
+
 	// Token introspection.
 	if svc.Tokens != nil {
 		tokenH := NewAdminTokenHandlers(svc.Tokens)

@@ -747,3 +747,95 @@ func TestIssueTokenPair_UniqueJTI(t *testing.T) {
 		jtis[claims.TokenID] = true
 	}
 }
+
+// ── IssueTokenPair with AuthorizationDetails (RFC 9396) ─────────────────────
+
+func TestIssueTokenPair_WithAuthorizationDetails(t *testing.T) {
+	tests := []struct {
+		name         string
+		authzDetails []domain.AuthorizationDetail
+		wantCount    int
+	}{
+		{
+			name:         "nil authorization details omitted from token",
+			authzDetails: nil,
+			wantCount:    0,
+		},
+		{
+			name:         "empty slice omitted from token",
+			authzDetails: []domain.AuthorizationDetail{},
+			wantCount:    0,
+		},
+		{
+			name: "single authorization detail embedded",
+			authzDetails: []domain.AuthorizationDetail{
+				{
+					Type:      "payment_initiation",
+					Actions:   []string{"initiate", "status"},
+					Locations: []string{"https://api.example.com/payments"},
+				},
+			},
+			wantCount: 1,
+		},
+		{
+			name: "multiple authorization details embedded",
+			authzDetails: []domain.AuthorizationDetail{
+				{
+					Type:       "account_information",
+					Actions:    []string{"list", "read"},
+					Locations:  []string{"https://api.example.com/accounts"},
+					DataTypes:  []string{"balance", "transactions"},
+					Identifier: "acc-123",
+				},
+				{
+					Type:       "payment_initiation",
+					Actions:    []string{"initiate"},
+					Privileges: []string{"high_value"},
+				},
+			},
+			wantCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _ := newES256Service(t)
+			ctx := context.Background()
+
+			result, err := svc.IssueTokenPair(ctx, "user-rar", []string{"user"}, []string{"openid"}, domain.ClientTypeUser, tt.authzDetails...)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+			claims, err := svc.ValidateToken(ctx, rawJWT)
+			require.NoError(t, err)
+
+			assert.Len(t, claims.AuthorizationDetails, tt.wantCount)
+			if tt.wantCount > 0 {
+				assert.Equal(t, tt.authzDetails[0].Type, claims.AuthorizationDetails[0].Type)
+			}
+		})
+	}
+}
+
+func TestIssueTokenPairWithDPoP_AuthorizationDetails(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	details := []domain.AuthorizationDetail{
+		{Type: "payment_initiation", Actions: []string{"initiate"}},
+	}
+
+	result, err := svc.IssueTokenPairWithDPoP(ctx, "user-dpop-rar", []string{"user"}, nil, domain.ClientTypeUser, "test-thumbprint", details...)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "DPoP", result.TokenType)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+
+	assert.Len(t, claims.AuthorizationDetails, 1)
+	assert.Equal(t, "payment_initiation", claims.AuthorizationDetails[0].Type)
+	assert.Equal(t, "test-thumbprint", claims.JKTThumbprint)
+}

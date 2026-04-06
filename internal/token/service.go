@@ -108,18 +108,18 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 }
 
 // IssueTokenPair generates an access/refresh token pair for the given subject.
-func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "")
+func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, authzDetails ...domain.AuthorizationDetail) (*api.AuthResult, error) {
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", authzDetails)
 }
 
 // IssueTokenPairWithDPoP generates a DPoP-bound access/refresh token pair.
 // The jktThumbprint is embedded as the cnf.jkt claim in the access token.
-func (s *Service) IssueTokenPairWithDPoP(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, jktThumbprint)
+func (s *Service) IssueTokenPairWithDPoP(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, authzDetails ...domain.AuthorizationDetail) (*api.AuthResult, error) {
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, jktThumbprint, authzDetails)
 }
 
-func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string) (*api.AuthResult, error) {
-	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, jktThumbprint)
+func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, authzDetails []domain.AuthorizationDetail) (*api.AuthResult, error) {
+	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, jktThumbprint, authzDetails)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
 	}
@@ -163,7 +163,7 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 
 	// Issue new pair — refresh tokens carry no roles/scopes, so we issue with empty.
 	// The caller (auth service) should enrich with user's current roles/scopes.
-	result, err := s.issueTokenPair(ctx, subject, nil, nil, domain.ClientTypeUser, jktThumbprint)
+	result, err := s.issueTokenPair(ctx, subject, nil, nil, domain.ClientTypeUser, jktThumbprint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -277,10 +277,11 @@ type Confirmation struct {
 // customClaims extends jwt.RegisteredClaims with our application-specific fields.
 type customClaims struct {
 	jwt.RegisteredClaims
-	Roles        []string      `json:"roles,omitempty"`
-	Scopes       []string      `json:"scopes,omitempty"`
-	ClientType   string        `json:"client_type"`
-	Confirmation *Confirmation `json:"cnf,omitempty"`
+	Roles                []string                  `json:"roles,omitempty"`
+	Scopes               []string                  `json:"scopes,omitempty"`
+	ClientType           string                    `json:"client_type"`
+	Confirmation         *Confirmation             `json:"cnf,omitempty"`
+	AuthorizationDetails []domain.AuthorizationDetail `json:"authorization_details,omitempty"`
 }
 
 // GetJTI is a helper to extract the JTI from RegisteredClaims.
@@ -288,7 +289,7 @@ func (c *customClaims) GetJTI() (string, error) {
 	return c.ID, nil
 }
 
-func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string) (string, error) {
+func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, authzDetails []domain.AuthorizationDetail) (string, error) {
 	jti, err := generateRandomID(jtiBytes)
 	if err != nil {
 		return "", fmt.Errorf("generate jti: %w", err)
@@ -303,9 +304,10 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.cfg.AccessTokenTTL)),
 			ID:        jti,
 		},
-		Roles:      roles,
-		Scopes:     scopes,
-		ClientType: string(clientType),
+		Roles:                roles,
+		Scopes:               scopes,
+		ClientType:           string(clientType),
+		AuthorizationDetails: authzDetails,
 	}
 
 	if jktThumbprint != "" {
@@ -376,6 +378,9 @@ func claimsToDomain(c *customClaims) (*domain.TokenClaims, error) {
 	}
 	if c.Confirmation != nil {
 		claims.JKTThumbprint = c.Confirmation.JKT
+	}
+	if len(c.AuthorizationDetails) > 0 {
+		claims.AuthorizationDetails = c.AuthorizationDetails
 	}
 
 	return claims, nil

@@ -155,14 +155,15 @@ type OIDCDiscoveryResponse struct {
 
 // AuthorizeRequest represents the parameters for an OAuth2 authorization request.
 type AuthorizeRequest struct {
-	ClientID            string `form:"client_id"             binding:"required"`
-	RedirectURI         string `form:"redirect_uri"          binding:"required"`
-	ResponseType        string `form:"response_type"         binding:"required"`
-	Scope               string `form:"scope"                 binding:"required"`
-	State               string `form:"state"`
-	Nonce               string `form:"nonce"`
-	CodeChallenge       string `form:"code_challenge"`
-	CodeChallengeMethod string `form:"code_challenge_method"`
+	ClientID             string `form:"client_id"              binding:"required"`
+	RedirectURI          string `form:"redirect_uri"           binding:"required"`
+	ResponseType         string `form:"response_type"          binding:"required"`
+	Scope                string `form:"scope"                  binding:"required"`
+	State                string `form:"state"`
+	Nonce                string `form:"nonce"`
+	CodeChallenge        string `form:"code_challenge"`
+	CodeChallengeMethod  string `form:"code_challenge_method"`
+	AuthorizationDetails string `form:"authorization_details"`
 }
 
 // AuthorizeResponse is returned by the authorization endpoint.
@@ -172,12 +173,13 @@ type AuthorizeResponse struct {
 
 // CodeExchangeRequest represents the token request for authorization_code grant.
 type CodeExchangeRequest struct {
-	GrantType    string `json:"grant_type"    binding:"required"`
-	Code         string `json:"code"          binding:"required"`
-	RedirectURI  string `json:"redirect_uri"  binding:"required"`
-	ClientID     string `json:"client_id"     binding:"required"`
-	ClientSecret string `json:"client_secret"`
-	CodeVerifier string `json:"code_verifier"`
+	GrantType            string                    `json:"grant_type"            binding:"required"`
+	Code                 string                    `json:"code"                  binding:"required"`
+	RedirectURI          string                    `json:"redirect_uri"          binding:"required"`
+	ClientID             string                    `json:"client_id"             binding:"required"`
+	ClientSecret         string                    `json:"client_secret"`
+	CodeVerifier         string                    `json:"code_verifier"`
+	AuthorizationDetails []domain.AuthorizationDetail `json:"authorization_details,omitempty"`
 }
 
 // OIDCTokenResponse is the token response including an optional ID token.

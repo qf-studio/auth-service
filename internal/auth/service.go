@@ -35,7 +35,7 @@ const (
 // TokenIssuer abstracts token pair creation for the auth service.
 // This is a narrow interface satisfied by token.Service.
 type TokenIssuer interface {
-	IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error)
+	IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, authzDetails ...domain.AuthorizationDetail) (*api.AuthResult, error)
 	Revoke(ctx context.Context, token string) error
 }
 

@@ -283,6 +283,53 @@ type AdminWebhookService interface {
 	TestWebhook(ctx context.Context, webhookID string, req *TestWebhookRequest) (*TestWebhookResponse, error)
 }
 
+// --- RAR admin types ---
+
+// AdminRARType represents a registered authorization type in admin API responses.
+type AdminRARType struct {
+	Type        string    `json:"type"`
+	Description string    `json:"description"`
+	Locations   []string  `json:"locations,omitempty"`
+	Actions     []string  `json:"actions,omitempty"`
+	DataTypes   []string  `json:"datatypes,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// AdminRARTypeList is the paginated response for listing registered authorization types.
+type AdminRARTypeList struct {
+	Types   []AdminRARType `json:"types"`
+	Total   int            `json:"total"`
+	Page    int            `json:"page"`
+	PerPage int            `json:"per_page"`
+}
+
+// CreateRARTypeRequest is the request body for registering a new authorization type.
+type CreateRARTypeRequest struct {
+	Type        string   `json:"type"        validate:"required,min=1,max=255"`
+	Description string   `json:"description" validate:"required,min=1,max=1000"`
+	Locations   []string `json:"locations"   validate:"omitempty"`
+	Actions     []string `json:"actions"     validate:"omitempty"`
+	DataTypes   []string `json:"datatypes"   validate:"omitempty"`
+}
+
+// UpdateRARTypeRequest is the request body for updating a registered authorization type.
+type UpdateRARTypeRequest struct {
+	Description *string  `json:"description" validate:"omitempty,min=1,max=1000"`
+	Locations   []string `json:"locations"   validate:"omitempty"`
+	Actions     []string `json:"actions"     validate:"omitempty"`
+	DataTypes   []string `json:"datatypes"   validate:"omitempty"`
+}
+
+// AdminRARService defines admin operations for managing registered authorization types (RFC 9396).
+type AdminRARService interface {
+	ListRARTypes(ctx context.Context, page, perPage int) (*AdminRARTypeList, error)
+	GetRARType(ctx context.Context, rarType string) (*AdminRARType, error)
+	CreateRARType(ctx context.Context, req *CreateRARTypeRequest) (*AdminRARType, error)
+	UpdateRARType(ctx context.Context, rarType string, req *UpdateRARTypeRequest) (*AdminRARType, error)
+	DeleteRARType(ctx context.Context, rarType string) error
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users          AdminUserService
@@ -293,4 +340,5 @@ type AdminServices struct {
 	Consent        ConsentService
 	ClientApproval AdminClientApprovalService
 	Webhooks       AdminWebhookService
+	RAR            AdminRARService
 }

@@ -123,7 +123,7 @@ type mockTokenIssuer struct {
 	revokeFn         func(ctx context.Context, token string) error
 }
 
-func (m *mockTokenIssuer) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, ct domain.ClientType) (*api.AuthResult, error) {
+func (m *mockTokenIssuer) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, ct domain.ClientType, _ ...domain.AuthorizationDetail) (*api.AuthResult, error) {
 	if m.issueTokenPairFn != nil {
 		return m.issueTokenPairFn(ctx, subject, roles, scopes, ct)
 	}
