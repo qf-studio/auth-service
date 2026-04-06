@@ -276,6 +276,28 @@ type AdminClientApprovalService interface {
 	ApproveClient(ctx context.Context, clientID string) (*ClientApprovalInfo, error)
 }
 
+// --- Broker token types ---
+
+// BrokerTokenRequest is the request body for the public broker token endpoint.
+type BrokerTokenRequest struct {
+	ClientID     string `json:"client_id"     binding:"required"`
+	ClientSecret string `json:"client_secret" binding:"required"`
+	TargetName   string `json:"target_name"   binding:"required"`
+}
+
+// BrokerTokenResponse is returned when a broker token is successfully issued.
+type BrokerTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+	TargetName  string `json:"target_name"`
+}
+
+// BrokerTokenService defines the public-facing broker token issuance operation.
+type BrokerTokenService interface {
+	IssueBrokerToken(ctx context.Context, clientID, clientSecret, targetName string) (*BrokerTokenResponse, error)
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
@@ -285,6 +307,7 @@ type Services struct {
 	MFA     MFAService
 	OAuth   OAuthService
 	OIDC    OIDCProviderService
+	Broker  BrokerTokenService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

@@ -155,6 +155,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		zap.Strings("scopes", cfg.OIDC.SupportedScopes),
 	)
 
+	// Broker token service is registered in a subsequent issue.
+	// Depends on the credential vault database schema and AES-256-GCM encryption layer.
+	var brokerTokenSvc api.BrokerTokenService
+
 	services := &api.Services{
 		Auth:    authSvc,
 		Token:   tokenSvc,
@@ -163,6 +167,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		MFA:     mfaSvc,
 		OAuth:   oauthSvc,
 		OIDC:    oidcSvc,
+		Broker:  brokerTokenSvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -217,6 +222,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	var consentSvc api.ConsentService
 	var clientApprovalSvc api.AdminClientApprovalService
 
+	// Broker credential admin service is registered in a subsequent issue.
+	// Depends on the credential vault database schema and AES-256-GCM encryption layer.
+	var adminBrokerSvc api.AdminBrokerService
+
 	adminServices := &api.AdminServices{
 		Users:          adminUserSvc,
 		Clients:        adminClientSvc,
@@ -226,6 +235,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Consent:        consentSvc,
 		ClientApproval: clientApprovalSvc,
 		Webhooks:       adminWebhookSvc,
+		Brokers:        adminBrokerSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

@@ -283,6 +283,62 @@ type AdminWebhookService interface {
 	TestWebhook(ctx context.Context, webhookID string, req *TestWebhookRequest) (*TestWebhookResponse, error)
 }
 
+// --- Broker credential admin types ---
+
+// AdminBrokerCredential represents a broker credential in admin API responses.
+type AdminBrokerCredential struct {
+	ID             string     `json:"id"`
+	OwnerClientID  string     `json:"owner_client_id"`
+	TargetName     string     `json:"target_name"`
+	CredentialType string     `json:"credential_type"`
+	Scopes         []string   `json:"scopes"`
+	Status         string     `json:"status"`
+	RotatedAt      *time.Time `json:"rotated_at,omitempty"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// AdminBrokerCredentialWithSecret is returned only on create and rotation.
+type AdminBrokerCredentialWithSecret struct {
+	AdminBrokerCredential
+	Secret          string     `json:"secret"`
+	GracePeriodEnds *time.Time `json:"grace_period_ends,omitempty"`
+}
+
+// AdminBrokerCredentialList is the paginated response for listing broker credentials.
+type AdminBrokerCredentialList struct {
+	Credentials []AdminBrokerCredential `json:"credentials"`
+	Total       int                     `json:"total"`
+	Page        int                     `json:"page"`
+	PerPage     int                     `json:"per_page"`
+}
+
+// CreateBrokerCredentialRequest is the request body for creating a broker credential.
+type CreateBrokerCredentialRequest struct {
+	OwnerClientID  string   `json:"owner_client_id"  validate:"required,uuid"`
+	TargetName     string   `json:"target_name"      validate:"required,min=1,max=255"`
+	CredentialType string   `json:"credential_type"  validate:"required,oneof=api_key oauth_token certificate"`
+	Scopes         []string `json:"scopes"           validate:"omitempty"`
+	ExpiresAt      *string  `json:"expires_at"       validate:"omitempty"`
+}
+
+// UpdateBrokerCredentialRequest is the request body for updating a broker credential.
+type UpdateBrokerCredentialRequest struct {
+	TargetName *string  `json:"target_name" validate:"omitempty,min=1,max=255"`
+	Scopes     []string `json:"scopes"      validate:"omitempty"`
+}
+
+// AdminBrokerService defines admin operations for broker credential management.
+type AdminBrokerService interface {
+	ListCredentials(ctx context.Context, page, perPage int, ownerClientID string) (*AdminBrokerCredentialList, error)
+	GetCredential(ctx context.Context, credentialID string) (*AdminBrokerCredential, error)
+	CreateCredential(ctx context.Context, req *CreateBrokerCredentialRequest) (*AdminBrokerCredentialWithSecret, error)
+	UpdateCredential(ctx context.Context, credentialID string, req *UpdateBrokerCredentialRequest) (*AdminBrokerCredential, error)
+	DeleteCredential(ctx context.Context, credentialID string) error
+	RotateCredential(ctx context.Context, credentialID string) (*AdminBrokerCredentialWithSecret, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users          AdminUserService
@@ -293,4 +349,5 @@ type AdminServices struct {
 	Consent        ConsentService
 	ClientApproval AdminClientApprovalService
 	Webhooks       AdminWebhookService
+	Brokers        AdminBrokerService
 }
