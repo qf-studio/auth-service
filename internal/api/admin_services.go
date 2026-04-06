@@ -196,6 +196,93 @@ type AdminAPIKeyService interface {
 	RotateAPIKey(ctx context.Context, keyID string) (*AdminAPIKeyWithSecret, error)
 }
 
+// --- Webhook admin types ---
+
+// AdminWebhook represents a webhook subscription in admin API responses.
+type AdminWebhook struct {
+	ID           string    `json:"id"`
+	URL          string    `json:"url"`
+	EventTypes   []string  `json:"event_types"`
+	Active       bool      `json:"active"`
+	FailureCount int       `json:"failure_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// AdminWebhookWithSecret is returned only on create (includes the raw signing secret).
+type AdminWebhookWithSecret struct {
+	AdminWebhook
+	Secret string `json:"secret"`
+}
+
+// AdminWebhookList is the paginated response for listing webhooks.
+type AdminWebhookList struct {
+	Webhooks []AdminWebhook `json:"webhooks"`
+	Total    int            `json:"total"`
+	Page     int            `json:"page"`
+	PerPage  int            `json:"per_page"`
+}
+
+// AdminWebhookDelivery represents a webhook delivery log entry.
+type AdminWebhookDelivery struct {
+	ID           string     `json:"id"`
+	WebhookID    string     `json:"webhook_id"`
+	EventType    string     `json:"event_type"`
+	Payload      string     `json:"payload"`
+	Status       string     `json:"status"`
+	ResponseCode *int       `json:"response_code,omitempty"`
+	ResponseBody *string    `json:"response_body,omitempty"`
+	Attempt      int        `json:"attempt"`
+	NextRetryAt  *time.Time `json:"next_retry_at,omitempty"`
+	DeliveredAt  *time.Time `json:"delivered_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+}
+
+// AdminWebhookDeliveryList is the paginated response for listing deliveries.
+type AdminWebhookDeliveryList struct {
+	Deliveries []AdminWebhookDelivery `json:"deliveries"`
+	Total      int                    `json:"total"`
+	Page       int                    `json:"page"`
+	PerPage    int                    `json:"per_page"`
+}
+
+// CreateWebhookRequest is the request body for creating a webhook.
+type CreateWebhookRequest struct {
+	URL        string   `json:"url"         validate:"required,url"`
+	EventTypes []string `json:"event_types" validate:"required,min=1"`
+}
+
+// UpdateWebhookRequest is the request body for updating a webhook.
+type UpdateWebhookRequest struct {
+	URL        *string  `json:"url"         validate:"omitempty,url"`
+	EventTypes []string `json:"event_types" validate:"omitempty"`
+	Active     *bool    `json:"active"      validate:"omitempty"`
+}
+
+// TestWebhookRequest is the request body for sending a test webhook event.
+type TestWebhookRequest struct {
+	EventType string `json:"event_type" validate:"required"`
+}
+
+// TestWebhookResponse is the response for a test webhook delivery.
+type TestWebhookResponse struct {
+	DeliveryID   string `json:"delivery_id"`
+	Status       string `json:"status"`
+	ResponseCode *int   `json:"response_code,omitempty"`
+}
+
+// AdminWebhookService defines admin operations for webhook management.
+type AdminWebhookService interface {
+	ListWebhooks(ctx context.Context, page, perPage int, activeOnly bool) (*AdminWebhookList, error)
+	GetWebhook(ctx context.Context, webhookID string) (*AdminWebhook, error)
+	CreateWebhook(ctx context.Context, req *CreateWebhookRequest) (*AdminWebhookWithSecret, error)
+	UpdateWebhook(ctx context.Context, webhookID string, req *UpdateWebhookRequest) (*AdminWebhook, error)
+	DeleteWebhook(ctx context.Context, webhookID string) error
+	ListDeliveries(ctx context.Context, webhookID string, page, perPage int) (*AdminWebhookDeliveryList, error)
+	RetryDelivery(ctx context.Context, webhookID, deliveryID string) (*AdminWebhookDelivery, error)
+	TestWebhook(ctx context.Context, webhookID string, req *TestWebhookRequest) (*TestWebhookResponse, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users          AdminUserService
@@ -205,4 +292,5 @@ type AdminServices struct {
 	MFA            MFAService
 	Consent        ConsentService
 	ClientApproval AdminClientApprovalService
+	Webhooks       AdminWebhookService
 }

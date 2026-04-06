@@ -23,6 +23,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/dpop"
 	grpcserver "github.com/qf-studio/auth-service/internal/grpc"
+	"github.com/qf-studio/auth-service/internal/webhook"
 	"github.com/qf-studio/auth-service/internal/rbac"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
@@ -178,11 +179,19 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	clientRepo := storage.NewPostgresClientRepository(pgPool)
 	apiKeyRepo := storage.NewPostgresAPIKeyRepository(pgPool)
 
+	// ── Webhook repositories ─────────────────────────────────────────────
+	webhookRepo := storage.NewPostgresWebhookRepository(pgPool)
+	webhookDeliveryRepo := storage.NewPostgresWebhookDeliveryRepository(pgPool)
+
+	// ── Webhook dispatcher ───────────────────────────────────────────────
+	webhookDispatcher := webhook.NewDispatcher(webhookRepo, webhookDeliveryRepo, log)
+
 	// ── Admin services ────────────────────────────────────────────────────
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
 	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
 	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, hasher, log, auditSvc)
+	adminWebhookSvc := admin.NewWebhookService(webhookRepo, webhookDeliveryRepo, webhookDispatcher, log, auditSvc)
 
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
@@ -216,6 +225,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		MFA:            mfaSvc,
 		Consent:        consentSvc,
 		ClientApproval: clientApprovalSvc,
+		Webhooks:       adminWebhookSvc,
 	}
 
 	adminDeps := &api.AdminDeps{
@@ -263,6 +273,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Decision: Redis is listed before any future DB closer so that
 	// token-revocation lookups during drain can still reach the cache.
 	closers := []httpserver.Closer{
+		webhookDispatcher,
 		auditSvc,
 		&redisCloser{client: redisClient},
 	}
