@@ -38,6 +38,16 @@ message TokenClaims {
   int64 expires_at = 6;   // Unix timestamp
   int64 issued_at = 7;    // Unix timestamp
   string jkt_thumbprint = 8;
+  repeated AuthorizationDetail authorization_details = 9;
+}
+
+// AuthorizationDetail represents a single RFC 9396 authorization_details entry.
+message AuthorizationDetail {
+  string type = 1;
+  repeated string locations = 2;
+  repeated string actions = 3;
+  repeated string datatypes = 4;
+  string identifier = 5;
 }
 
 message GetUserRequest {

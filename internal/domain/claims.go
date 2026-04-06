@@ -38,4 +38,8 @@ type TokenClaims struct {
 	// JKTThumbprint is the JWK SHA-256 thumbprint from the cnf.jkt claim (RFC 9449).
 	// Non-empty when the token is DPoP-bound; empty for Bearer-only tokens.
 	JKTThumbprint string
+
+	// AuthorizationDetails holds RFC 9396 Rich Authorization Request entries.
+	// Non-nil when the token was issued with authorization_details; nil otherwise.
+	AuthorizationDetails []AuthorizationDetail
 }

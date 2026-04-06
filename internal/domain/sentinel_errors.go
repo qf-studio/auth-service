@@ -33,6 +33,14 @@ var (
 	ErrInsufficientScope = errors.New("insufficient scope")
 	ErrInsufficientRole  = errors.New("insufficient role")
 
+	// RAR (RFC 9396) errors.
+	ErrRARTypeMissing      = errors.New("authorization type is required")
+	ErrRARTypeInvalid      = errors.New("authorization type format is invalid")
+	ErrRARTypeNotAllowed   = errors.New("authorization type not allowed for client")
+	ErrRARTooManyLocations = errors.New("too many locations in authorization detail")
+	ErrRARTooManyActions   = errors.New("too many actions in authorization detail")
+	ErrRARTooManyDataTypes = errors.New("too many datatypes in authorization detail")
+
 	// OAuth errors.
 	ErrOAuthProviderNotSupported = errors.New("oauth provider not supported")
 	ErrOAuthAccountAlreadyLinked = errors.New("oauth account already linked")
