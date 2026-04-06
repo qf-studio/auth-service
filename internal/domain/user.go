@@ -16,6 +16,7 @@ type User struct {
 	EmailVerifyToken          *string
 	EmailVerifyTokenExpiresAt *time.Time
 	LastLoginAt               *time.Time
+	DeletionRequestedAt       *time.Time
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
 	DeletedAt                 *time.Time

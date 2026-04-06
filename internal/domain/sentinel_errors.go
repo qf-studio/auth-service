@@ -33,4 +33,11 @@ var (
 	ErrOAuthAccountNotFound      = errors.New("oauth account not found")
 	ErrOAuthStateMismatch        = errors.New("oauth state mismatch")
 	ErrOAuthCodeExchangeFailed   = errors.New("oauth code exchange failed")
+
+	// GDPR / consent errors.
+	ErrConsentNotFound            = errors.New("consent record not found")
+	ErrConsentAlreadyGranted      = errors.New("consent already granted")
+	ErrDeletionRequestNotFound    = errors.New("deletion request not found")
+	ErrDeletionRequestExists      = errors.New("deletion request already exists")
+	ErrDeletionRequestNotCancellable = errors.New("deletion request cannot be cancelled")
 )
