@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Argon2id parameters per project security spec.
@@ -44,9 +45,14 @@ type Hasher interface {
 	Hash(password string) (string, error)
 
 	// Verify returns true when password matches the stored hash.
+	// Supports both Argon2id (PHC format) and legacy bcrypt ($2a$/$2b$) hashes.
 	// It returns (false, nil) for a valid but non-matching hash, and
 	// (false, ErrInvalidHash) when the stored hash is malformed.
 	Verify(password, hash string) (bool, error)
+
+	// NeedsUpgrade returns true when the hash uses a legacy algorithm (e.g. bcrypt)
+	// and should be re-hashed with Argon2id on next successful login.
+	NeedsUpgrade(hash string) bool
 }
 
 // argon2idHasher is the production implementation of Hasher.
@@ -85,8 +91,20 @@ func (h *argon2idHasher) Hash(password string) (string, error) {
 	return encoded, nil
 }
 
-// Verify checks whether password matches the stored Argon2id hash.
+// Verify checks whether password matches the stored hash.
+// Supports Argon2id (PHC format) and legacy bcrypt ($2a$/$2b$) hashes.
 func (h *argon2idHasher) Verify(password, hash string) (bool, error) {
+	if isBcryptHash(hash) {
+		err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("password verify bcrypt: %w", err)
+		}
+		return true, nil
+	}
+
 	salt, storedKey, err := parseHash(hash)
 	if err != nil {
 		return false, err
@@ -96,6 +114,16 @@ func (h *argon2idHasher) Verify(password, hash string) (bool, error) {
 	candidate := argon2.IDKey(input, salt, argonTime, argonMemory, argonThreads, keyLen)
 
 	return subtle.ConstantTimeCompare(candidate, storedKey) == 1, nil
+}
+
+// NeedsUpgrade returns true when the hash uses a legacy algorithm (bcrypt).
+func (h *argon2idHasher) NeedsUpgrade(hash string) bool {
+	return isBcryptHash(hash)
+}
+
+// isBcryptHash detects bcrypt hashes by their standard prefix.
+func isBcryptHash(hash string) bool {
+	return strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$")
 }
 
 // applyPepper returns HMAC-SHA256(pepper, password) when a pepper is set,

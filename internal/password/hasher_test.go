@@ -6,9 +6,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/qf-studio/auth-service/internal/password"
 )
+
+func generateBcryptHash(t *testing.T, pw string) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	require.NoError(t, err)
+	return string(hash)
+}
 
 func TestHash_ProducesValidPHCFormat(t *testing.T) {
 	h := password.New(nil)
@@ -119,6 +127,39 @@ func TestVerify_NoPepperVsPepper(t *testing.T) {
 	ok, err := password.New([]byte("some-pepper")).Verify(pw, hash)
 	require.NoError(t, err)
 	assert.False(t, ok, "hasher with pepper must reject hash produced without pepper")
+}
+
+func TestNeedsUpgrade_BcryptHash(t *testing.T) {
+	h := password.New(nil)
+	assert.True(t, h.NeedsUpgrade("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"))
+	assert.True(t, h.NeedsUpgrade("$2b$12$WApznUPhDubN0oeveSXHp.dznFJTijLnEByIdKmfzzqFoMRwIusn2"))
+}
+
+func TestNeedsUpgrade_Argon2idHash(t *testing.T) {
+	h := password.New(nil)
+	hash, err := h.Hash("test-password-123456")
+	require.NoError(t, err)
+	assert.False(t, h.NeedsUpgrade(hash))
+}
+
+func TestVerify_BcryptHash(t *testing.T) {
+	h := password.New(nil)
+	// bcrypt hash of "correct-horse-battery-staple" generated with cost 10.
+	pw := "correct-horse-battery-staple"
+	bcryptHash := generateBcryptHash(t, pw)
+
+	ok, err := h.Verify(pw, bcryptHash)
+	require.NoError(t, err)
+	assert.True(t, ok, "bcrypt verification should succeed")
+}
+
+func TestVerify_BcryptHash_WrongPassword(t *testing.T) {
+	h := password.New(nil)
+	bcryptHash := generateBcryptHash(t, "correct-password")
+
+	ok, err := h.Verify("wrong-password", bcryptHash)
+	require.NoError(t, err)
+	assert.False(t, ok, "bcrypt verification should fail with wrong password")
 }
 
 func TestHash_EmptyPassword(t *testing.T) {

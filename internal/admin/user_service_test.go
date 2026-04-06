@@ -109,6 +109,8 @@ func (m *mockHasher) Verify(password, hash string) (bool, error) {
 	return hash == "$argon2id$mock$"+password, nil
 }
 
+func (m *mockHasher) NeedsUpgrade(_ string) bool { return false }
+
 // --- Helpers ---
 
 func testUser() *domain.User {

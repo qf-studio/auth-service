@@ -14,21 +14,33 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 type mockUserRepository struct {
-	findByEmailFn   func(ctx context.Context, email string) (*domain.User, error)
-	updateLastLogin func(ctx context.Context, userID string, ts time.Time) error
+	findByEmailFn        func(ctx context.Context, email string) (*domain.User, error)
+	findByIDFn           func(ctx context.Context, id string) (*domain.User, error)
+	createFn             func(ctx context.Context, user *domain.User) (*domain.User, error)
+	updateLastLogin      func(ctx context.Context, userID string, ts time.Time) error
+	updatePasswordHashFn func(ctx context.Context, userID, newHash string) error
+	getPasswordHistoryFn func(ctx context.Context, userID string, limit int) ([]domain.PasswordHistoryEntry, error)
+	addPasswordHistoryFn func(ctx context.Context, userID, hash string) error
 }
 
-func (m *mockUserRepository) Create(_ context.Context, _ *domain.User) (*domain.User, error) {
-	return nil, fmt.Errorf("not implemented")
+func (m *mockUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
+	if m.createFn != nil {
+		return m.createFn(ctx, user)
+	}
+	return user, nil
 }
 
-func (m *mockUserRepository) FindByID(_ context.Context, _ string) (*domain.User, error) {
+func (m *mockUserRepository) FindByID(ctx context.Context, id string) (*domain.User, error) {
+	if m.findByIDFn != nil {
+		return m.findByIDFn(ctx, id)
+	}
 	return nil, fmt.Errorf("not implemented")
 }
 
@@ -47,11 +59,36 @@ func (m *mockUserRepository) UpdateLastLogin(ctx context.Context, userID string,
 }
 
 func (m *mockUserRepository) SetEmailVerifyToken(_ context.Context, _ string, _ string, _ time.Time) error {
-	return fmt.Errorf("not implemented")
+	return nil
 }
 
 func (m *mockUserRepository) ConsumeEmailVerifyToken(_ context.Context, _ string) (*domain.User, error) {
 	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockUserRepository) UpdatePasswordHash(ctx context.Context, userID, newHash string) error {
+	if m.updatePasswordHashFn != nil {
+		return m.updatePasswordHashFn(ctx, userID, newHash)
+	}
+	return nil
+}
+
+func (m *mockUserRepository) SetForcePasswordChange(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+
+func (m *mockUserRepository) GetPasswordHistory(ctx context.Context, userID string, limit int) ([]domain.PasswordHistoryEntry, error) {
+	if m.getPasswordHistoryFn != nil {
+		return m.getPasswordHistoryFn(ctx, userID, limit)
+	}
+	return nil, nil
+}
+
+func (m *mockUserRepository) AddPasswordHistory(ctx context.Context, userID, hash string) error {
+	if m.addPasswordHistoryFn != nil {
+		return m.addPasswordHistoryFn(ctx, userID, hash)
+	}
+	return nil
 }
 
 type mockRefreshTokenRepository struct {
@@ -117,7 +154,8 @@ func (m *mockBreachChecker) IsBreached(ctx context.Context, password string) (bo
 }
 
 type mockHasher struct {
-	verifyFn func(password, hash string) (bool, error)
+	verifyFn       func(password, hash string) (bool, error)
+	needsUpgradeFn func(hash string) bool
 }
 
 func (m *mockHasher) Hash(_ string) (string, error) {
@@ -129,6 +167,13 @@ func (m *mockHasher) Verify(password, hash string) (bool, error) {
 		return m.verifyFn(password, hash)
 	}
 	return true, nil
+}
+
+func (m *mockHasher) NeedsUpgrade(hash string) bool {
+	if m.needsUpgradeFn != nil {
+		return m.needsUpgradeFn(hash)
+	}
+	return false
 }
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
@@ -682,4 +727,189 @@ func TestGetMe_ReturnsStub(t *testing.T) {
 	user, err := svc.GetMe(context.Background(), "user-42")
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", user.ID)
+}
+
+// ── Register Tests ──────────────────────────────────────────────────────────
+
+func TestRegister_PolicyValidation(t *testing.T) {
+	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	_, err := svc.Register(context.Background(), "test@example.com", "short", "Test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrPasswordTooShort)
+}
+
+func TestRegister_CreatesUser(t *testing.T) {
+	var createdUser *domain.User
+	users := &mockUserRepository{
+		createFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+			createdUser = u
+			return u, nil
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	info, err := svc.Register(context.Background(), "test@example.com", "valid-password-12345", "Test User")
+	require.NoError(t, err)
+	assert.Equal(t, "test@example.com", info.Email)
+	assert.Equal(t, "Test User", info.Name)
+	assert.NotEmpty(t, info.ID)
+	require.NotNil(t, createdUser)
+	assert.NotEmpty(t, createdUser.PasswordHash)
+	assert.NotNil(t, createdUser.PasswordChangedAt)
+}
+
+// ── ChangePassword Tests ────────────────────────────────────────────────────
+
+func TestChangePassword_Success(t *testing.T) {
+	existingHash := "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g"
+	var updatedHash string
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return &domain.User{
+				ID:           "user-1",
+				PasswordHash: existingHash,
+			}, nil
+		},
+		updatePasswordHashFn: func(_ context.Context, _ string, newHash string) error {
+			updatedHash = newHash
+			return nil
+		},
+	}
+	hasher := &mockHasher{
+		verifyFn: func(pwd, hash string) (bool, error) {
+			if pwd == "old-password-12345" && hash == existingHash {
+				return true, nil
+			}
+			return false, nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, hasher)
+	err := svc.ChangePassword(context.Background(), "user-1", "old-password-12345", "new-password-67890")
+	require.NoError(t, err)
+	assert.NotEmpty(t, updatedHash)
+}
+
+func TestChangePassword_WrongOldPassword(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return &domain.User{
+				ID:           "user-1",
+				PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+			}, nil
+		},
+	}
+	hasher := &mockHasher{
+		verifyFn: func(_, _ string) (bool, error) { return false, nil },
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, hasher)
+	err := svc.ChangePassword(context.Background(), "user-1", "wrong-old-password", "new-password-67890")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrUnauthorized)
+}
+
+func TestChangePassword_NewPasswordTooShort(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return &domain.User{
+				ID:           "user-1",
+				PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+			}, nil
+		},
+	}
+	hasher := &mockHasher{
+		verifyFn: func(_, _ string) (bool, error) { return true, nil },
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, hasher)
+	err := svc.ChangePassword(context.Background(), "user-1", "old-password-12345", "short")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrPasswordTooShort)
+}
+
+// ── Login Hash Upgrade Tests ────────────────────────────────────────────────
+
+func TestLogin_HashUpgrade(t *testing.T) {
+	var upgradedHash string
+	bcryptUser := &domain.User{
+		ID:           "user-1",
+		Email:        "alice@example.com",
+		PasswordHash: "$2a$10$dGVzdGJjcnlwdGhhc2g",
+		Roles:        []string{"user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return bcryptUser, nil
+		},
+		updatePasswordHashFn: func(_ context.Context, _ string, newHash string) error {
+			upgradedHash = newHash
+			return nil
+		},
+	}
+
+	hasher := &mockHasher{
+		verifyFn:       func(_, _ string) (bool, error) { return true, nil },
+		needsUpgradeFn: func(hash string) bool { return hash == "$2a$10$dGVzdGJjcnlwdGhhc2g" },
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, hasher)
+	result, err := svc.Login(context.Background(), "alice@example.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.NotEmpty(t, upgradedHash, "hash should be upgraded on login")
+}
+
+func TestLogin_ForcePasswordChange(t *testing.T) {
+	user := &domain.User{
+		ID:                  "user-1",
+		Email:               "alice@example.com",
+		PasswordHash:        "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+		Roles:               []string{"user"},
+		ForcePasswordChange: true,
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return user, nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	result, err := svc.Login(context.Background(), "alice@example.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.ForcePasswordChange)
+	assert.Empty(t, result.AccessToken, "should not issue tokens when password change required")
+}
+
+func TestLogin_PasswordExpired(t *testing.T) {
+	expired := time.Now().Add(-200 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                "user-1",
+		Email:             "alice@example.com",
+		PasswordHash:      "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+		Roles:             []string{"user"},
+		PasswordChangedAt: &expired,
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return user, nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	// Set a policy with 90-day max age.
+	svc.SetPasswordPolicy(password.NewPolicyValidator(domain.PasswordPolicy{
+		MinLength:  15,
+		MaxAgeDays: 90,
+	}, &mockHasher{}))
+
+	result, err := svc.Login(context.Background(), "alice@example.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.ForcePasswordChange)
 }

@@ -16,6 +16,8 @@ type User struct {
 	EmailVerifyToken          *string
 	EmailVerifyTokenExpiresAt *time.Time
 	LastLoginAt               *time.Time
+	ForcePasswordChange       bool
+	PasswordChangedAt         *time.Time
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
 	DeletedAt                 *time.Time
@@ -24,6 +26,22 @@ type User struct {
 // IsActive returns true if the user is not locked and not soft-deleted.
 func (u *User) IsActive() bool {
 	return !u.Locked && u.DeletedAt == nil
+}
+
+// PasswordPolicy defines configurable password requirements.
+type PasswordPolicy struct {
+	MinLength    int // minimum password length (default: NistMinPasswordLength)
+	MaxLength    int // maximum password length (0 = no limit)
+	MaxAgeDays   int // password expiration in days (0 = never expires)
+	HistoryCount int // number of previous passwords to check for reuse (0 = disabled)
+}
+
+// PasswordHistoryEntry represents a historical password hash for reuse detection.
+type PasswordHistoryEntry struct {
+	ID           string
+	UserID       string
+	PasswordHash string
+	CreatedAt    time.Time
 }
 
 // RefreshTokenRecord represents a stored refresh token signature in the database.

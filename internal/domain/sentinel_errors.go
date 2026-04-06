@@ -11,6 +11,12 @@ var (
 	ErrAccountLocked      = errors.New("account locked")
 	ErrAccountSuspended   = errors.New("account suspended")
 
+	// Password policy errors.
+	ErrPasswordExpired  = errors.New("password expired")
+	ErrPasswordReused   = errors.New("password was previously used")
+	ErrPasswordTooShort = errors.New("password too short")
+	ErrPasswordTooLong  = errors.New("password too long")
+
 	// Token errors.
 	ErrTokenExpired = errors.New("token expired")
 	ErrTokenRevoked = errors.New("token revoked")
