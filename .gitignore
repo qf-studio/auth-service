@@ -17,6 +17,8 @@ bin/
 *.test
 *.out
 coverage.out
+coverage.html
+profiles/
 
 # Environment
 .env
