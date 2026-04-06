@@ -1,11 +1,16 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // OAuthAccount represents a linked OAuth provider account for a user.
 type OAuthAccount struct {
-	ID             string    `json:"id"`
-	UserID         string    `json:"user_id"`
+	ID       string    `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	UserID   string    `json:"user_id"`
 	Provider       string    `json:"provider"`
 	ProviderUserID string    `json:"provider_user_id"`
 	Email          string    `json:"email,omitempty"`

@@ -44,6 +44,7 @@ var ValidCredentialStatuses = map[string]bool{
 // on behalf of an agent or service client.
 type AgentCredential struct {
 	ID             uuid.UUID      `json:"id"               db:"id"`
+	TenantID       uuid.UUID      `json:"tenant_id"        db:"tenant_id"`
 	OwnerClientID  uuid.UUID      `json:"owner_client_id"  db:"owner_client_id"`
 	TargetName     string         `json:"target_name"      db:"target_name"`
 	CredentialType CredentialType `json:"credential_type"  db:"credential_type"`

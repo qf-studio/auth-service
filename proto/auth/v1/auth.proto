@@ -22,6 +22,7 @@ service AuthService {
 
 message ValidateTokenRequest {
   string access_token = 1;
+  string tenant_id = 2;   // Optional: scope validation to a specific tenant
 }
 
 message ValidateTokenResponse {
@@ -39,6 +40,7 @@ message TokenClaims {
   int64 issued_at = 7;    // Unix timestamp
   string jkt_thumbprint = 8;
   repeated AuthorizationDetail authorization_details = 9;
+  string tenant_id = 10;  // UUID of the tenant this token belongs to
 }
 
 // AuthorizationDetail represents a single RFC 9396 authorization_details entry.
@@ -52,6 +54,7 @@ message AuthorizationDetail {
 
 message GetUserRequest {
   string user_id = 1;
+  string tenant_id = 2;   // Scope user lookup to a specific tenant
 }
 
 message GetUserResponse {
@@ -67,12 +70,14 @@ message User {
   bool email_verified = 6;
   int64 created_at = 7;   // Unix timestamp
   int64 updated_at = 8;   // Unix timestamp
+  string tenant_id = 9;   // UUID of the tenant this user belongs to
 }
 
 message CheckPermissionRequest {
   string subject = 1;
   string object = 2;
   string action = 3;
+  string tenant_id = 4;   // Scope permission check to a specific tenant
 }
 
 message CheckPermissionResponse {
@@ -81,6 +86,7 @@ message CheckPermissionResponse {
 
 message IntrospectTokenRequest {
   string access_token = 1;
+  string tenant_id = 2;   // Optional: scope introspection to a specific tenant
 }
 
 message IntrospectTokenResponse {

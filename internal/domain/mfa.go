@@ -1,11 +1,16 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // MFASecret represents a user's MFA enrollment (e.g. TOTP secret).
 type MFASecret struct {
-	ID          string
-	UserID      string
+	ID       string
+	TenantID uuid.UUID
+	UserID   string
 	Type        string // "totp", "webauthn" (Phase 2)
 	Secret      string // encrypted TOTP secret
 	Confirmed   bool
@@ -17,8 +22,9 @@ type MFASecret struct {
 
 // BackupCode represents a single hashed MFA backup code.
 type BackupCode struct {
-	ID        string
-	UserID    string
+	ID       string
+	TenantID uuid.UUID
+	UserID   string
 	CodeHash  string
 	Used      bool
 	UsedAt    *time.Time

@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // TokenClaims holds the parsed and validated claims from an access token.
 // It is populated by AuthMiddleware and stored in the Gin context under
@@ -8,6 +12,9 @@ import "time"
 type TokenClaims struct {
 	// Subject is the user ID (for user tokens) or client ID (for system tokens).
 	Subject string
+
+	// TenantID identifies which tenant this token belongs to.
+	TenantID uuid.UUID
 
 	// Roles are the roles granted to this subject (e.g., "admin", "user").
 	// Role checks use any-of semantics: access is granted if the subject holds
