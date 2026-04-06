@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "github.com/qf-studio/auth-service/proto/auth/v1;authv1";
+
+// AuthService provides token validation, user lookup, and permission
+// checking over gRPC for internal service-to-service communication.
+service AuthService {
+  // ValidateToken verifies a JWT access token and returns its claims.
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+
+  // GetUser retrieves a user by ID.
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+
+  // CheckPermission evaluates whether a subject may perform an action on an object.
+  rpc CheckPermission(CheckPermissionRequest) returns (CheckPermissionResponse);
+
+  // IntrospectToken returns detailed token metadata (RFC 7662-style).
+  rpc IntrospectToken(IntrospectTokenRequest) returns (IntrospectTokenResponse);
+}
+
+message ValidateTokenRequest {
+  string access_token = 1;
+}
+
+message ValidateTokenResponse {
+  bool valid = 1;
+  TokenClaims claims = 2;
+}
+
+message TokenClaims {
+  string subject = 1;
+  repeated string roles = 2;
+  repeated string scopes = 3;
+  string client_type = 4;
+  string token_id = 5;
+  int64 expires_at = 6;   // Unix timestamp
+  int64 issued_at = 7;    // Unix timestamp
+  string jkt_thumbprint = 8;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message User {
+  string id = 1;
+  string email = 2;
+  string name = 3;
+  repeated string roles = 4;
+  bool locked = 5;
+  bool email_verified = 6;
+  int64 created_at = 7;   // Unix timestamp
+  int64 updated_at = 8;   // Unix timestamp
+}
+
+message CheckPermissionRequest {
+  string subject = 1;
+  string object = 2;
+  string action = 3;
+}
+
+message CheckPermissionResponse {
+  bool allowed = 1;
+}
+
+message IntrospectTokenRequest {
+  string access_token = 1;
+}
+
+message IntrospectTokenResponse {
+  bool active = 1;
+  TokenClaims claims = 2;
+}

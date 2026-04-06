@@ -22,6 +22,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/dpop"
+	grpcserver "github.com/qf-studio/auth-service/internal/grpc"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -221,6 +222,21 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Metrics: metricsCollector,
 	}
 
+	// ── gRPC server ──────────────────────────────────────────────────────
+	// RBAC enforcer is wired when the RBAC service is initialized in main.
+	// Until then, CheckPermission calls will return codes.Internal.
+	grpcSrv, err := grpcserver.NewServer(grpcserver.ServerDeps{
+		TokenSvc:  tokenSvc,
+		UserRepo:  userRepo,
+		HealthSvc: healthSvc,
+		Logger:    log,
+		Port:      cfg.App.GRPCPort,
+		Metrics:   metricsCollector,
+	})
+	if err != nil {
+		return fmt.Errorf("grpc server init failed: %w", err)
+	}
+
 	// ── HTTP servers ──────────────────────────────────────────────────────
 	publicRouter := api.NewPublicRouter(services, mw, healthSvc)
 	adminRouter := api.NewAdminRouter(adminServices, adminDeps)
@@ -249,9 +265,14 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		return fmt.Errorf("server start failed: %w", err)
 	}
 
+	if _, err := grpcSrv.Start(); err != nil {
+		return fmt.Errorf("grpc server start failed: %w", err)
+	}
+
 	log.Info("auth service started",
 		zap.Int("public_port", cfg.App.PublicPort),
 		zap.Int("admin_port", cfg.App.AdminPort),
+		zap.Int("grpc_port", cfg.App.GRPCPort),
 		zap.String("env", cfg.App.Env),
 	)
 
@@ -264,7 +285,8 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), httpserver.ShutdownTimeout)
 	defer cancel()
 
-	// Shutdown drains HTTP then calls redisCloser.Close().
+	// Shutdown gRPC first, then drain HTTP and release resources.
+	grpcSrv.GracefulStop(ctx)
 	srv.Shutdown(ctx)
 
 	log.Info("auth service stopped")
