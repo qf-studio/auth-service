@@ -92,6 +92,12 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		pw.POST("/reset", validateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
 		pw.POST("/reset/confirm", validateReq(v, &domain.PasswordResetConfirmRequest{}), authH.ConfirmPasswordReset)
 
+		// Broker token issuance (public, authenticates via client credentials in body).
+		if svc.Broker != nil {
+			brokerH := NewBrokerHandlers(svc.Broker)
+			auth.POST("/broker/token", brokerH.Token)
+		}
+
 		// MFA verify is public (uses mfa_token, not bearer auth).
 		if mfaH != nil {
 			auth.POST("/mfa/verify", mfaH.Verify)

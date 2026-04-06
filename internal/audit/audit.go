@@ -44,6 +44,14 @@ const (
 	EventAdminWebhookDelete = "admin_webhook_delete"
 	EventAdminWebhookTest   = "admin_webhook_test"
 	EventAdminWebhookRetry  = "admin_webhook_retry"
+
+	// Broker credential events.
+	EventAdminBrokerCredentialCreate = "admin_broker_credential_create"
+	EventAdminBrokerCredentialUpdate = "admin_broker_credential_update"
+	EventAdminBrokerCredentialDelete = "admin_broker_credential_delete"
+	EventAdminBrokerCredentialRotate = "admin_broker_credential_rotate"
+	EventBrokerTokenIssue            = "broker_token_issue"
+	EventBrokerTokenDenied           = "broker_token_denied"
 )
 
 // Event represents a single audit log entry.

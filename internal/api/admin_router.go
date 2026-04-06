@@ -121,6 +121,20 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// Broker credential management.
+	if svc.Brokers != nil {
+		brokerH := NewAdminBrokerHandlers(svc.Brokers)
+		credentials := admin.Group("/credentials")
+		{
+			credentials.GET("", brokerH.List)
+			credentials.GET("/:id", brokerH.Get)
+			credentials.POST("", brokerH.Create)
+			credentials.PATCH("/:id", brokerH.Update)
+			credentials.DELETE("/:id", brokerH.Delete)
+			credentials.POST("/:id/rotate", brokerH.Rotate)
+		}
+	}
+
 	// Token introspection.
 	if svc.Tokens != nil {
 		tokenH := NewAdminTokenHandlers(svc.Tokens)
