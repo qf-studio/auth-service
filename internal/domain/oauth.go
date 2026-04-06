@@ -5,6 +5,7 @@ import "time"
 // OAuthAccount represents a linked OAuth provider account for a user.
 type OAuthAccount struct {
 	ID             string    `json:"id"`
+	TenantID       string    `json:"tenant_id"`
 	UserID         string    `json:"user_id"`
 	Provider       string    `json:"provider"`
 	ProviderUserID string    `json:"provider_user_id"`

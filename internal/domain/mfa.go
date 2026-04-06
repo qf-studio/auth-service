@@ -5,6 +5,7 @@ import "time"
 // MFASecret represents a user's MFA enrollment (e.g. TOTP secret).
 type MFASecret struct {
 	ID          string
+	TenantID    string
 	UserID      string
 	Type        string // "totp", "webauthn" (Phase 2)
 	Secret      string // encrypted TOTP secret
@@ -18,6 +19,7 @@ type MFASecret struct {
 // BackupCode represents a single hashed MFA backup code.
 type BackupCode struct {
 	ID        string
+	TenantID  string
 	UserID    string
 	CodeHash  string
 	Used      bool

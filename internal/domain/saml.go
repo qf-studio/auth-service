@@ -5,6 +5,7 @@ import "time"
 // SAMLIdPConfig represents a SAML Identity Provider configuration.
 type SAMLIdPConfig struct {
 	ID                string
+	TenantID          string
 	EntityID          string
 	MetadataURL       string
 	MetadataXML       string
@@ -21,6 +22,7 @@ type SAMLIdPConfig struct {
 // SAMLAccount links a SAML NameID to an internal user account.
 type SAMLAccount struct {
 	ID               string
+	TenantID         string
 	UserID           string
 	IdPID            string
 	NameID           string

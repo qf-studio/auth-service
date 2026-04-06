@@ -96,6 +96,9 @@ type RARResourceType struct {
 	// ID is the primary key.
 	ID uuid.UUID `json:"id"`
 
+	// TenantID scopes this resource type to a tenant.
+	TenantID string `json:"tenant_id"`
+
 	// Type is the unique authorization type identifier (e.g., "payment_initiation").
 	Type string `json:"type"`
 
@@ -120,6 +123,9 @@ type RARResourceType struct {
 type ClientRARAllowedType struct {
 	// ClientID references the OAuth2 client.
 	ClientID uuid.UUID `json:"client_id"`
+
+	// TenantID scopes this association to a tenant.
+	TenantID string `json:"tenant_id"`
 
 	// ResourceTypeID references the RAR resource type.
 	ResourceTypeID uuid.UUID `json:"resource_type_id"`

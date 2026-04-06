@@ -25,6 +25,7 @@ const MaxWebhookFailures = 10
 // Webhook represents a webhook subscription that receives event notifications via HTTP POST.
 type Webhook struct {
 	ID           uuid.UUID `json:"id"            db:"id"`
+	TenantID     string    `json:"tenant_id"     db:"tenant_id"`
 	URL          string    `json:"url"           db:"url"`
 	SecretHash   string    `json:"-"             db:"secret_hash"`
 	EventTypes   []string  `json:"event_types"   db:"event_types"`
@@ -37,6 +38,7 @@ type Webhook struct {
 // WebhookDelivery represents a single delivery attempt for a webhook event.
 type WebhookDelivery struct {
 	ID           uuid.UUID  `json:"id"                      db:"id"`
+	TenantID     string     `json:"tenant_id"               db:"tenant_id"`
 	WebhookID    uuid.UUID  `json:"webhook_id"              db:"webhook_id"`
 	EventType    string     `json:"event_type"              db:"event_type"`
 	Payload      string     `json:"payload"                 db:"payload"`

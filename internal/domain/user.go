@@ -5,6 +5,7 @@ import "time"
 // User represents a user account in the system.
 type User struct {
 	ID                        string
+	TenantID                  string
 	Email                     string
 	PasswordHash              string
 	Name                      string
@@ -39,6 +40,7 @@ type PasswordPolicy struct {
 // PasswordHistoryEntry represents a historical password hash for reuse detection.
 type PasswordHistoryEntry struct {
 	ID           string
+	TenantID     string
 	UserID       string
 	PasswordHash string
 	CreatedAt    time.Time
@@ -47,6 +49,7 @@ type PasswordHistoryEntry struct {
 // RefreshTokenRecord represents a stored refresh token signature in the database.
 type RefreshTokenRecord struct {
 	Signature string
+	TenantID  string
 	UserID    string
 	ExpiresAt time.Time
 	CreatedAt time.Time

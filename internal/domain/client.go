@@ -31,6 +31,7 @@ const (
 // Client represents an OAuth2 client (service or AI agent) in the system.
 type Client struct {
 	ID                      uuid.UUID  `json:"id"                          db:"id"`
+	TenantID                string     `json:"tenant_id"                   db:"tenant_id"`
 	Name                    string     `json:"name"                        db:"name"`
 	ClientType              ClientType `json:"client_type"                 db:"client_type"`
 	SecretHash              string     `json:"-"                           db:"secret_hash"`
