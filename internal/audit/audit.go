@@ -36,6 +36,11 @@ const (
 	EventAdminAPIKeyUpdate  = "admin_apikey_update"
 	EventAdminAPIKeyRevoke  = "admin_apikey_revoke"
 	EventAdminAPIKeyRotate  = "admin_apikey_rotate"
+	EventAdminWebhookCreate = "admin_webhook_create"
+	EventAdminWebhookUpdate = "admin_webhook_update"
+	EventAdminWebhookDelete = "admin_webhook_delete"
+	EventAdminWebhookTest   = "admin_webhook_test"
+	EventAdminWebhookRetry  = "admin_webhook_retry"
 )
 
 // Event represents a single audit log entry.

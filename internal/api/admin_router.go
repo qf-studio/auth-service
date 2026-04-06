@@ -97,6 +97,22 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// Webhook management.
+	if svc.Webhooks != nil {
+		webhookH := NewAdminWebhookHandlers(svc.Webhooks)
+		webhooks := admin.Group("/webhooks")
+		{
+			webhooks.GET("", webhookH.List)
+			webhooks.GET("/:id", webhookH.Get)
+			webhooks.POST("", webhookH.Create)
+			webhooks.PATCH("/:id", webhookH.Update)
+			webhooks.DELETE("/:id", webhookH.Delete)
+			webhooks.GET("/:id/deliveries", webhookH.ListDeliveries)
+			webhooks.POST("/:id/deliveries/:delivery_id/retry", webhookH.RetryDelivery)
+			webhooks.POST("/:id/test", webhookH.Test)
+		}
+	}
+
 	// Token introspection.
 	if svc.Tokens != nil {
 		tokenH := NewAdminTokenHandlers(svc.Tokens)
