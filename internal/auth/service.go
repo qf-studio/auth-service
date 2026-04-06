@@ -91,7 +91,22 @@ func (s *Service) SetMFAChecker(mfa MFAChecker) {
 
 // Register creates a new user account.
 // Stub: full implementation depends on PostgreSQL user repository (future issue).
-func (s *Service) Register(ctx context.Context, email, _, name string) (*api.UserInfo, error) {
+func (s *Service) Register(ctx context.Context, email, password, name string) (*api.UserInfo, error) {
+	// Check HIBP breach database before allowing registration.
+	if s.breaches != nil {
+		breached, err := s.breaches.IsBreached(ctx, password)
+		if err != nil {
+			s.logger.Error("hibp breach check failed during registration", zap.Error(err))
+			// Fail open: allow registration if HIBP is unavailable.
+		} else if breached {
+			s.audit.LogEvent(ctx, audit.Event{
+				Type:     audit.EventPasswordCompromised,
+				Metadata: map[string]string{"email": email, "source": "registration"},
+			})
+			return nil, fmt.Errorf("password rejected: %w", api.ErrPasswordBreached)
+		}
+	}
+
 	// TODO(GH-XX): wire PostgreSQL user repository for persistence.
 	info := &api.UserInfo{
 		ID:    "stub-user-id",
@@ -192,6 +207,11 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 
 	result.UserID = user.ID
 
+	// Flag the response if the user must change their password (breach detection).
+	if user.ForcePasswordChange {
+		result.ForcePasswordChange = true
+	}
+
 	// Store refresh token signature in DB (best-effort — don't fail login).
 	if err := s.tokens.Store(ctx, result.RefreshToken, user.ID, time.Now().Add(24*time.Hour)); err != nil {
 		s.logger.Error("failed to store refresh token signature", zap.String("user_id", user.ID), zap.Error(err))
@@ -200,6 +220,13 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	// Update last_login_at (best-effort — don't fail login).
 	if err := s.users.UpdateLastLogin(ctx, user.ID, time.Now().UTC()); err != nil {
 		s.logger.Error("failed to update last_login_at", zap.String("user_id", user.ID), zap.Error(err))
+	}
+
+	// Cache password SHA-1 for background breach scanning (best-effort).
+	if s.redis != nil {
+		if cacheErr := hibp.CachePasswordHash(ctx, s.redis, user.ID, pwd); cacheErr != nil {
+			s.logger.Error("failed to cache password hash for hibp scan", zap.String("user_id", user.ID), zap.Error(cacheErr))
+		}
 	}
 
 	s.audit.LogEvent(ctx, audit.Event{
@@ -257,6 +284,16 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 		return fmt.Errorf("retrieve reset token: %w", err)
 	}
 
+	// Check HIBP breach database before confirming password reset.
+	if s.breaches != nil {
+		breached, err := s.breaches.IsBreached(ctx, newPassword)
+		if err != nil {
+			s.logger.Error("hibp breach check failed during password reset", zap.Error(err))
+		} else if breached {
+			return fmt.Errorf("new password rejected: %w", api.ErrPasswordBreached)
+		}
+	}
+
 	// TODO(GH-XX): hash newPassword with Argon2id and update in PostgreSQL.
 	// TODO(GH-XX): revoke all sessions for this user.
 	_ = newPassword
@@ -284,7 +321,24 @@ func (s *Service) GetMe(_ context.Context, userID string) (*api.UserInfo, error)
 
 // ChangePassword changes the authenticated user's password.
 // Stub: full implementation depends on PostgreSQL user repository.
-func (s *Service) ChangePassword(ctx context.Context, userID, _, _ string) error {
+func (s *Service) ChangePassword(ctx context.Context, userID, _, newPassword string) error {
+	// Check HIBP breach database before allowing password change.
+	if s.breaches != nil {
+		breached, err := s.breaches.IsBreached(ctx, newPassword)
+		if err != nil {
+			s.logger.Error("hibp breach check failed during password change", zap.Error(err))
+			// Fail open: allow change if HIBP is unavailable.
+		} else if breached {
+			s.audit.LogEvent(ctx, audit.Event{
+				Type:     audit.EventPasswordCompromised,
+				ActorID:  userID,
+				TargetID: userID,
+				Metadata: map[string]string{"source": "password_change"},
+			})
+			return fmt.Errorf("new password rejected: %w", api.ErrPasswordBreached)
+		}
+	}
+
 	// TODO(GH-XX): wire PostgreSQL user repository + Argon2 verification.
 	s.audit.LogEvent(ctx, audit.Event{
 		Type:     audit.EventPasswordChange,

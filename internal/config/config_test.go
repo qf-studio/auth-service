@@ -102,6 +102,12 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.Equal(t, "http://localhost:4000", cfg.OIDC.IssuerURL)
 	assert.Equal(t, 1*time.Hour, cfg.OIDC.IDTokenTTL)
 	assert.Equal(t, []string{"openid", "profile", "email", "offline_access"}, cfg.OIDC.SupportedScopes)
+
+	// HIBP defaults
+	assert.False(t, cfg.HIBP.Enabled)
+	assert.Equal(t, "https://api.pwnedpasswords.com/range/", cfg.HIBP.APIURL)
+	assert.Equal(t, 24*time.Hour, cfg.HIBP.ScanInterval)
+	assert.Equal(t, 10*time.Second, cfg.HIBP.RequestTimeout)
 }
 
 func TestLoad_OIDCConfig(t *testing.T) {
@@ -561,6 +567,23 @@ func TestLoad_OAuthInvalidEnabled(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "OAUTH_GOOGLE_ENABLED")
+}
+
+func TestLoad_HIBPConfig(t *testing.T) {
+	env := requiredEnv()
+	env["HIBP_ENABLED"] = "true"
+	env["HIBP_API_URL"] = "https://custom-hibp.example.com/range/"
+	env["HIBP_SCAN_INTERVAL"] = "12h"
+	env["HIBP_REQUEST_TIMEOUT"] = "5s"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.True(t, cfg.HIBP.Enabled)
+	assert.Equal(t, "https://custom-hibp.example.com/range/", cfg.HIBP.APIURL)
+	assert.Equal(t, 12*time.Hour, cfg.HIBP.ScanInterval)
+	assert.Equal(t, 5*time.Second, cfg.HIBP.RequestTimeout)
 }
 
 func BenchmarkLoad(b *testing.B) {

@@ -118,6 +118,14 @@ func (m *mockUserRepo) ConsumeEmailVerifyToken(_ context.Context, _ string) (*do
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (m *mockUserRepo) SetForcePasswordChange(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+
+func (m *mockUserRepo) ListActiveUserIDs(_ context.Context, _, _ int) ([]string, error) {
+	return nil, nil
+}
+
 // mockMetricsRecorder implements grpc.MetricsRecorder for testing.
 type mockMetricsRecorder struct {
 	calls []metricsCall

@@ -164,11 +164,12 @@ func extractBearerToken(c *gin.Context) string {
 
 // Sentinel errors that service implementations should return.
 var (
-	ErrUnauthorized  = errors.New("unauthorized")
-	ErrNotFound      = errors.New("not found")
-	ErrConflict      = errors.New("conflict")
-	ErrForbidden     = errors.New("forbidden")
-	ErrInternalError = errors.New("internal error")
+	ErrUnauthorized     = errors.New("unauthorized")
+	ErrNotFound         = errors.New("not found")
+	ErrConflict         = errors.New("conflict")
+	ErrForbidden        = errors.New("forbidden")
+	ErrInternalError    = errors.New("internal error")
+	ErrPasswordBreached = errors.New("password found in data breach")
 )
 
 // handleServiceError maps service-layer sentinel errors to HTTP error responses.
@@ -182,6 +183,8 @@ func handleServiceError(c *gin.Context, err error) {
 		domain.RespondWithError(c, http.StatusConflict, domain.CodeBadRequest, err.Error())
 	case errors.Is(err, ErrForbidden):
 		domain.RespondWithError(c, http.StatusForbidden, domain.CodeForbidden, err.Error())
+	case errors.Is(err, ErrPasswordBreached):
+		domain.RespondWithError(c, http.StatusUnprocessableEntity, domain.CodeValidationError, err.Error())
 	default:
 		domain.RespondWithError(c, http.StatusInternalServerError, domain.CodeInternalError, "internal server error")
 	}

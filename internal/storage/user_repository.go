@@ -33,6 +33,12 @@ type UserRepository interface {
 	// ConsumeEmailVerifyToken marks the email as verified if the token matches and hasn't expired.
 	// Returns ErrNotFound if the token doesn't match any user, or ErrTokenExpired if expired.
 	ConsumeEmailVerifyToken(ctx context.Context, token string) (*domain.User, error)
+
+	// SetForcePasswordChange flags a user as needing to change their password.
+	SetForcePasswordChange(ctx context.Context, userID string, force bool) error
+
+	// ListActiveUserIDs returns IDs of non-deleted, non-locked users for background scanning.
+	ListActiveUserIDs(ctx context.Context, limit, offset int) ([]string, error)
 }
 
 // PostgresUserRepository implements UserRepository using pgx against PostgreSQL.
@@ -141,6 +147,46 @@ func (r *PostgresUserRepository) SetEmailVerifyToken(ctx context.Context, userID
 	}
 
 	return nil
+}
+
+// SetForcePasswordChange updates the force_password_change flag for a user.
+func (r *PostgresUserRepository) SetForcePasswordChange(ctx context.Context, userID string, force bool) error {
+	query := `UPDATE users SET force_password_change = $1, updated_at = $2 WHERE id = $3 AND deleted_at IS NULL`
+
+	tag, err := r.pool.Exec(ctx, query, force, time.Now().UTC(), userID)
+	if err != nil {
+		return fmt.Errorf("set force password change: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user %s: %w", userID, ErrNotFound)
+	}
+
+	return nil
+}
+
+// ListActiveUserIDs returns IDs of non-deleted, non-locked users for background scanning.
+func (r *PostgresUserRepository) ListActiveUserIDs(ctx context.Context, limit, offset int) ([]string, error) {
+	query := `SELECT id FROM users WHERE deleted_at IS NULL AND locked = FALSE ORDER BY id LIMIT $1 OFFSET $2`
+
+	rows, err := r.pool.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list active user ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan user id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user ids: %w", err)
+	}
+
+	return ids, nil
 }
 
 // ConsumeEmailVerifyToken marks the email as verified if the token matches and hasn't expired.

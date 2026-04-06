@@ -25,6 +25,15 @@ type Config struct {
 	MFA          MFAConfig
 	OAuth        OAuthConfig
 	OIDC         OIDCConfig
+	HIBP         HIBPConfig
+}
+
+// HIBPConfig holds HaveIBeenPwned breach detection settings.
+type HIBPConfig struct {
+	Enabled        bool          // HIBP_ENABLED: enable breach checking during registration/password change
+	APIURL         string        // HIBP_API_URL: base URL for the HIBP Passwords range endpoint
+	ScanInterval   time.Duration // HIBP_SCAN_INTERVAL: how often to run background breach scans
+	RequestTimeout time.Duration // HIBP_REQUEST_TIMEOUT: timeout for individual HIBP API requests
 }
 
 // OIDCConfig holds OpenID Connect provider settings.
@@ -268,6 +277,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	hibpCfg, err := loadHIBP(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -292,6 +305,7 @@ func Load() (*Config, error) {
 		MFA:          mfaCfg,
 		OAuth:        oauthCfg,
 		OIDC:         oidcCfg,
+		HIBP:         hibpCfg,
 	}, nil
 }
 
@@ -647,6 +661,34 @@ func loadOAuthProvider(l *loader, provider string) (OAuthProviderConfig, error) 
 		Enabled:      true,
 		TeamID:       teamID,
 		KeyID:        keyID,
+	}, nil
+}
+
+func loadHIBP(l *loader) (HIBPConfig, error) {
+	enabled, err := l.optBool("HIBP_ENABLED", false)
+	if err != nil {
+		return HIBPConfig{}, err
+	}
+
+	apiURL := l.optStr("HIBP_API_URL", "https://api.pwnedpasswords.com/range/")
+
+	scanIntervalStr := l.optStr("HIBP_SCAN_INTERVAL", "24h")
+	scanInterval, err := parseDuration(scanIntervalStr)
+	if err != nil {
+		return HIBPConfig{}, fmt.Errorf("HIBP_SCAN_INTERVAL: %w", err)
+	}
+
+	requestTimeoutStr := l.optStr("HIBP_REQUEST_TIMEOUT", "10s")
+	requestTimeout, err := parseDuration(requestTimeoutStr)
+	if err != nil {
+		return HIBPConfig{}, fmt.Errorf("HIBP_REQUEST_TIMEOUT: %w", err)
+	}
+
+	return HIBPConfig{
+		Enabled:        enabled,
+		APIURL:         apiURL,
+		ScanInterval:   scanInterval,
+		RequestTimeout: requestTimeout,
 	}, nil
 }
 

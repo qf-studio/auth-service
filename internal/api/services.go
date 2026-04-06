@@ -12,13 +12,14 @@ import (
 // AuthResult contains the tokens returned after successful authentication.
 // When MFA is required, only MFARequired and MFAToken are populated.
 type AuthResult struct {
-	AccessToken  string `json:"access_token,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	TokenType    string `json:"token_type,omitempty"`
-	ExpiresIn    int    `json:"expires_in,omitempty"`
-	UserID       string `json:"user_id,omitempty"`
-	MFARequired  bool   `json:"mfa_required,omitempty"`
-	MFAToken     string `json:"mfa_token,omitempty"`
+	AccessToken         string `json:"access_token,omitempty"`
+	RefreshToken        string `json:"refresh_token,omitempty"`
+	TokenType           string `json:"token_type,omitempty"`
+	ExpiresIn           int    `json:"expires_in,omitempty"`
+	UserID              string `json:"user_id,omitempty"`
+	MFARequired         bool   `json:"mfa_required,omitempty"`
+	MFAToken            string `json:"mfa_token,omitempty"`
+	ForcePasswordChange bool   `json:"force_password_change,omitempty"`
 }
 
 // UserInfo represents the authenticated user's profile.

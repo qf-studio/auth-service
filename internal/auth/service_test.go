@@ -54,6 +54,14 @@ func (m *mockUserRepository) ConsumeEmailVerifyToken(_ context.Context, _ string
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (m *mockUserRepository) SetForcePasswordChange(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+
+func (m *mockUserRepository) ListActiveUserIDs(_ context.Context, _, _ int) ([]string, error) {
+	return nil, nil
+}
+
 type mockRefreshTokenRepository struct {
 	storeFn          func(ctx context.Context, sig, userID string, exp time.Time) error
 	revokeAllForUser func(ctx context.Context, userID string) error
@@ -682,4 +690,101 @@ func TestGetMe_ReturnsStub(t *testing.T) {
 	user, err := svc.GetMe(context.Background(), "user-42")
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", user.ID)
+}
+
+// ── Breach Detection Tests ──────────────────────────────────────────────────
+
+func TestRegister_RejectsBreachedPassword(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	breaches := &mockBreachChecker{
+		isBreachedFn: func(_ context.Context, _ string) (bool, error) {
+			return true, nil
+		},
+	}
+	svc := NewService(nil, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, breaches)
+
+	_, err := svc.Register(context.Background(), "test@example.com", "breached-password", "Test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrPasswordBreached)
+}
+
+func TestRegister_AllowsCleanPassword(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	breaches := &mockBreachChecker{
+		isBreachedFn: func(_ context.Context, _ string) (bool, error) {
+			return false, nil
+		},
+	}
+	svc := NewService(nil, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, breaches)
+
+	user, err := svc.Register(context.Background(), "test@example.com", "clean-password-12345", "Test")
+	require.NoError(t, err)
+	assert.Equal(t, "test@example.com", user.Email)
+}
+
+func TestRegister_FailOpenOnHIBPError(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	breaches := &mockBreachChecker{
+		isBreachedFn: func(_ context.Context, _ string) (bool, error) {
+			return false, fmt.Errorf("hibp api down")
+		},
+	}
+	svc := NewService(nil, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, breaches)
+
+	user, err := svc.Register(context.Background(), "test@example.com", "some-password-12345", "Test")
+	require.NoError(t, err)
+	assert.Equal(t, "test@example.com", user.Email)
+}
+
+func TestChangePassword_RejectsBreachedPassword(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	breaches := &mockBreachChecker{
+		isBreachedFn: func(_ context.Context, _ string) (bool, error) {
+			return true, nil
+		},
+	}
+	svc := NewService(nil, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, breaches)
+
+	err := svc.ChangePassword(context.Background(), "user-1", "old-pass", "breached-new-pass")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrPasswordBreached)
+}
+
+func TestLogin_SetsForcePasswordChange(t *testing.T) {
+	user := &domain.User{
+		ID:                  "user-1",
+		Email:               "alice@example.com",
+		PasswordHash:        "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+		Roles:               []string{"user"},
+		ForcePasswordChange: true,
+	}
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return user, nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	result, err := svc.Login(context.Background(), "alice@example.com", "correct-password")
+	require.NoError(t, err)
+	assert.True(t, result.ForcePasswordChange, "expected ForcePasswordChange=true in login response")
+}
+
+func TestLogin_ForcePasswordChangeFalseByDefault(t *testing.T) {
+	user := &domain.User{
+		ID:           "user-1",
+		Email:        "alice@example.com",
+		PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+		Roles:        []string{"user"},
+	}
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return user, nil
+		},
+	}
+
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	result, err := svc.Login(context.Background(), "alice@example.com", "correct-password")
+	require.NoError(t, err)
+	assert.False(t, result.ForcePasswordChange)
 }

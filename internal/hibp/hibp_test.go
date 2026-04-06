@@ -22,7 +22,7 @@ func TestIsBreached_FoundInResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{httpClient: srv.Client(), apiURL: srv.URL + "/range/"}
+	c := NewClient(srv.Client(), srv.URL+"/range/")
 	breached, err := c.IsBreached(context.Background(), "password")
 	require.NoError(t, err)
 	assert.True(t, breached)
@@ -34,7 +34,7 @@ func TestIsBreached_NotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{httpClient: srv.Client(), apiURL: srv.URL + "/range/"}
+	c := NewClient(srv.Client(), srv.URL+"/range/")
 	breached, err := c.IsBreached(context.Background(), "password")
 	require.NoError(t, err)
 	assert.False(t, breached)
@@ -46,7 +46,7 @@ func TestIsBreached_APIError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{httpClient: srv.Client(), apiURL: srv.URL + "/range/"}
+	c := NewClient(srv.Client(), srv.URL+"/range/")
 	_, err := c.IsBreached(context.Background(), "password")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected status 503")

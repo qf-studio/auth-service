@@ -15,6 +15,8 @@ type MockUserRepository struct {
 	UpdateLastLoginFn         func(ctx context.Context, userID string, timestamp time.Time) error
 	SetEmailVerifyTokenFn     func(ctx context.Context, userID string, token string, expiresAt time.Time) error
 	ConsumeEmailVerifyTokenFn func(ctx context.Context, token string) (*domain.User, error)
+	SetForcePasswordChangeFn  func(ctx context.Context, userID string, force bool) error
+	ListActiveUserIDsFn       func(ctx context.Context, limit, offset int) ([]string, error)
 }
 
 // Create delegates to CreateFn.
@@ -45,4 +47,20 @@ func (m *MockUserRepository) SetEmailVerifyToken(ctx context.Context, userID str
 // ConsumeEmailVerifyToken delegates to ConsumeEmailVerifyTokenFn.
 func (m *MockUserRepository) ConsumeEmailVerifyToken(ctx context.Context, token string) (*domain.User, error) {
 	return m.ConsumeEmailVerifyTokenFn(ctx, token)
+}
+
+// SetForcePasswordChange delegates to SetForcePasswordChangeFn.
+func (m *MockUserRepository) SetForcePasswordChange(ctx context.Context, userID string, force bool) error {
+	if m.SetForcePasswordChangeFn != nil {
+		return m.SetForcePasswordChangeFn(ctx, userID, force)
+	}
+	return nil
+}
+
+// ListActiveUserIDs delegates to ListActiveUserIDsFn.
+func (m *MockUserRepository) ListActiveUserIDs(ctx context.Context, limit, offset int) ([]string, error) {
+	if m.ListActiveUserIDsFn != nil {
+		return m.ListActiveUserIDsFn(ctx, limit, offset)
+	}
+	return nil, nil
 }

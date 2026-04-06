@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const apiURL = "https://api.pwnedpasswords.com/range/"
+const defaultAPIURL = "https://api.pwnedpasswords.com/range/"
 
 // BreachChecker determines whether a password has appeared in a data breach.
 type BreachChecker interface {
@@ -27,13 +27,24 @@ type Client struct {
 	apiURL     string
 }
 
-// NewClient creates a new HIBP client with the given HTTP client.
-func NewClient(httpClient *http.Client) *Client {
+// NewClient creates a new HIBP client with the given HTTP client and optional API URL.
+// If apiURL is empty, the default HIBP Passwords range endpoint is used.
+func NewClient(httpClient *http.Client, apiURL string) *Client {
+	if apiURL == "" {
+		apiURL = defaultAPIURL
+	}
 	return &Client{
 		httpClient: httpClient,
 		apiURL:     apiURL,
 	}
 }
+
+// NopChecker is a no-op implementation of BreachChecker that always returns false.
+// Used when HIBP checking is disabled.
+type NopChecker struct{}
+
+// IsBreached always returns false (breach checking disabled).
+func (NopChecker) IsBreached(_ context.Context, _ string) (bool, error) { return false, nil }
 
 // IsBreached checks whether the given password appears in the HIBP database.
 // It uses the k-anonymity range API: SHA-1 hash the password, send the first
@@ -60,6 +71,33 @@ func (c *Client) IsBreached(ctx context.Context, password string) (bool, error) 
 	}
 
 	return matchesSuffix(resp.Body, suffix)
+}
+
+// fetchRange queries the HIBP range endpoint with the given 5-char hex prefix
+// and returns the raw response body as a string.
+func (c *Client) fetchRange(ctx context.Context, prefix string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiURL+prefix, nil)
+	if err != nil {
+		return "", fmt.Errorf("hibp: create request: %w", err)
+	}
+	req.Header.Set("User-Agent", "qf-studio-auth-service")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("hibp: request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("hibp: unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("hibp: read body: %w", err)
+	}
+
+	return string(body), nil
 }
 
 // matchesSuffix scans the HIBP response body for a matching hash suffix.

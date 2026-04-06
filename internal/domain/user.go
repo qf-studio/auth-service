@@ -15,6 +15,7 @@ type User struct {
 	EmailVerified             bool
 	EmailVerifyToken          *string
 	EmailVerifyTokenExpiresAt *time.Time
+	ForcePasswordChange       bool
 	LastLoginAt               *time.Time
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time

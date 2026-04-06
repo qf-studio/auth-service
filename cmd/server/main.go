@@ -89,8 +89,19 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
-	hibpClient := hibp.NewClient(http.DefaultClient)
-	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
+	var breachChecker hibp.BreachChecker
+	if cfg.HIBP.Enabled {
+		hibpHTTPClient := &http.Client{Timeout: cfg.HIBP.RequestTimeout}
+		breachChecker = hibp.NewClient(hibpHTTPClient, cfg.HIBP.APIURL)
+		log.Info("HIBP breach detection enabled",
+			zap.String("api_url", cfg.HIBP.APIURL),
+			zap.Duration("scan_interval", cfg.HIBP.ScanInterval),
+		)
+	} else {
+		breachChecker = hibp.NopChecker{}
+		log.Info("HIBP breach detection disabled")
+	}
+	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, breachChecker)
 
 	// ── Session ──────────────────────────────────────────────────────────
 	sessionStore := session.NewMemoryStore()
@@ -276,6 +287,16 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		return fmt.Errorf("grpc server start failed: %w", err)
 	}
 
+	// ── HIBP Background Scanner ─────────────────────────────────────────
+	var scannerCancel context.CancelFunc
+	if cfg.HIBP.Enabled {
+		var scanCtx context.Context
+		scanCtx, scannerCancel = context.WithCancel(context.Background())
+		scanner := hibp.NewScanner(breachChecker, userRepo, redisClient, log, auditSvc, cfg.HIBP.ScanInterval)
+		scanner.Start(scanCtx)
+		log.Info("HIBP background scanner started", zap.Duration("interval", cfg.HIBP.ScanInterval))
+	}
+
 	log.Info("auth service started",
 		zap.Int("public_port", cfg.App.PublicPort),
 		zap.Int("admin_port", cfg.App.AdminPort),
@@ -288,6 +309,11 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	sig := <-quit
 	log.Info("shutdown signal received", zap.String("signal", sig.String()))
+
+	// Stop background scanner before draining HTTP.
+	if scannerCancel != nil {
+		scannerCancel()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), httpserver.ShutdownTimeout)
 	defer cancel()
