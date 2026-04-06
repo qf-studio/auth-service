@@ -97,6 +97,20 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// Password policy management.
+	if svc.PasswordPolicies != nil {
+		policyH := NewAdminPasswordPolicyHandlers(svc.PasswordPolicies)
+		policies := admin.Group("/password-policies")
+		{
+			policies.GET("", policyH.List)
+			policies.GET("/compliance", policyH.Compliance)
+			policies.GET("/:id", policyH.Get)
+			policies.POST("", policyH.Create)
+			policies.PUT("/:id", policyH.Update)
+			policies.DELETE("/:id", policyH.Delete)
+		}
+	}
+
 	// Token introspection.
 	if svc.Tokens != nil {
 		tokenH := NewAdminTokenHandlers(svc.Tokens)

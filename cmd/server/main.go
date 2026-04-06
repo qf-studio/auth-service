@@ -183,6 +183,8 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
 	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
 	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, hasher, log, auditSvc)
+	passwordPolicyRepo := storage.NewPostgresPasswordPolicyRepository(pgPool)
+	adminPasswordPolicySvc := admin.NewPasswordPolicyService(passwordPolicyRepo, log, auditSvc)
 
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
@@ -209,13 +211,14 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	var clientApprovalSvc api.AdminClientApprovalService
 
 	adminServices := &api.AdminServices{
-		Users:          adminUserSvc,
-		Clients:        adminClientSvc,
-		Tokens:         adminTokenSvc,
-		APIKeys:        adminAPIKeySvc,
-		MFA:            mfaSvc,
-		Consent:        consentSvc,
-		ClientApproval: clientApprovalSvc,
+		Users:            adminUserSvc,
+		Clients:          adminClientSvc,
+		Tokens:           adminTokenSvc,
+		APIKeys:          adminAPIKeySvc,
+		MFA:              mfaSvc,
+		Consent:          consentSvc,
+		ClientApproval:   clientApprovalSvc,
+		PasswordPolicies: adminPasswordPolicySvc,
 	}
 
 	adminDeps := &api.AdminDeps{

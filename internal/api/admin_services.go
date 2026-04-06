@@ -100,6 +100,38 @@ type IntrospectionResponse struct {
 	ClientType string `json:"client_type,omitempty"`
 }
 
+// AdminPasswordPolicy represents a password policy in admin API responses.
+type AdminPasswordPolicy struct {
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	MinLength    int        `json:"min_length"`
+	MaxLength    int        `json:"max_length"`
+	MaxAgeDays   int        `json:"max_age_days"`
+	HistoryCount int        `json:"history_count"`
+	RequireMFA   bool       `json:"require_mfa"`
+	IsDefault    bool       `json:"is_default"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
+}
+
+// AdminPasswordPolicyList is the paginated response for listing password policies.
+type AdminPasswordPolicyList struct {
+	Policies []AdminPasswordPolicy `json:"policies"`
+	Total    int                   `json:"total"`
+	Page     int                   `json:"page"`
+	PerPage  int                   `json:"per_page"`
+}
+
+// ComplianceReport represents the password policy compliance status.
+type ComplianceReport struct {
+	ExpiredPasswordCount   int      `json:"expired_password_count"`
+	ExpiredPasswordUserIDs []string `json:"expired_password_user_ids"`
+	ForceChangeCount       int      `json:"force_change_count"`
+	ForceChangeUserIDs     []string `json:"force_change_user_ids"`
+	PolicyViolationCount   int      `json:"policy_violation_count"`
+}
+
 // --- Admin request types ---
 
 // CreateUserRequest is the request body for creating a user via admin API.
@@ -158,6 +190,28 @@ type UpdateAPIKeyRequest struct {
 	RateLimit *int     `json:"rate_limit" validate:"omitempty,min=0,max=100000"`
 }
 
+// CreatePasswordPolicyRequest is the request body for creating a password policy.
+type CreatePasswordPolicyRequest struct {
+	Name         string `json:"name"          validate:"required,min=1,max=255"`
+	MinLength    *int   `json:"min_length"    validate:"omitempty,min=8,max=128"`
+	MaxLength    *int   `json:"max_length"    validate:"omitempty,min=15,max=1024"`
+	MaxAgeDays   *int   `json:"max_age_days"  validate:"omitempty,min=0,max=3650"`
+	HistoryCount *int   `json:"history_count" validate:"omitempty,min=0,max=100"`
+	RequireMFA   *bool  `json:"require_mfa"`
+	IsDefault    *bool  `json:"is_default"`
+}
+
+// UpdatePasswordPolicyRequest is the request body for updating a password policy.
+type UpdatePasswordPolicyRequest struct {
+	Name         *string `json:"name"          validate:"omitempty,min=1,max=255"`
+	MinLength    *int    `json:"min_length"    validate:"omitempty,min=8,max=128"`
+	MaxLength    *int    `json:"max_length"    validate:"omitempty,min=15,max=1024"`
+	MaxAgeDays   *int    `json:"max_age_days"  validate:"omitempty,min=0,max=3650"`
+	HistoryCount *int    `json:"history_count" validate:"omitempty,min=0,max=100"`
+	RequireMFA   *bool   `json:"require_mfa"`
+	IsDefault    *bool   `json:"is_default"`
+}
+
 // --- Admin service interfaces ---
 
 // AdminUserService defines admin operations for user management.
@@ -196,13 +250,24 @@ type AdminAPIKeyService interface {
 	RotateAPIKey(ctx context.Context, keyID string) (*AdminAPIKeyWithSecret, error)
 }
 
+// AdminPasswordPolicyService defines admin operations for password policy management.
+type AdminPasswordPolicyService interface {
+	ListPolicies(ctx context.Context, page, perPage int) (*AdminPasswordPolicyList, error)
+	GetPolicy(ctx context.Context, policyID string) (*AdminPasswordPolicy, error)
+	CreatePolicy(ctx context.Context, req *CreatePasswordPolicyRequest) (*AdminPasswordPolicy, error)
+	UpdatePolicy(ctx context.Context, policyID string, req *UpdatePasswordPolicyRequest) (*AdminPasswordPolicy, error)
+	DeletePolicy(ctx context.Context, policyID string) error
+	ComplianceReport(ctx context.Context) (*ComplianceReport, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
-	Users          AdminUserService
-	Clients        AdminClientService
-	Tokens         AdminTokenService
-	APIKeys        AdminAPIKeyService
-	MFA            MFAService
-	Consent        ConsentService
-	ClientApproval AdminClientApprovalService
+	Users            AdminUserService
+	Clients          AdminClientService
+	Tokens           AdminTokenService
+	APIKeys          AdminAPIKeyService
+	MFA              MFAService
+	Consent          ConsentService
+	ClientApproval   AdminClientApprovalService
+	PasswordPolicies AdminPasswordPolicyService
 }
