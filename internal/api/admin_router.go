@@ -135,6 +135,23 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// SAML IdP management.
+	if svc.SAML != nil {
+		samlH := NewAdminSAMLHandlers(svc.SAML)
+		idps := admin.Group("/saml/idps")
+		{
+			idps.GET("", samlH.List)
+			idps.GET("/:id", samlH.Get)
+			idps.POST("", samlH.Create)
+			idps.PATCH("/:id", samlH.Update)
+			idps.DELETE("/:id", samlH.Delete)
+			idps.POST("/:id/metadata", samlH.ImportMetadata)
+			idps.GET("/:id/metadata", samlH.ExportMetadata)
+			idps.PUT("/:id/attribute-mapping", samlH.UpdateAttributeMapping)
+			idps.GET("/:id/attribute-mapping", samlH.GetAttributeMapping)
+		}
+	}
+
 	// Token introspection.
 	if svc.Tokens != nil {
 		tokenH := NewAdminTokenHandlers(svc.Tokens)

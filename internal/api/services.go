@@ -276,6 +276,44 @@ type AdminClientApprovalService interface {
 	ApproveClient(ctx context.Context, clientID string) (*ClientApprovalInfo, error)
 }
 
+// --- SAML types ---
+
+// SAMLMetadataResponse contains the SP metadata XML.
+type SAMLMetadataResponse struct {
+	XML []byte
+}
+
+// SAMLLoginRequest contains the parameters for initiating SAML SSO.
+type SAMLLoginRequest struct {
+	IdPID       string `form:"idp_id"       binding:"required"`
+	RelayState  string `form:"relay_state"`
+}
+
+// SAMLLoginResult contains the redirect URL to the IdP.
+type SAMLLoginResult struct {
+	RedirectURL string `json:"redirect_url"`
+}
+
+// SAMLACSResult contains the tokens issued after successful SAML assertion processing.
+type SAMLACSResult struct {
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token"`
+	TokenType      string `json:"token_type"`
+	ExpiresIn      int    `json:"expires_in"`
+	UserID         string `json:"user_id"`
+	JITProvisioned bool   `json:"jit_provisioned,omitempty"`
+}
+
+// SAMLService defines the operations for SAML SSO authentication.
+type SAMLService interface {
+	// GetMetadata returns the SP metadata XML for the given IdP (or default).
+	GetMetadata(ctx context.Context, idpID string) (*SAMLMetadataResponse, error)
+	// InitiateSSO creates an AuthnRequest and returns the IdP redirect URL.
+	InitiateSSO(ctx context.Context, idpID, relayState string) (*SAMLLoginResult, error)
+	// ProcessResponse validates the SAML response and issues tokens.
+	ProcessResponse(ctx context.Context, samlResponse, relayState string) (*SAMLACSResult, error)
+}
+
 // --- Broker token types ---
 
 // BrokerTokenRequest is the request body for the public broker token endpoint.
@@ -308,6 +346,7 @@ type Services struct {
 	OAuth   OAuthService
 	OIDC    OIDCProviderService
 	Broker  BrokerTokenService
+	SAML    SAMLService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.
