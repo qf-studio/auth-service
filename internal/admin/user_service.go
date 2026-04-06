@@ -20,10 +20,11 @@ import (
 
 // UserService implements api.AdminUserService.
 type UserService struct {
-	repo   storage.AdminUserRepository
-	hasher password.Hasher
-	logger *zap.Logger
-	audit  audit.EventLogger
+	repo      storage.AdminUserRepository
+	auditRepo storage.AuditReadRepository
+	hasher    password.Hasher
+	logger    *zap.Logger
+	audit     audit.EventLogger
 }
 
 // NewUserService creates a new admin user service.
@@ -34,6 +35,11 @@ func NewUserService(repo storage.AdminUserRepository, hasher password.Hasher, lo
 		logger: logger,
 		audit:  auditor,
 	}
+}
+
+// SetAuditReadRepo sets the audit read repository for activity timeline queries.
+func (s *UserService) SetAuditReadRepo(repo storage.AuditReadRepository) {
+	s.auditRepo = repo
 }
 
 // ListUsers returns a paginated list of users filtered by status.
@@ -219,6 +225,146 @@ func (s *UserService) UnlockUser(ctx context.Context, userID string) (*api.Admin
 
 	admin := domainUserToAdmin(u)
 	return &admin, nil
+}
+
+// SearchUsers returns a paginated list of users matching the given filters.
+func (s *UserService) SearchUsers(ctx context.Context, page, perPage int, email, role, status string, createdAfter, createdBefore *time.Time) (*api.AdminUserList, error) {
+	offset := (page - 1) * perPage
+
+	filter := storage.UserSearchFilter{
+		Email:         email,
+		Role:          role,
+		Status:        status,
+		CreatedAfter:  createdAfter,
+		CreatedBefore: createdBefore,
+	}
+
+	users, total, err := s.repo.SearchUsers(ctx, perPage, offset, filter)
+	if err != nil {
+		s.logger.Error("search users failed", zap.Error(err))
+		return nil, fmt.Errorf("search users: %w", api.ErrInternalError)
+	}
+
+	result := &api.AdminUserList{
+		Users:   make([]api.AdminUser, 0, len(users)),
+		Total:   total,
+		Page:    page,
+		PerPage: perPage,
+	}
+	for _, u := range users {
+		result.Users = append(result.Users, domainUserToAdmin(u))
+	}
+	return result, nil
+}
+
+// BulkLock locks multiple user accounts at once.
+func (s *UserService) BulkLock(ctx context.Context, req *api.BulkUserActionRequest) (*api.BulkActionResult, error) {
+	affected, err := s.repo.BulkUpdateStatus(ctx, req.UserIDs, "lock", req.Reason)
+	if err != nil {
+		s.logger.Error("bulk lock failed", zap.Error(err))
+		return nil, fmt.Errorf("bulk lock: %w", api.ErrInternalError)
+	}
+	for _, id := range req.UserIDs {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventAdminUserLock,
+			TargetID: id,
+			Metadata: map[string]string{"reason": req.Reason, "bulk": "true"},
+		})
+	}
+	return &api.BulkActionResult{Affected: affected}, nil
+}
+
+// BulkUnlock unlocks multiple user accounts at once.
+func (s *UserService) BulkUnlock(ctx context.Context, req *api.BulkUserActionRequest) (*api.BulkActionResult, error) {
+	affected, err := s.repo.BulkUpdateStatus(ctx, req.UserIDs, "unlock", "")
+	if err != nil {
+		s.logger.Error("bulk unlock failed", zap.Error(err))
+		return nil, fmt.Errorf("bulk unlock: %w", api.ErrInternalError)
+	}
+	for _, id := range req.UserIDs {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventAdminUserUnlock,
+			TargetID: id,
+			Metadata: map[string]string{"bulk": "true"},
+		})
+	}
+	return &api.BulkActionResult{Affected: affected}, nil
+}
+
+// BulkSuspend soft-deletes multiple user accounts at once.
+func (s *UserService) BulkSuspend(ctx context.Context, req *api.BulkUserActionRequest) (*api.BulkActionResult, error) {
+	affected, err := s.repo.BulkUpdateStatus(ctx, req.UserIDs, "suspend", req.Reason)
+	if err != nil {
+		s.logger.Error("bulk suspend failed", zap.Error(err))
+		return nil, fmt.Errorf("bulk suspend: %w", api.ErrInternalError)
+	}
+	for _, id := range req.UserIDs {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventAdminUserDelete,
+			TargetID: id,
+			Metadata: map[string]string{"reason": req.Reason, "bulk": "true"},
+		})
+	}
+	return &api.BulkActionResult{Affected: affected}, nil
+}
+
+// BulkAssignRole assigns a role to multiple users at once.
+func (s *UserService) BulkAssignRole(ctx context.Context, req *api.BulkAssignRoleRequest) (*api.BulkActionResult, error) {
+	affected, err := s.repo.BulkAssignRole(ctx, req.UserIDs, req.Role)
+	if err != nil {
+		s.logger.Error("bulk assign role failed", zap.Error(err))
+		return nil, fmt.Errorf("bulk assign role: %w", api.ErrInternalError)
+	}
+	for _, id := range req.UserIDs {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventAdminUserUpdate,
+			TargetID: id,
+			Metadata: map[string]string{"role_assigned": req.Role, "bulk": "true"},
+		})
+	}
+	return &api.BulkActionResult{Affected: affected}, nil
+}
+
+// GetActivity returns the audit activity timeline for a specific user.
+func (s *UserService) GetActivity(ctx context.Context, userID string, page, perPage int) (*api.UserActivityTimeline, error) {
+	if s.auditRepo == nil {
+		return nil, fmt.Errorf("activity timeline not available: %w", api.ErrInternalError)
+	}
+
+	// Verify user exists.
+	if _, err := s.repo.FindByID(ctx, userID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("user %s: %w", userID, api.ErrNotFound)
+		}
+		s.logger.Error("find user for activity failed", zap.String("user_id", userID), zap.Error(err))
+		return nil, fmt.Errorf("get activity: %w", api.ErrInternalError)
+	}
+
+	offset := (page - 1) * perPage
+	entries, total, err := s.auditRepo.ListByTargetID(ctx, userID, perPage, offset)
+	if err != nil {
+		s.logger.Error("get user activity failed", zap.String("user_id", userID), zap.Error(err))
+		return nil, fmt.Errorf("get activity: %w", api.ErrInternalError)
+	}
+
+	events := make([]api.UserActivityEntry, 0, len(entries))
+	for _, e := range entries {
+		events = append(events, api.UserActivityEntry{
+			ID:        e.ID,
+			EventType: e.EventType,
+			ActorID:   e.ActorID,
+			IP:        e.IP,
+			Metadata:  e.Metadata,
+			CreatedAt: e.CreatedAt,
+		})
+	}
+
+	return &api.UserActivityTimeline{
+		Events:  events,
+		Total:   total,
+		Page:    page,
+		PerPage: perPage,
+	}, nil
 }
 
 // domainUserToAdmin converts a domain.User to an api.AdminUser response DTO.

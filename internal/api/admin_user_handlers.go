@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -19,10 +20,45 @@ func NewAdminUserHandlers(users AdminUserService) *AdminUserHandlers {
 }
 
 // List handles GET /admin/users.
-// Query params: page (default 1), per_page (default 20), status (active|locked|deleted, default empty = all non-deleted).
+// Query params: page, per_page, status, email, role, created_after, created_before.
+// When email, role, or date range filters are provided, delegates to SearchUsers.
 func (h *AdminUserHandlers) List(c *gin.Context) {
 	page, perPage := parsePagination(c)
 	status := c.DefaultQuery("status", "")
+	email := c.DefaultQuery("email", "")
+	role := c.DefaultQuery("role", "")
+	createdAfterStr := c.DefaultQuery("created_after", "")
+	createdBeforeStr := c.DefaultQuery("created_before", "")
+
+	hasFilters := email != "" || role != "" || createdAfterStr != "" || createdBeforeStr != ""
+
+	if hasFilters {
+		var createdAfter, createdBefore *time.Time
+		if createdAfterStr != "" {
+			t, err := time.Parse(time.RFC3339, createdAfterStr)
+			if err != nil {
+				domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid created_after: must be RFC3339")
+				return
+			}
+			createdAfter = &t
+		}
+		if createdBeforeStr != "" {
+			t, err := time.Parse(time.RFC3339, createdBeforeStr)
+			if err != nil {
+				domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid created_before: must be RFC3339")
+				return
+			}
+			createdBefore = &t
+		}
+
+		result, err := h.users.SearchUsers(c.Request.Context(), page, perPage, email, role, status, createdAfter, createdBefore)
+		if err != nil {
+			handleServiceError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+		return
+	}
 
 	result, err := h.users.ListUsers(c.Request.Context(), page, perPage, status)
 	if err != nil {
@@ -139,4 +175,98 @@ func (h *AdminUserHandlers) Unlock(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, user)
+}
+
+// BulkLock handles POST /admin/users/bulk/lock.
+func (h *AdminUserHandlers) BulkLock(c *gin.Context) {
+	var req BulkUserActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid request body")
+		return
+	}
+	if err := adminValidator.Struct(req); err != nil {
+		handleValidationError(c, err)
+		return
+	}
+
+	result, err := h.users.BulkLock(c.Request.Context(), &req)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// BulkUnlock handles POST /admin/users/bulk/unlock.
+func (h *AdminUserHandlers) BulkUnlock(c *gin.Context) {
+	var req BulkUserActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid request body")
+		return
+	}
+	if err := adminValidator.Struct(req); err != nil {
+		handleValidationError(c, err)
+		return
+	}
+
+	result, err := h.users.BulkUnlock(c.Request.Context(), &req)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// BulkSuspend handles POST /admin/users/bulk/suspend.
+func (h *AdminUserHandlers) BulkSuspend(c *gin.Context) {
+	var req BulkUserActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid request body")
+		return
+	}
+	if err := adminValidator.Struct(req); err != nil {
+		handleValidationError(c, err)
+		return
+	}
+
+	result, err := h.users.BulkSuspend(c.Request.Context(), &req)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// BulkAssignRole handles POST /admin/users/bulk/assign-role.
+func (h *AdminUserHandlers) BulkAssignRole(c *gin.Context) {
+	var req BulkAssignRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid request body")
+		return
+	}
+	if err := adminValidator.Struct(req); err != nil {
+		handleValidationError(c, err)
+		return
+	}
+
+	result, err := h.users.BulkAssignRole(c.Request.Context(), &req)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// Activity handles GET /admin/users/:id/activity.
+func (h *AdminUserHandlers) Activity(c *gin.Context) {
+	userID := c.Param("id")
+	page, perPage := parsePagination(c)
+
+	result, err := h.users.GetActivity(c.Request.Context(), userID, page, perPage)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
 }

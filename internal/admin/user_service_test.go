@@ -19,13 +19,16 @@ import (
 // --- Mock AdminUserRepository ---
 
 type mockAdminUserRepo struct {
-	listFn       func(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error)
-	findByIDFn   func(ctx context.Context, id string) (*domain.User, error)
-	createFn     func(ctx context.Context, user *domain.User) (*domain.User, error)
-	updateFn     func(ctx context.Context, user *domain.User) (*domain.User, error)
-	softDeleteFn func(ctx context.Context, id string) error
-	lockFn       func(ctx context.Context, id, reason string) (*domain.User, error)
-	unlockFn     func(ctx context.Context, id string) (*domain.User, error)
+	listFn            func(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error)
+	searchUsersFn     func(ctx context.Context, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error)
+	findByIDFn        func(ctx context.Context, id string) (*domain.User, error)
+	createFn          func(ctx context.Context, user *domain.User) (*domain.User, error)
+	updateFn          func(ctx context.Context, user *domain.User) (*domain.User, error)
+	softDeleteFn      func(ctx context.Context, id string) error
+	lockFn            func(ctx context.Context, id, reason string) (*domain.User, error)
+	unlockFn          func(ctx context.Context, id string) (*domain.User, error)
+	bulkUpdateStatFn  func(ctx context.Context, ids []string, action string, reason string) (int64, error)
+	bulkAssignRoleFn  func(ctx context.Context, ids []string, role string) (int64, error)
 }
 
 func (m *mockAdminUserRepo) List(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error) {
@@ -33,6 +36,27 @@ func (m *mockAdminUserRepo) List(ctx context.Context, limit, offset int, status 
 		return m.listFn(ctx, limit, offset, status)
 	}
 	return []*domain.User{testUser()}, 1, nil
+}
+
+func (m *mockAdminUserRepo) SearchUsers(ctx context.Context, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
+	if m.searchUsersFn != nil {
+		return m.searchUsersFn(ctx, limit, offset, filter)
+	}
+	return []*domain.User{testUser()}, 1, nil
+}
+
+func (m *mockAdminUserRepo) BulkUpdateStatus(ctx context.Context, ids []string, action string, reason string) (int64, error) {
+	if m.bulkUpdateStatFn != nil {
+		return m.bulkUpdateStatFn(ctx, ids, action, reason)
+	}
+	return int64(len(ids)), nil
+}
+
+func (m *mockAdminUserRepo) BulkAssignRole(ctx context.Context, ids []string, role string) (int64, error) {
+	if m.bulkAssignRoleFn != nil {
+		return m.bulkAssignRoleFn(ctx, ids, role)
+	}
+	return int64(len(ids)), nil
 }
 
 func (m *mockAdminUserRepo) FindByID(ctx context.Context, id string) (*domain.User, error) {
@@ -357,6 +381,234 @@ func TestUserService_UnlockUser_NotFound(t *testing.T) {
 	_, err := svc.UnlockUser(context.Background(), "nonexistent")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrNotFound)
+}
+
+// --- Mock AuditReadRepository ---
+
+type mockAuditReadRepo struct {
+	listByTargetIDFn func(ctx context.Context, targetID string, limit, offset int) ([]storage.AuditEntry, int, error)
+}
+
+func (m *mockAuditReadRepo) ListByTargetID(ctx context.Context, targetID string, limit, offset int) ([]storage.AuditEntry, int, error) {
+	if m.listByTargetIDFn != nil {
+		return m.listByTargetIDFn(ctx, targetID, limit, offset)
+	}
+	return []storage.AuditEntry{}, 0, nil
+}
+
+func newTestUserServiceWithAudit(repo *mockAdminUserRepo, auditRepo *mockAuditReadRepo) *UserService {
+	svc := NewUserService(repo, &mockHasher{}, zap.NewNop(), audit.NopLogger{})
+	svc.SetAuditReadRepo(auditRepo)
+	return svc
+}
+
+// --- SearchUsers ---
+
+func TestUserService_SearchUsers(t *testing.T) {
+	repo := &mockAdminUserRepo{
+		searchUsersFn: func(_ context.Context, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
+			assert.Equal(t, 20, limit)
+			assert.Equal(t, 0, offset)
+			assert.Equal(t, "alice", filter.Email)
+			assert.Equal(t, "admin", filter.Role)
+			assert.Equal(t, "active", filter.Status)
+			return []*domain.User{testUser()}, 1, nil
+		},
+	}
+	svc := newTestUserService(repo)
+
+	result, err := svc.SearchUsers(context.Background(), 1, 20, "alice", "admin", "active", nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Total)
+	assert.Len(t, result.Users, 1)
+}
+
+func TestUserService_SearchUsers_WithDateRange(t *testing.T) {
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
+	repo := &mockAdminUserRepo{
+		searchUsersFn: func(_ context.Context, _, _ int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
+			assert.Equal(t, &after, filter.CreatedAfter)
+			assert.Equal(t, &before, filter.CreatedBefore)
+			return []*domain.User{}, 0, nil
+		},
+	}
+	svc := newTestUserService(repo)
+
+	result, err := svc.SearchUsers(context.Background(), 1, 20, "", "", "", &after, &before)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Total)
+}
+
+func TestUserService_SearchUsers_Error(t *testing.T) {
+	repo := &mockAdminUserRepo{
+		searchUsersFn: func(_ context.Context, _, _ int, _ storage.UserSearchFilter) ([]*domain.User, int, error) {
+			return nil, 0, fmt.Errorf("db error")
+		},
+	}
+	svc := newTestUserService(repo)
+
+	_, err := svc.SearchUsers(context.Background(), 1, 20, "", "", "", nil, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
+}
+
+// --- BulkLock ---
+
+func TestUserService_BulkLock(t *testing.T) {
+	repo := &mockAdminUserRepo{
+		bulkUpdateStatFn: func(_ context.Context, ids []string, action, reason string) (int64, error) {
+			assert.Equal(t, []string{"u1", "u2"}, ids)
+			assert.Equal(t, "lock", action)
+			assert.Equal(t, "policy violation", reason)
+			return 2, nil
+		},
+	}
+	svc := newTestUserService(repo)
+
+	result, err := svc.BulkLock(context.Background(), &api.BulkUserActionRequest{
+		UserIDs: []string{"u1", "u2"},
+		Reason:  "policy violation",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), result.Affected)
+}
+
+func TestUserService_BulkLock_Error(t *testing.T) {
+	repo := &mockAdminUserRepo{
+		bulkUpdateStatFn: func(_ context.Context, _ []string, _, _ string) (int64, error) {
+			return 0, fmt.Errorf("db error")
+		},
+	}
+	svc := newTestUserService(repo)
+
+	_, err := svc.BulkLock(context.Background(), &api.BulkUserActionRequest{UserIDs: []string{"u1"}})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
+}
+
+// --- BulkUnlock ---
+
+func TestUserService_BulkUnlock(t *testing.T) {
+	svc := newTestUserService(&mockAdminUserRepo{})
+
+	result, err := svc.BulkUnlock(context.Background(), &api.BulkUserActionRequest{UserIDs: []string{"u1", "u2"}})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), result.Affected)
+}
+
+// --- BulkSuspend ---
+
+func TestUserService_BulkSuspend(t *testing.T) {
+	repo := &mockAdminUserRepo{
+		bulkUpdateStatFn: func(_ context.Context, _ []string, action, _ string) (int64, error) {
+			assert.Equal(t, "suspend", action)
+			return 3, nil
+		},
+	}
+	svc := newTestUserService(repo)
+
+	result, err := svc.BulkSuspend(context.Background(), &api.BulkUserActionRequest{
+		UserIDs: []string{"u1", "u2", "u3"},
+		Reason:  "account review",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), result.Affected)
+}
+
+// --- BulkAssignRole ---
+
+func TestUserService_BulkAssignRole(t *testing.T) {
+	repo := &mockAdminUserRepo{
+		bulkAssignRoleFn: func(_ context.Context, ids []string, role string) (int64, error) {
+			assert.Equal(t, "admin", role)
+			return 2, nil
+		},
+	}
+	svc := newTestUserService(repo)
+
+	result, err := svc.BulkAssignRole(context.Background(), &api.BulkAssignRoleRequest{
+		UserIDs: []string{"u1", "u2"},
+		Role:    "admin",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), result.Affected)
+}
+
+func TestUserService_BulkAssignRole_Error(t *testing.T) {
+	repo := &mockAdminUserRepo{
+		bulkAssignRoleFn: func(_ context.Context, _ []string, _ string) (int64, error) {
+			return 0, fmt.Errorf("db error")
+		},
+	}
+	svc := newTestUserService(repo)
+
+	_, err := svc.BulkAssignRole(context.Background(), &api.BulkAssignRoleRequest{
+		UserIDs: []string{"u1"},
+		Role:    "admin",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
+}
+
+// --- GetActivity ---
+
+func TestUserService_GetActivity(t *testing.T) {
+	now := time.Now()
+	auditRepo := &mockAuditReadRepo{
+		listByTargetIDFn: func(_ context.Context, targetID string, limit, offset int) ([]storage.AuditEntry, int, error) {
+			assert.Equal(t, "user-1", targetID)
+			assert.Equal(t, 20, limit)
+			assert.Equal(t, 0, offset)
+			return []storage.AuditEntry{
+				{ID: "a1", EventType: "admin_user_create", TargetID: "user-1", CreatedAt: now},
+				{ID: "a2", EventType: "admin_user_lock", TargetID: "user-1", ActorID: "admin-1", Metadata: map[string]string{"reason": "test"}, CreatedAt: now},
+			}, 2, nil
+		},
+	}
+	svc := newTestUserServiceWithAudit(&mockAdminUserRepo{}, auditRepo)
+
+	result, err := svc.GetActivity(context.Background(), "user-1", 1, 20)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Total)
+	assert.Len(t, result.Events, 2)
+	assert.Equal(t, "admin_user_create", result.Events[0].EventType)
+	assert.Equal(t, 1, result.Page)
+	assert.Equal(t, 20, result.PerPage)
+}
+
+func TestUserService_GetActivity_UserNotFound(t *testing.T) {
+	repo := &mockAdminUserRepo{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	svc := newTestUserServiceWithAudit(repo, &mockAuditReadRepo{})
+
+	_, err := svc.GetActivity(context.Background(), "nonexistent", 1, 20)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrNotFound)
+}
+
+func TestUserService_GetActivity_NoAuditRepo(t *testing.T) {
+	svc := newTestUserService(&mockAdminUserRepo{})
+
+	_, err := svc.GetActivity(context.Background(), "user-1", 1, 20)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
+}
+
+func TestUserService_GetActivity_AuditError(t *testing.T) {
+	auditRepo := &mockAuditReadRepo{
+		listByTargetIDFn: func(_ context.Context, _ string, _, _ int) ([]storage.AuditEntry, int, error) {
+			return nil, 0, fmt.Errorf("db error")
+		},
+	}
+	svc := newTestUserServiceWithAudit(&mockAdminUserRepo{}, auditRepo)
+
+	_, err := svc.GetActivity(context.Background(), "user-1", 1, 20)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
 }
 
 // --- domainUserToAdmin ---
