@@ -1,4 +1,4 @@
-.PHONY: build run test test-cover bench bench-cpu bench-mem load-test lint lint-fix fmt clean migrate-up migrate-down docker-up docker-down
+.PHONY: build run test test-cover bench bench-cpu bench-mem load-test lint lint-fix fmt clean migrate-up migrate-down docker-up docker-down proto-generate proto-lint
 
 # Build
 build:
@@ -65,6 +65,21 @@ docker-up:
 
 docker-down:
 	docker-compose down
+
+# Proto
+proto-generate:
+	@if ! command -v buf >/dev/null 2>&1; then \
+		echo "Error: buf is not installed. Install from https://buf.build/docs/installation"; \
+		exit 1; \
+	fi
+	buf generate
+
+proto-lint:
+	@if ! command -v buf >/dev/null 2>&1; then \
+		echo "Error: buf is not installed. Install from https://buf.build/docs/installation"; \
+		exit 1; \
+	fi
+	buf lint
 
 # Clean
 clean:
