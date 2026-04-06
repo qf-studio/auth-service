@@ -76,6 +76,19 @@ func (c *Collector) RecordRequest(statusCode int, duration time.Duration, method
 	c.endpointMu.Unlock()
 }
 
+// RecordGRPCRequest records a completed gRPC request. The method is the full
+// gRPC method name (e.g. "/auth.v1.AuthService/ValidateToken") and code is
+// the gRPC status code string (e.g. "OK").
+func (c *Collector) RecordGRPCRequest(method, code string, duration time.Duration) {
+	c.totalRequests.Add(1)
+	c.recordDuration(duration)
+
+	endpoint := "gRPC " + method + " " + code
+	c.endpointMu.Lock()
+	c.endpointCounts[endpoint]++
+	c.endpointMu.Unlock()
+}
+
 // recordDuration places the observation into the correct histogram bucket.
 func (c *Collector) recordDuration(d time.Duration) {
 	sec := d.Seconds()

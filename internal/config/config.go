@@ -80,6 +80,7 @@ type AppConfig struct {
 	Env        string // "development", "staging", "production"
 	PublicPort int
 	AdminPort  int
+	GRPCPort   int
 	LogLevel   string
 }
 
@@ -306,11 +307,16 @@ func loadApp(l *loader) (AppConfig, error) {
 	if err != nil {
 		return AppConfig{}, err
 	}
+	grpcPort, err := l.optInt("GRPC_PORT", 4002)
+	if err != nil {
+		return AppConfig{}, err
+	}
 
 	return AppConfig{
 		Env:        appEnv,
 		PublicPort: publicPort,
 		AdminPort:  adminPort,
+		GRPCPort:   grpcPort,
 		LogLevel:   logLevel,
 	}, nil
 }
