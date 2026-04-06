@@ -139,6 +139,15 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		protected.DELETE("/me/oauth/:provider", oauthH.Unlink)
 	}
 
+	if svc.GDPR != nil {
+		gdprH := NewGDPRHandlers(svc.GDPR)
+		protected.GET("/me/export", gdprH.Export)
+		protected.DELETE("/me", gdprH.DeleteAccount)
+		protected.GET("/me/consent", gdprH.ListConsent)
+		protected.POST("/me/consent", gdprH.GrantConsent)
+		protected.DELETE("/me/consent/:type", gdprH.RevokeConsent)
+	}
+
 	// OIDC UserInfo endpoint (requires auth, at root path per OIDC spec).
 	if oidcH != nil {
 		userinfo := r.Group("")

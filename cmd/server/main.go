@@ -154,6 +154,19 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		zap.Strings("scopes", cfg.OIDC.SupportedScopes),
 	)
 
+	// ── GDPR ─────────────────────────────────────────────────────────────
+	// The GDPR service implementation is registered in a subsequent issue.
+	// Handlers and routes are wired now so that plugging in the service is
+	// the only remaining step.
+	var gdprSvc api.GDPRService
+	var adminGDPRSvc api.AdminGDPRService
+	log.Info("GDPR configuration loaded",
+		zap.Duration("user_data_retention", cfg.GDPR.UserDataRetention),
+		zap.Duration("audit_log_retention", cfg.GDPR.AuditLogRetention),
+		zap.Duration("cleanup_interval", cfg.GDPR.CleanupInterval),
+		zap.Int("export_rate_limit", cfg.GDPR.ExportRateLimit),
+	)
+
 	services := &api.Services{
 		Auth:    authSvc,
 		Token:   tokenSvc,
@@ -162,6 +175,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		MFA:     mfaSvc,
 		OAuth:   oauthSvc,
 		OIDC:    oidcSvc,
+		GDPR:    gdprSvc,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -216,6 +230,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		MFA:            mfaSvc,
 		Consent:        consentSvc,
 		ClientApproval: clientApprovalSvc,
+		GDPR:           adminGDPRSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

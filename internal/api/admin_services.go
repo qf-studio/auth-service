@@ -196,6 +196,30 @@ type AdminAPIKeyService interface {
 	RotateAPIKey(ctx context.Context, keyID string) (*AdminAPIKeyWithSecret, error)
 }
 
+// AdminGDPRExportData represents the admin view of a user's data export.
+type AdminGDPRExportData struct {
+	UserID     string                 `json:"user_id"`
+	Email      string                 `json:"email"`
+	Name       string                 `json:"name"`
+	CreatedAt  time.Time              `json:"created_at"`
+	Data       map[string]interface{} `json:"data"`
+	ExportedAt time.Time              `json:"exported_at"`
+}
+
+// AdminGDPRDeletionResponse is returned when an admin deletes a user account.
+type AdminGDPRDeletionResponse struct {
+	Message string `json:"message"`
+	UserID  string `json:"user_id"`
+	Force   bool   `json:"force"`
+}
+
+// AdminGDPRService defines admin GDPR operations for user data management.
+type AdminGDPRService interface {
+	ExportUserData(ctx context.Context, userID string) (*AdminGDPRExportData, error)
+	DeleteUser(ctx context.Context, userID string, force bool) (*AdminGDPRDeletionResponse, error)
+	ListUserConsent(ctx context.Context, userID string) (*GDPRConsentList, error)
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users          AdminUserService
@@ -205,4 +229,5 @@ type AdminServices struct {
 	MFA            MFAService
 	Consent        ConsentService
 	ClientApproval AdminClientApprovalService
+	GDPR           AdminGDPRService
 }

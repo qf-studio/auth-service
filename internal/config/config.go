@@ -25,6 +25,17 @@ type Config struct {
 	MFA          MFAConfig
 	OAuth        OAuthConfig
 	OIDC         OIDCConfig
+	GDPR         GDPRConfig
+}
+
+// GDPRConfig holds GDPR data retention and cleanup settings.
+type GDPRConfig struct {
+	UserDataRetention time.Duration // GDPR_USER_DATA_RETENTION: how long to retain user data after deletion
+	AuditLogRetention time.Duration // GDPR_AUDIT_LOG_RETENTION: how long to retain audit logs
+	TokenRetention    time.Duration // GDPR_TOKEN_RETENTION: how long to retain expired token records
+	SessionRetention  time.Duration // GDPR_SESSION_RETENTION: how long to retain session records
+	CleanupInterval   time.Duration // GDPR_CLEANUP_INTERVAL: how often to run data cleanup
+	ExportRateLimit   int           // GDPR_EXPORT_RATE_LIMIT: max data exports per user per day
 }
 
 // OIDCConfig holds OpenID Connect provider settings.
@@ -268,6 +279,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	gdprCfg, err := loadGDPR(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -292,6 +307,7 @@ func Load() (*Config, error) {
 		MFA:          mfaCfg,
 		OAuth:        oauthCfg,
 		OIDC:         oidcCfg,
+		GDPR:         gdprCfg,
 	}, nil
 }
 
@@ -666,6 +682,52 @@ func loadOIDC(l *loader) (OIDCConfig, error) {
 		IssuerURL:       issuerURL,
 		IDTokenTTL:      idTokenTTL,
 		SupportedScopes: scopes,
+	}, nil
+}
+
+func loadGDPR(l *loader) (GDPRConfig, error) {
+	userDataRetStr := l.optStr("GDPR_USER_DATA_RETENTION", "90d")
+	userDataRet, err := parseDuration(userDataRetStr)
+	if err != nil {
+		return GDPRConfig{}, fmt.Errorf("GDPR_USER_DATA_RETENTION: %w", err)
+	}
+
+	auditLogRetStr := l.optStr("GDPR_AUDIT_LOG_RETENTION", "365d")
+	auditLogRet, err := parseDuration(auditLogRetStr)
+	if err != nil {
+		return GDPRConfig{}, fmt.Errorf("GDPR_AUDIT_LOG_RETENTION: %w", err)
+	}
+
+	tokenRetStr := l.optStr("GDPR_TOKEN_RETENTION", "30d")
+	tokenRet, err := parseDuration(tokenRetStr)
+	if err != nil {
+		return GDPRConfig{}, fmt.Errorf("GDPR_TOKEN_RETENTION: %w", err)
+	}
+
+	sessionRetStr := l.optStr("GDPR_SESSION_RETENTION", "30d")
+	sessionRet, err := parseDuration(sessionRetStr)
+	if err != nil {
+		return GDPRConfig{}, fmt.Errorf("GDPR_SESSION_RETENTION: %w", err)
+	}
+
+	cleanupIntervalStr := l.optStr("GDPR_CLEANUP_INTERVAL", "24h")
+	cleanupInterval, err := parseDuration(cleanupIntervalStr)
+	if err != nil {
+		return GDPRConfig{}, fmt.Errorf("GDPR_CLEANUP_INTERVAL: %w", err)
+	}
+
+	exportRateLimit, err := l.optInt("GDPR_EXPORT_RATE_LIMIT", 1)
+	if err != nil {
+		return GDPRConfig{}, err
+	}
+
+	return GDPRConfig{
+		UserDataRetention: userDataRet,
+		AuditLogRetention: auditLogRet,
+		TokenRetention:    tokenRet,
+		SessionRetention:  sessionRet,
+		CleanupInterval:   cleanupInterval,
+		ExportRateLimit:   exportRateLimit,
 	}, nil
 }
 

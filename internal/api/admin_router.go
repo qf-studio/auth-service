@@ -103,6 +103,15 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		admin.POST("/tokens/introspect", tokenH.Introspect)
 	}
 
+	// GDPR management (nested under users).
+	if svc.GDPR != nil {
+		gdprH := NewAdminGDPRHandlers(svc.GDPR)
+		users := admin.Group("/users")
+		users.GET("/:id/export", gdprH.Export)
+		users.DELETE("/:id/gdpr", gdprH.Delete)
+		users.GET("/:id/consent", gdprH.ListConsent)
+	}
+
 	// OAuth consent flow (Hydra-style login/consent admin API).
 	if svc.Consent != nil || svc.ClientApproval != nil {
 		consentH := NewAdminConsentHandlers(svc.Consent, svc.ClientApproval)

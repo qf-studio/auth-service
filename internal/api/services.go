@@ -274,6 +274,51 @@ type AdminClientApprovalService interface {
 	ApproveClient(ctx context.Context, clientID string) (*ClientApprovalInfo, error)
 }
 
+// --- GDPR types ---
+
+// GDPRExportData represents the full data export for a user (GDPR Article 20).
+type GDPRExportData struct {
+	UserID    string                 `json:"user_id"`
+	Email     string                 `json:"email"`
+	Name      string                 `json:"name"`
+	CreatedAt time.Time              `json:"created_at"`
+	Data      map[string]interface{} `json:"data"`
+	ExportedAt time.Time             `json:"exported_at"`
+}
+
+// GDPRConsentRecord represents a single consent record for a user.
+type GDPRConsentRecord struct {
+	Type      string    `json:"type"`
+	Granted   bool      `json:"granted"`
+	GrantedAt time.Time `json:"granted_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+// GDPRConsentList is the response for listing consent records.
+type GDPRConsentList struct {
+	Consents []GDPRConsentRecord `json:"consents"`
+}
+
+// GrantConsentRequest is the request body for granting consent.
+type GrantConsentRequest struct {
+	Type string `json:"type" binding:"required"`
+}
+
+// GDPRDeletionResponse is returned when a user account deletion is initiated.
+type GDPRDeletionResponse struct {
+	Message     string    `json:"message"`
+	ScheduledAt time.Time `json:"scheduled_at"`
+}
+
+// GDPRService defines GDPR self-service operations for authenticated users.
+type GDPRService interface {
+	ExportUserData(ctx context.Context, userID string) (*GDPRExportData, error)
+	DeleteAccount(ctx context.Context, userID string) (*GDPRDeletionResponse, error)
+	ListConsent(ctx context.Context, userID string) (*GDPRConsentList, error)
+	GrantConsent(ctx context.Context, userID, consentType string) (*GDPRConsentRecord, error)
+	RevokeConsent(ctx context.Context, userID, consentType string) error
+}
+
 // Services aggregates all service interfaces required by the API handlers.
 type Services struct {
 	Auth    AuthService
@@ -283,6 +328,7 @@ type Services struct {
 	MFA     MFAService
 	OAuth   OAuthService
 	OIDC    OIDCProviderService
+	GDPR    GDPRService
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.
