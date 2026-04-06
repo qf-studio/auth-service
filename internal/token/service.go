@@ -36,6 +36,9 @@ const (
 	// refreshTokenPrefix is prepended to refresh tokens for leak detection.
 	refreshTokenPrefix = "qf_rt_"
 
+	// proxyTokenPrefix is prepended to proxy tokens for leak detection.
+	proxyTokenPrefix = "qf_px_"
+
 	// revokedKeyPrefix is the Redis key prefix for the revocation blocklist.
 	revokedKeyPrefix = "revoked:"
 
@@ -140,6 +143,47 @@ func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, sco
 		TokenType:    tokenType,
 		ExpiresIn:    int(s.cfg.AccessTokenTTL.Seconds()),
 	}, nil
+}
+
+// IssueProxyToken creates a short-lived, audience-restricted proxy token.
+// Used by the credential broker to grant temporary access to a specific target
+// service without exposing the underlying credential.
+func (s *Service) IssueProxyToken(ctx context.Context, subject string, audience string, scopes []string, ttl time.Duration) (string, error) {
+	jti, err := generateRandomID(jtiBytes)
+	if err != nil {
+		return "", fmt.Errorf("generate jti: %w", err)
+	}
+
+	now := time.Now()
+	claims := &customClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   subject,
+			Issuer:    issuer,
+			Audience:  jwt.ClaimStrings{audience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+			ID:        jti,
+		},
+		Scopes:     scopes,
+		ClientType: string(domain.ClientTypeAgent),
+	}
+
+	token := jwt.NewWithClaims(s.signingMethod, claims)
+	signed, err := token.SignedString(s.privateKey)
+	if err != nil {
+		return "", fmt.Errorf("sign proxy token: %w", err)
+	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:    audit.EventBrokerAccess,
+		ActorID: subject,
+		Metadata: map[string]string{
+			"audience": audience,
+			"jti":      jti,
+		},
+	})
+
+	return proxyTokenPrefix + signed, nil
 }
 
 // Refresh exchanges a refresh token for a new access/refresh token pair.

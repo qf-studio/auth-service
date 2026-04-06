@@ -44,6 +44,8 @@ const (
 	EventAdminWebhookDelete = "admin_webhook_delete"
 	EventAdminWebhookTest   = "admin_webhook_test"
 	EventAdminWebhookRetry  = "admin_webhook_retry"
+	EventBrokerAccess       = "broker_access"
+	EventBrokerAccessDenied = "broker_access_denied"
 )
 
 // Event represents a single audit log entry.

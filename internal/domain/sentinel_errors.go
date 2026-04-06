@@ -39,4 +39,11 @@ var (
 	ErrOAuthAccountNotFound      = errors.New("oauth account not found")
 	ErrOAuthStateMismatch        = errors.New("oauth state mismatch")
 	ErrOAuthCodeExchangeFailed   = errors.New("oauth code exchange failed")
+
+	// Broker errors.
+	ErrCredentialNotFound = errors.New("credential not found")
+	ErrCredentialRevoked  = errors.New("credential revoked")
+	ErrCredentialExpired  = errors.New("credential expired")
+	ErrBrokerAccessDenied = errors.New("broker access denied")
+	ErrDecryptionFailed   = errors.New("decryption failed")
 )
