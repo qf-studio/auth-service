@@ -14,6 +14,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -95,8 +96,11 @@ func (s *UserService) CreateUser(ctx context.Context, req *api.CreateUserRequest
 		roles = []string{"user"}
 	}
 
+	tenantID := middleware.TenantIDFromStdContext(ctx)
+
 	user := &domain.User{
 		ID:           uuid.New().String(),
+		TenantID:     uuidFromString(tenantID),
 		Email:        req.Email,
 		PasswordHash: hash,
 		Name:         req.Name,
@@ -117,7 +121,7 @@ func (s *UserService) CreateUser(ctx context.Context, req *api.CreateUserRequest
 	s.audit.LogEvent(ctx, audit.Event{
 		Type:     audit.EventAdminUserCreate,
 		TargetID: created.ID,
-		Metadata: map[string]string{"email": created.Email},
+		Metadata: map[string]string{"email": created.Email, "tenant_id": tenantID},
 	})
 
 	admin := domainUserToAdmin(created)
@@ -365,6 +369,12 @@ func (s *UserService) GetActivity(ctx context.Context, userID string, page, perP
 		Page:    page,
 		PerPage: perPage,
 	}, nil
+}
+
+// uuidFromString parses a UUID string, returning uuid.Nil on failure.
+func uuidFromString(s string) uuid.UUID {
+	id, _ := uuid.Parse(s)
+	return id
 }
 
 // domainUserToAdmin converts a domain.User to an api.AdminUser response DTO.

@@ -13,12 +13,16 @@ import (
 	"github.com/qf-studio/auth-service/internal/domain"
 )
 
-// Context keys for tenant resolution.
+// Context keys for tenant resolution (gin context).
 const (
 	tenantIDContextKey     = "tenant_id"
 	tenantConfigContextKey = "tenant_config"
 	tenantHeader           = "X-Tenant-ID"
 )
+
+// stdCtxKey types for standard context.Context propagation.
+type tenantIDStdCtxKey struct{}
+type tenantConfigStdCtxKey struct{}
 
 // TenantConfig holds per-tenant configuration stored alongside the tenant.
 type TenantConfig struct {
@@ -107,8 +111,7 @@ func TenantMiddleware(cfg config.TenantConfig, resolver TenantResolver, cache *T
 					"tenant is inactive")
 				return
 			}
-			c.Set(tenantIDContextKey, cached.TenantID)
-			c.Set(tenantConfigContextKey, cached)
+			setTenantContext(c, cached)
 			c.Next()
 			return
 		}
@@ -129,8 +132,7 @@ func TenantMiddleware(cfg config.TenantConfig, resolver TenantResolver, cache *T
 			return
 		}
 
-		c.Set(tenantIDContextKey, tenantCfg.TenantID)
-		c.Set(tenantConfigContextKey, tenantCfg)
+		setTenantContext(c, tenantCfg)
 		c.Next()
 	}
 }
@@ -180,6 +182,20 @@ func extractSubdomain(host, baseDomain string) string {
 	return sub
 }
 
+// setTenantContext stores tenant information in both the Gin context (for handlers)
+// and the standard request context (for services receiving context.Context).
+func setTenantContext(c *gin.Context, tc *TenantConfig) {
+	// Gin context for handler-level access.
+	c.Set(tenantIDContextKey, tc.TenantID)
+	c.Set(tenantConfigContextKey, tc)
+
+	// Standard context for service-level access.
+	ctx := c.Request.Context()
+	ctx = context.WithValue(ctx, tenantIDStdCtxKey{}, tc.TenantID)
+	ctx = context.WithValue(ctx, tenantConfigStdCtxKey{}, tc)
+	c.Request = c.Request.WithContext(ctx)
+}
+
 // TenantIDFromContext retrieves the resolved tenant ID from the Gin context.
 // Returns empty string if no tenant was resolved.
 func TenantIDFromContext(c *gin.Context) string {
@@ -195,4 +211,14 @@ func TenantConfigFromContext(c *gin.Context) *TenantConfig {
 		}
 	}
 	return nil
+}
+
+// TenantIDFromStdContext retrieves the resolved tenant ID from a standard context.Context.
+// This is used by services that receive context.Context rather than *gin.Context.
+// Returns empty string if no tenant was resolved.
+func TenantIDFromStdContext(ctx context.Context) string {
+	if v, ok := ctx.Value(tenantIDStdCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
 }

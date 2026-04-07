@@ -15,6 +15,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/webhook"
 )
@@ -108,8 +109,11 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *api.CreateWebho
 		eventTypes = []string{}
 	}
 
+	tenantID := middleware.TenantIDFromStdContext(ctx)
+
 	wh := &domain.Webhook{
 		ID:           uuid.New(),
+		TenantID:     uuidFromString(tenantID),
 		URL:          req.URL,
 		SecretHash:   secret, // stored as the raw secret for HMAC signing
 		EventTypes:   eventTypes,

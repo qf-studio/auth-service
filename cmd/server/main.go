@@ -36,6 +36,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/session"
 	"github.com/qf-studio/auth-service/internal/storage"
+	"github.com/qf-studio/auth-service/internal/tenant"
 	"github.com/qf-studio/auth-service/internal/token"
 )
 
@@ -196,7 +197,14 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Webhook dispatcher ───────────────────────────────────────────────
 	webhookDispatcher := webhook.NewDispatcher(webhookRepo, webhookDeliveryRepo, log)
 
+	// ── Tenant ──────────────────────────────────────────────────────────
+	tenantRepo := storage.NewPostgresTenantRepository(pgPool)
+	tenantResolver := tenant.NewResolver(tenantRepo)
+	tenantCache := middleware.NewTenantCache(cfg.Tenant.CacheTTL)
+	tenantMW := middleware.TenantMiddleware(cfg.Tenant, tenantResolver, tenantCache)
+
 	// ── Admin services ────────────────────────────────────────────────────
+	adminTenantSvc := admin.NewTenantService(tenantRepo, log, auditSvc)
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
 	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
@@ -217,6 +225,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		SecurityHeaders: middleware.SecurityHeaders(),
 		RateLimit:       rateLimiter.Handler(),
 		RequestSize:     middleware.RequestSize(cfg.RequestLimit),
+		Tenant:          tenantMW,
 		APIKey:          middleware.APIKeyMiddleware(adminAPIKeySvc),
 		Auth:            middleware.AuthMiddleware(tokenSvc),
 		DPoP:            dpopMW,
@@ -246,6 +255,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Webhooks:       adminWebhookSvc,
 		Brokers:        adminBrokerSvc,
 		SAML:           adminSAMLSvc,
+		Tenants:        adminTenantSvc,
 	}
 
 	adminDeps := &api.AdminDeps{
@@ -276,7 +286,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 
 	// ── HTTP servers ──────────────────────────────────────────────────────
 	publicRouter := api.NewPublicRouter(services, mw, healthSvc)
-	adminRouter := api.NewAdminRouter(adminServices, adminDeps)
+	adminRouter := api.NewAdminRouter(adminServices, adminDeps, tenantMW)
 
 	publicSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.App.PublicPort),

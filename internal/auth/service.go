@@ -13,10 +13,13 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/google/uuid"
+
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/hibp"
+	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -108,8 +111,11 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 	}
 
 	now := time.Now().UTC()
+	tenantID, _ := uuid.Parse(middleware.TenantIDFromStdContext(ctx))
+
 	user := &domain.User{
 		ID:                fmt.Sprintf("usr_%s", generateID()),
+		TenantID:          tenantID,
 		Email:             email,
 		PasswordHash:      hash,
 		Name:              name,
@@ -140,7 +146,7 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 		Type:     audit.EventRegister,
 		ActorID:  info.ID,
 		TargetID: info.ID,
-		Metadata: map[string]string{"email": email},
+		Metadata: map[string]string{"email": email, "tenant_id": tenantID.String()},
 	})
 	return info, nil
 }

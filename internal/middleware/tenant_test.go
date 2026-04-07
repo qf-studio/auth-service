@@ -343,6 +343,44 @@ func TestTenantContextHelpers_NoTenant(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestTenantMiddleware_StdContextPropagation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	resolver := &mockTenantResolver{
+		tenants: map[string]*middleware.TenantConfig{
+			"acme": {TenantID: "tenant-acme", Name: "Acme Corp", Active: true},
+		},
+	}
+	cache := middleware.NewTenantCache(5 * time.Minute)
+	cfg := config.TenantConfig{
+		ResolutionMode: "header",
+	}
+
+	r := gin.New()
+	r.Use(middleware.TenantMiddleware(cfg, resolver, cache))
+	r.GET("/resource", func(c *gin.Context) {
+		// Verify the tenant ID is available from the standard context.
+		stdCtxID := middleware.TenantIDFromStdContext(c.Request.Context())
+		ginCtxID := middleware.TenantIDFromContext(c)
+		assert.Equal(t, ginCtxID, stdCtxID, "std context and gin context should match")
+		assert.Equal(t, "tenant-acme", stdCtxID)
+		c.String(http.StatusOK, stdCtxID)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/resource", nil)
+	req.Header.Set("X-Tenant-ID", "acme")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "tenant-acme", w.Body.String())
+}
+
+func TestTenantIDFromStdContext_NoTenant(t *testing.T) {
+	ctx := context.Background()
+	assert.Equal(t, "", middleware.TenantIDFromStdContext(ctx))
+}
+
 func TestTenantMiddleware_SubdomainWithEmptyBaseDomain(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -14,6 +14,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -109,8 +110,11 @@ func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientR
 		scopes = []string{}
 	}
 
+	tenantID := middleware.TenantIDFromStdContext(ctx)
+
 	client := &domain.Client{
 		ID:             uuid.New(),
+		TenantID:       uuidFromString(tenantID),
 		Name:           req.Name,
 		ClientType:     domain.ClientType(req.ClientType),
 		SecretHash:     hash,

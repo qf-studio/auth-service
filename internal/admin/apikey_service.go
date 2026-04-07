@@ -134,8 +134,11 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, req *api.CreateAPIKeyR
 		expiresAt = &t
 	}
 
+	tenantID := middleware.TenantIDFromStdContext(ctx)
+
 	key := &domain.APIKey{
 		ID:        uuid.New(),
+		TenantID:  uuidFromString(tenantID),
 		ClientID:  clientID,
 		Name:      req.Name,
 		KeyHash:   hash,

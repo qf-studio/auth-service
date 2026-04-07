@@ -358,6 +358,7 @@ type MiddlewareStack struct {
 	SecurityHeaders gin.HandlerFunc
 	RateLimit       gin.HandlerFunc
 	RequestSize     gin.HandlerFunc
+	Tenant          gin.HandlerFunc
 	APIKey          gin.HandlerFunc
 	Auth            gin.HandlerFunc
 	DPoP            gin.HandlerFunc

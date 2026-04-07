@@ -23,12 +23,17 @@ type AdminDeps struct {
 }
 
 // NewAdminRouter creates a *gin.Engine with the admin API route tree.
-// Only correlation ID middleware is applied (no auth, no rate limiting).
-// The admin port is protected at the network level.
-func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
+// Correlation ID and tenant middleware are applied. No auth or rate limiting —
+// the admin port is protected at the network level.
+func NewAdminRouter(svc *AdminServices, deps *AdminDeps, tenantMW ...gin.HandlerFunc) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(middleware.CorrelationID())
+	for _, mw := range tenantMW {
+		if mw != nil {
+			r.Use(mw)
+		}
+	}
 
 	// Health probe with dependency checks.
 	hh := newHealthHandlers(deps.Health)
@@ -149,6 +154,19 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 			idps.GET("/:id/metadata", samlH.ExportMetadata)
 			idps.PUT("/:id/attribute-mapping", samlH.UpdateAttributeMapping)
 			idps.GET("/:id/attribute-mapping", samlH.GetAttributeMapping)
+		}
+	}
+
+	// Tenant management.
+	if svc.Tenants != nil {
+		tenantH := NewAdminTenantHandlers(svc.Tenants)
+		tenants := admin.Group("/tenants")
+		{
+			tenants.GET("", tenantH.List)
+			tenants.GET("/:id", tenantH.Get)
+			tenants.POST("", tenantH.Create)
+			tenants.PATCH("/:id", tenantH.Update)
+			tenants.DELETE("/:id", tenantH.Delete)
 		}
 	}
 
