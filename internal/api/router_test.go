@@ -582,6 +582,29 @@ func TestFullAuthFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
+// --- Validation middleware tests ---
+
+func TestValidateReq_UnknownType_Returns500WithoutPanic(t *testing.T) {
+	// Wire a route with an unsupported request type (plain string).
+	v := domain.NewValidator()
+	handler := api.ValidateReq(v, "not-a-request-struct")
+
+	r := gin.New()
+	r.POST("/test", handler, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	w := doRequest(r, http.MethodPost, "/test", map[string]string{"foo": "bar"})
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeInternalError, resp.Code)
+	assert.Contains(t, resp.Error, "unsupported request type")
+	assert.Contains(t, resp.Error, "string") // %T of the actual type
+}
+
 // --- Middleware ordering test ---
 
 func TestMiddlewareOrdering(t *testing.T) {

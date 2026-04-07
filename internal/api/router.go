@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -86,14 +88,14 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 	// Public auth routes.
 	auth := r.Group("/auth")
 	{
-		auth.POST("/register", validateReq(v, &domain.RegisterRequest{}), authH.Register)
-		auth.POST("/login", validateReq(v, &domain.LoginRequest{}), authH.Login)
-		auth.POST("/token", validateReq(v, &domain.TokenRequest{}), tokenH.Token)
-		auth.POST("/revoke", validateReq(v, &domain.RevokeRequest{}), tokenH.Revoke)
+		auth.POST("/register", ValidateReq(v, &domain.RegisterRequest{}), authH.Register)
+		auth.POST("/login", ValidateReq(v, &domain.LoginRequest{}), authH.Login)
+		auth.POST("/token", ValidateReq(v, &domain.TokenRequest{}), tokenH.Token)
+		auth.POST("/revoke", ValidateReq(v, &domain.RevokeRequest{}), tokenH.Revoke)
 
 		pw := auth.Group("/password")
-		pw.POST("/reset", validateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
-		pw.POST("/reset/confirm", validateReq(v, &domain.PasswordResetConfirmRequest{}), authH.ConfirmPasswordReset)
+		pw.POST("/reset", ValidateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
+		pw.POST("/reset/confirm", ValidateReq(v, &domain.PasswordResetConfirmRequest{}), authH.ConfirmPasswordReset)
 
 		// Broker token issuance (public, authenticates via client credentials in body).
 		if svc.Broker != nil {
@@ -133,7 +135,7 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		protected.Use(mw.DPoP)
 	}
 	protected.GET("/me", authH.Me)
-	protected.PUT("/me/password", validateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)
+	protected.PUT("/me/password", ValidateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)
 	protected.POST("/logout", authH.Logout)
 	protected.POST("/logout/all", authH.LogoutAll)
 
@@ -171,9 +173,9 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 	return r
 }
 
-// validateReq creates validation middleware for the given request struct type.
+// ValidateReq creates validation middleware for the given request struct type.
 // The zero parameter is used only to capture the type — a fresh instance is created per request.
-func validateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
+func ValidateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
 	switch zero.(type) {
 	case *domain.RegisterRequest:
 		return domain.ValidateRequest(v, func() interface{} { return &domain.RegisterRequest{} })
@@ -190,7 +192,11 @@ func validateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
 	case *domain.PasswordChangeRequest:
 		return domain.ValidateRequest(v, func() interface{} { return &domain.PasswordChangeRequest{} })
 	default:
-		panic("unsupported request type for validation middleware")
+		log.Printf("ERROR: unsupported request type for validation middleware: %T", zero)
+		return func(c *gin.Context) {
+			domain.RespondWithError(c, http.StatusInternalServerError, domain.CodeInternalError,
+				fmt.Sprintf("unsupported request type for validation middleware: %T", zero))
+		}
 	}
 }
 
