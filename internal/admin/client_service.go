@@ -47,9 +47,10 @@ func NewClientService(repo storage.ClientRepository, hasher password.Hasher, log
 
 // ListClients returns a paginated list of OAuth2 clients.
 func (s *ClientService) ListClients(ctx context.Context, page, perPage int, clientType string, includeRevoked bool) (*api.AdminClientList, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	offset := (page - 1) * perPage
 
-	clients, total, err := s.repo.List(ctx, perPage, offset, clientType, includeRevoked)
+	clients, total, err := s.repo.List(ctx, tenantID, perPage, offset, clientType, includeRevoked)
 	if err != nil {
 		s.logger.Error("list clients failed", zap.Error(err))
 		return nil, fmt.Errorf("list clients: %w", api.ErrInternalError)
@@ -71,12 +72,13 @@ func (s *ClientService) ListClients(ctx context.Context, page, perPage int, clie
 
 // GetClient retrieves a single client by ID.
 func (s *ClientService) GetClient(ctx context.Context, clientID string) (*api.AdminClient, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(clientID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client ID: %w", api.ErrNotFound)
 	}
 
-	c, err := s.repo.FindByID(ctx, id)
+	c, err := s.repo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("client %s: %w", clientID, api.ErrNotFound)
@@ -91,6 +93,7 @@ func (s *ClientService) GetClient(ctx context.Context, clientID string) (*api.Ad
 
 // CreateClient creates a new OAuth2 client with a generated secret.
 func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientRequest) (*api.AdminClientWithSecret, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	secret, err := generateClientSecret()
 	if err != nil {
 		s.logger.Error("generate client secret failed", zap.Error(err))
@@ -111,6 +114,7 @@ func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientR
 
 	client := &domain.Client{
 		ID:             uuid.New(),
+		TenantID:       tenantID,
 		Name:           req.Name,
 		ClientType:     domain.ClientType(req.ClientType),
 		SecretHash:     hash,
@@ -145,12 +149,13 @@ func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientR
 
 // UpdateClient modifies client fields.
 func (s *ClientService) UpdateClient(ctx context.Context, clientID string, req *api.UpdateClientRequest) (*api.AdminClient, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(clientID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client ID: %w", api.ErrNotFound)
 	}
 
-	existing, err := s.repo.FindByID(ctx, id)
+	existing, err := s.repo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("client %s: %w", clientID, api.ErrNotFound)
@@ -189,12 +194,13 @@ func (s *ClientService) UpdateClient(ctx context.Context, clientID string, req *
 
 // DeleteClient performs a soft delete (sets status to revoked).
 func (s *ClientService) DeleteClient(ctx context.Context, clientID string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(clientID)
 	if err != nil {
 		return fmt.Errorf("invalid client ID: %w", api.ErrNotFound)
 	}
 
-	err = s.repo.SoftDelete(ctx, id)
+	err = s.repo.SoftDelete(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return fmt.Errorf("client %s: %w", clientID, api.ErrNotFound)
@@ -214,6 +220,7 @@ func (s *ClientService) DeleteClient(ctx context.Context, clientID string) error
 
 // RotateSecret generates a new secret for the client with a grace period.
 func (s *ClientService) RotateSecret(ctx context.Context, clientID string) (*api.AdminClientWithSecret, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(clientID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client ID: %w", api.ErrNotFound)
@@ -233,7 +240,7 @@ func (s *ClientService) RotateSecret(ctx context.Context, clientID string) (*api
 
 	graceEnd := time.Now().UTC().Add(gracePeriodDuration)
 
-	if err := s.repo.RotateSecret(ctx, id, hash, graceEnd); err != nil {
+	if err := s.repo.RotateSecret(ctx, tenantID, id, hash, graceEnd); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("client %s: %w", clientID, api.ErrNotFound)
 		}
@@ -242,7 +249,7 @@ func (s *ClientService) RotateSecret(ctx context.Context, clientID string) (*api
 	}
 
 	// Re-read the client to get the updated record.
-	client, err := s.repo.FindByID(ctx, id)
+	client, err := s.repo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		s.logger.Error("re-read client after rotation failed", zap.String("client_id", clientID), zap.Error(err))
 		return nil, fmt.Errorf("rotate secret: %w", api.ErrInternalError)

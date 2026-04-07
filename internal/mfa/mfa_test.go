@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,49 +38,49 @@ func (m *mockMFARepository) SaveSecret(ctx context.Context, secret *domain.MFASe
 	return secret, nil
 }
 
-func (m *mockMFARepository) GetSecret(ctx context.Context, userID string) (*domain.MFASecret, error) {
+func (m *mockMFARepository) GetSecret(ctx context.Context, _ uuid.UUID, userID string) (*domain.MFASecret, error) {
 	if m.getSecretFn != nil {
 		return m.getSecretFn(ctx, userID)
 	}
 	return nil, storage.ErrNotFound
 }
 
-func (m *mockMFARepository) ConfirmSecret(ctx context.Context, userID string) error {
+func (m *mockMFARepository) ConfirmSecret(ctx context.Context, _ uuid.UUID, userID string) error {
 	if m.confirmSecretFn != nil {
 		return m.confirmSecretFn(ctx, userID)
 	}
 	return nil
 }
 
-func (m *mockMFARepository) DeleteSecret(ctx context.Context, userID string) error {
+func (m *mockMFARepository) DeleteSecret(ctx context.Context, _ uuid.UUID, userID string) error {
 	if m.deleteSecretFn != nil {
 		return m.deleteSecretFn(ctx, userID)
 	}
 	return nil
 }
 
-func (m *mockMFARepository) SaveBackupCodes(ctx context.Context, userID string, codes []domain.BackupCode) error {
+func (m *mockMFARepository) SaveBackupCodes(ctx context.Context, _ uuid.UUID, userID string, codes []domain.BackupCode) error {
 	if m.saveBackupFn != nil {
 		return m.saveBackupFn(ctx, userID, codes)
 	}
 	return nil
 }
 
-func (m *mockMFARepository) GetBackupCodes(ctx context.Context, userID string) ([]domain.BackupCode, error) {
+func (m *mockMFARepository) GetBackupCodes(ctx context.Context, _ uuid.UUID, userID string) ([]domain.BackupCode, error) {
 	if m.getBackupFn != nil {
 		return m.getBackupFn(ctx, userID)
 	}
 	return nil, nil
 }
 
-func (m *mockMFARepository) ConsumeBackupCode(ctx context.Context, userID, codeHash string) error {
+func (m *mockMFARepository) ConsumeBackupCode(ctx context.Context, _ uuid.UUID, userID, codeHash string) error {
 	if m.consumeBackupFn != nil {
 		return m.consumeBackupFn(ctx, userID, codeHash)
 	}
 	return nil
 }
 
-func (m *mockMFARepository) GetMFAStatus(ctx context.Context, userID string) (*domain.MFAStatus, error) {
+func (m *mockMFARepository) GetMFAStatus(ctx context.Context, _ uuid.UUID, userID string) (*domain.MFAStatus, error) {
 	if m.getMFAStatusFn != nil {
 		return m.getMFAStatusFn(ctx, userID)
 	}

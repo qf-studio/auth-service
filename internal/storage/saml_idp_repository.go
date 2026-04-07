@@ -18,11 +18,11 @@ import (
 // SAMLIdPRepository defines persistence operations for SAML Identity Provider configurations.
 type SAMLIdPRepository interface {
 	Create(ctx context.Context, idp *domain.SAMLIdPConfig) (*domain.SAMLIdPConfig, error)
-	FindByID(ctx context.Context, id uuid.UUID) (*domain.SAMLIdPConfig, error)
-	FindByEntityID(ctx context.Context, entityID string) (*domain.SAMLIdPConfig, error)
-	List(ctx context.Context) ([]*domain.SAMLIdPConfig, error)
+	FindByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.SAMLIdPConfig, error)
+	FindByEntityID(ctx context.Context, tenantID uuid.UUID, entityID string) (*domain.SAMLIdPConfig, error)
+	List(ctx context.Context, tenantID uuid.UUID) ([]*domain.SAMLIdPConfig, error)
 	Update(ctx context.Context, idp *domain.SAMLIdPConfig) (*domain.SAMLIdPConfig, error)
-	Delete(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
 }
 
 // PostgresSAMLIdPRepository implements SAMLIdPRepository using PostgreSQL.
@@ -35,14 +35,15 @@ func NewPostgresSAMLIdPRepository(pool *pgxpool.Pool) *PostgresSAMLIdPRepository
 	return &PostgresSAMLIdPRepository{pool: pool}
 }
 
-const samlIdPColumns = `id, entity_id, metadata_url, metadata_xml, sso_url, slo_url, certificate, name, attribute_mappings, enabled, created_at, updated_at`
+const samlIdPColumns = `id, tenant_id, entity_id, metadata_url, metadata_xml, sso_url, slo_url, certificate, name, attribute_mappings, enabled, created_at, updated_at`
 
 func scanSAMLIdP(row pgx.Row) (*domain.SAMLIdPConfig, error) {
 	idp := &domain.SAMLIdPConfig{}
 	var id uuid.UUID
+	var tenantID uuid.UUID
 	var attrJSON []byte
 	err := row.Scan(
-		&id, &idp.EntityID, &idp.MetadataURL, &idp.MetadataXML,
+		&id, &tenantID, &idp.EntityID, &idp.MetadataURL, &idp.MetadataXML,
 		&idp.SSOURL, &idp.SLOURL, &idp.Certificate, &idp.Name,
 		&attrJSON, &idp.Enabled,
 		&idp.CreatedAt, &idp.UpdatedAt,
@@ -54,6 +55,7 @@ func scanSAMLIdP(row pgx.Row) (*domain.SAMLIdPConfig, error) {
 		return nil, err
 	}
 	idp.ID = id.String()
+	idp.TenantID = tenantID
 	if len(attrJSON) > 0 {
 		if err := json.Unmarshal(attrJSON, &idp.AttributeMappings); err != nil {
 			return nil, fmt.Errorf("unmarshal attribute mappings: %w", err)
@@ -73,12 +75,12 @@ func (r *PostgresSAMLIdPRepository) Create(ctx context.Context, idp *domain.SAML
 	}
 
 	query := fmt.Sprintf(`
-		INSERT INTO saml_idp_configs (id, entity_id, metadata_url, metadata_xml, sso_url, slo_url, certificate, name, attribute_mappings, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO saml_idp_configs (id, tenant_id, entity_id, metadata_url, metadata_xml, sso_url, slo_url, certificate, name, attribute_mappings, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING %s`, samlIdPColumns)
 
 	result, err := scanSAMLIdP(r.pool.QueryRow(ctx, query,
-		idp.ID, idp.EntityID, idp.MetadataURL, idp.MetadataXML,
+		idp.ID, idp.TenantID, idp.EntityID, idp.MetadataURL, idp.MetadataXML,
 		idp.SSOURL, idp.SLOURL, idp.Certificate, idp.Name,
 		attrJSON, idp.Enabled,
 		idp.CreatedAt, idp.UpdatedAt,
@@ -94,9 +96,9 @@ func (r *PostgresSAMLIdPRepository) Create(ctx context.Context, idp *domain.SAML
 }
 
 // FindByID retrieves a SAML IdP configuration by primary key.
-func (r *PostgresSAMLIdPRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.SAMLIdPConfig, error) {
-	query := fmt.Sprintf(`SELECT %s FROM saml_idp_configs WHERE id = $1`, samlIdPColumns)
-	idp, err := scanSAMLIdP(r.pool.QueryRow(ctx, query, id))
+func (r *PostgresSAMLIdPRepository) FindByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.SAMLIdPConfig, error) {
+	query := fmt.Sprintf(`SELECT %s FROM saml_idp_configs WHERE id = $1 AND tenant_id = $2`, samlIdPColumns)
+	idp, err := scanSAMLIdP(r.pool.QueryRow(ctx, query, id, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("find saml idp %s: %w", id, err)
 	}
@@ -104,19 +106,19 @@ func (r *PostgresSAMLIdPRepository) FindByID(ctx context.Context, id uuid.UUID) 
 }
 
 // FindByEntityID retrieves a SAML IdP configuration by its unique entity ID.
-func (r *PostgresSAMLIdPRepository) FindByEntityID(ctx context.Context, entityID string) (*domain.SAMLIdPConfig, error) {
-	query := fmt.Sprintf(`SELECT %s FROM saml_idp_configs WHERE entity_id = $1`, samlIdPColumns)
-	idp, err := scanSAMLIdP(r.pool.QueryRow(ctx, query, entityID))
+func (r *PostgresSAMLIdPRepository) FindByEntityID(ctx context.Context, tenantID uuid.UUID, entityID string) (*domain.SAMLIdPConfig, error) {
+	query := fmt.Sprintf(`SELECT %s FROM saml_idp_configs WHERE entity_id = $1 AND tenant_id = $2`, samlIdPColumns)
+	idp, err := scanSAMLIdP(r.pool.QueryRow(ctx, query, entityID, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("find saml idp %q: %w", entityID, err)
 	}
 	return idp, nil
 }
 
-// List returns all SAML IdP configurations ordered by name.
-func (r *PostgresSAMLIdPRepository) List(ctx context.Context) ([]*domain.SAMLIdPConfig, error) {
-	query := fmt.Sprintf(`SELECT %s FROM saml_idp_configs ORDER BY name`, samlIdPColumns)
-	rows, err := r.pool.Query(ctx, query)
+// List returns all SAML IdP configurations for a tenant ordered by name.
+func (r *PostgresSAMLIdPRepository) List(ctx context.Context, tenantID uuid.UUID) ([]*domain.SAMLIdPConfig, error) {
+	query := fmt.Sprintf(`SELECT %s FROM saml_idp_configs WHERE tenant_id = $1 ORDER BY name`, samlIdPColumns)
+	rows, err := r.pool.Query(ctx, query, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list saml idps: %w", err)
 	}
@@ -125,10 +127,11 @@ func (r *PostgresSAMLIdPRepository) List(ctx context.Context) ([]*domain.SAMLIdP
 	var idps []*domain.SAMLIdPConfig
 	for rows.Next() {
 		var id uuid.UUID
+		var tid uuid.UUID
 		var attrJSON []byte
 		idp := &domain.SAMLIdPConfig{}
 		if err := rows.Scan(
-			&id, &idp.EntityID, &idp.MetadataURL, &idp.MetadataXML,
+			&id, &tid, &idp.EntityID, &idp.MetadataURL, &idp.MetadataXML,
 			&idp.SSOURL, &idp.SLOURL, &idp.Certificate, &idp.Name,
 			&attrJSON, &idp.Enabled,
 			&idp.CreatedAt, &idp.UpdatedAt,
@@ -136,6 +139,7 @@ func (r *PostgresSAMLIdPRepository) List(ctx context.Context) ([]*domain.SAMLIdP
 			return nil, fmt.Errorf("scan saml idp: %w", err)
 		}
 		idp.ID = id.String()
+		idp.TenantID = tid
 		if len(attrJSON) > 0 {
 			if err := json.Unmarshal(attrJSON, &idp.AttributeMappings); err != nil {
 				return nil, fmt.Errorf("unmarshal attribute mappings: %w", err)
@@ -163,13 +167,13 @@ func (r *PostgresSAMLIdPRepository) Update(ctx context.Context, idp *domain.SAML
 		UPDATE saml_idp_configs
 		SET metadata_url = $1, metadata_xml = $2, sso_url = $3, slo_url = $4,
 		    certificate = $5, name = $6, attribute_mappings = $7, enabled = $8, updated_at = $9
-		WHERE id = $10
+		WHERE id = $10 AND tenant_id = $11
 		RETURNING %s`, samlIdPColumns)
 
 	result, err := scanSAMLIdP(r.pool.QueryRow(ctx, query,
 		idp.MetadataURL, idp.MetadataXML, idp.SSOURL, idp.SLOURL,
 		idp.Certificate, idp.Name, attrJSON, idp.Enabled,
-		time.Now().UTC(), idp.ID,
+		time.Now().UTC(), idp.ID, idp.TenantID,
 	))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -181,9 +185,9 @@ func (r *PostgresSAMLIdPRepository) Update(ctx context.Context, idp *domain.SAML
 }
 
 // Delete removes a SAML IdP configuration (cascades to linked accounts).
-func (r *PostgresSAMLIdPRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	query := `DELETE FROM saml_idp_configs WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, query, id)
+func (r *PostgresSAMLIdPRepository) Delete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
+	query := `DELETE FROM saml_idp_configs WHERE id = $1 AND tenant_id = $2`
+	tag, err := r.pool.Exec(ctx, query, id, tenantID)
 	if err != nil {
 		return fmt.Errorf("delete saml idp %s: %w", id, err)
 	}

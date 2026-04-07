@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,34 +20,34 @@ type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) (*domain.User, error)
 
 	// FindByID retrieves a user by primary key. Returns ErrNotFound if absent.
-	FindByID(ctx context.Context, id string) (*domain.User, error)
+	FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
 
 	// FindByEmail retrieves a user by email address. Returns ErrNotFound if absent.
-	FindByEmail(ctx context.Context, email string) (*domain.User, error)
+	FindByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*domain.User, error)
 
 	// UpdateLastLogin sets the last_login_at timestamp for the given user.
-	UpdateLastLogin(ctx context.Context, userID string, timestamp time.Time) error
+	UpdateLastLogin(ctx context.Context, tenantID uuid.UUID, userID string, timestamp time.Time) error
 
 	// SetEmailVerifyToken stores a verification token and its expiry for the given user.
-	SetEmailVerifyToken(ctx context.Context, userID string, token string, expiresAt time.Time) error
+	SetEmailVerifyToken(ctx context.Context, tenantID uuid.UUID, userID string, token string, expiresAt time.Time) error
 
 	// ConsumeEmailVerifyToken marks the email as verified if the token matches and hasn't expired.
 	// Returns ErrNotFound if the token doesn't match any user, or ErrTokenExpired if expired.
-	ConsumeEmailVerifyToken(ctx context.Context, token string) (*domain.User, error)
+	ConsumeEmailVerifyToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error)
 
 	// UpdatePasswordHash updates a user's password hash and password_changed_at timestamp.
 	// Also clears force_password_change flag.
-	UpdatePasswordHash(ctx context.Context, userID, newHash string) error
+	UpdatePasswordHash(ctx context.Context, tenantID uuid.UUID, userID, newHash string) error
 
 	// SetForcePasswordChange sets the force_password_change flag for a user.
-	SetForcePasswordChange(ctx context.Context, userID string, force bool) error
+	SetForcePasswordChange(ctx context.Context, tenantID uuid.UUID, userID string, force bool) error
 
 	// GetPasswordHistory returns the most recent N password history entries for a user,
 	// ordered newest-first.
-	GetPasswordHistory(ctx context.Context, userID string, limit int) ([]domain.PasswordHistoryEntry, error)
+	GetPasswordHistory(ctx context.Context, tenantID uuid.UUID, userID string, limit int) ([]domain.PasswordHistoryEntry, error)
 
 	// AddPasswordHistory appends a password hash to the user's history.
-	AddPasswordHistory(ctx context.Context, userID, passwordHash string) error
+	AddPasswordHistory(ctx context.Context, tenantID uuid.UUID, userID, passwordHash string) error
 }
 
 // PostgresUserRepository implements UserRepository using pgx against PostgreSQL.
@@ -62,19 +63,19 @@ func NewPostgresUserRepository(pool *pgxpool.Pool) *PostgresUserRepository {
 // Create inserts a new user row. Returns ErrDuplicateEmail if the email is already taken.
 func (r *PostgresUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
 	query := `
-		INSERT INTO users (id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, force_password_change, password_changed_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-		RETURNING id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, last_login_at, force_password_change, password_changed_at, created_at, updated_at, deleted_at`
+		INSERT INTO users (id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, force_password_change, password_changed_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		RETURNING id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, last_login_at, force_password_change, password_changed_at, created_at, updated_at, deleted_at`
 
 	out := &domain.User{}
 	err := r.pool.QueryRow(ctx, query,
-		user.ID, user.Email, user.PasswordHash, user.Name, user.Roles,
+		user.ID, user.TenantID, user.Email, user.PasswordHash, user.Name, user.Roles,
 		user.Locked, user.LockedAt, user.LockedReason,
 		user.EmailVerified, user.EmailVerifyToken, user.EmailVerifyTokenExpiresAt,
 		user.ForcePasswordChange, user.PasswordChangedAt,
 		user.CreatedAt, user.UpdatedAt,
 	).Scan(
-		&out.ID, &out.Email, &out.PasswordHash, &out.Name, &out.Roles,
+		&out.ID, &out.TenantID, &out.Email, &out.PasswordHash, &out.Name, &out.Roles,
 		&out.Locked, &out.LockedAt, &out.LockedReason,
 		&out.EmailVerified, &out.EmailVerifyToken, &out.EmailVerifyTokenExpiresAt,
 		&out.LastLoginAt, &out.ForcePasswordChange, &out.PasswordChangedAt,
@@ -92,20 +93,20 @@ func (r *PostgresUserRepository) Create(ctx context.Context, user *domain.User) 
 }
 
 // FindByID retrieves a user by ID. Soft-deleted users are included.
-func (r *PostgresUserRepository) FindByID(ctx context.Context, id string) (*domain.User, error) {
-	return r.findByColumn(ctx, "id", id)
+func (r *PostgresUserRepository) FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error) {
+	return r.findByColumn(ctx, tenantID, "id", id)
 }
 
 // FindByEmail retrieves a user by email address. Soft-deleted users are included.
-func (r *PostgresUserRepository) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
-	return r.findByColumn(ctx, "email", email)
+func (r *PostgresUserRepository) FindByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*domain.User, error) {
+	return r.findByColumn(ctx, tenantID, "email", email)
 }
 
 // UpdateLastLogin sets the last_login_at timestamp for a user.
-func (r *PostgresUserRepository) UpdateLastLogin(ctx context.Context, userID string, timestamp time.Time) error {
-	query := `UPDATE users SET last_login_at = $1, updated_at = $2 WHERE id = $3 AND deleted_at IS NULL`
+func (r *PostgresUserRepository) UpdateLastLogin(ctx context.Context, tenantID uuid.UUID, userID string, timestamp time.Time) error {
+	query := `UPDATE users SET last_login_at = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4 AND deleted_at IS NULL`
 
-	tag, err := r.pool.Exec(ctx, query, timestamp, time.Now().UTC(), userID)
+	tag, err := r.pool.Exec(ctx, query, timestamp, time.Now().UTC(), userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("update last login: %w", err)
 	}
@@ -117,19 +118,19 @@ func (r *PostgresUserRepository) UpdateLastLogin(ctx context.Context, userID str
 }
 
 // findByColumn is a shared helper for single-column lookups.
-func (r *PostgresUserRepository) findByColumn(ctx context.Context, column, value string) (*domain.User, error) {
+func (r *PostgresUserRepository) findByColumn(ctx context.Context, tenantID uuid.UUID, column, value string) (*domain.User, error) {
 	// column is always a trusted constant from this package — not user input.
 	query := fmt.Sprintf(`
-		SELECT id, email, password_hash, name, roles, locked, locked_at, locked_reason,
+		SELECT id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason,
 		       email_verified, email_verify_token, email_verify_token_expires_at,
 		       last_login_at, force_password_change, password_changed_at,
 		       created_at, updated_at, deleted_at
 		FROM users
-		WHERE %s = $1`, column)
+		WHERE %s = $1 AND tenant_id = $2`, column)
 
 	user := &domain.User{}
-	err := r.pool.QueryRow(ctx, query, value).Scan(
-		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
+	err := r.pool.QueryRow(ctx, query, value, tenantID).Scan(
+		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
 		&user.Locked, &user.LockedAt, &user.LockedReason,
 		&user.EmailVerified, &user.EmailVerifyToken, &user.EmailVerifyTokenExpiresAt,
 		&user.LastLoginAt, &user.ForcePasswordChange, &user.PasswordChangedAt,
@@ -146,11 +147,11 @@ func (r *PostgresUserRepository) findByColumn(ctx context.Context, column, value
 }
 
 // SetEmailVerifyToken stores a verification token and expiry for a user.
-func (r *PostgresUserRepository) SetEmailVerifyToken(ctx context.Context, userID string, token string, expiresAt time.Time) error {
+func (r *PostgresUserRepository) SetEmailVerifyToken(ctx context.Context, tenantID uuid.UUID, userID string, token string, expiresAt time.Time) error {
 	query := `UPDATE users SET email_verify_token = $1, email_verify_token_expires_at = $2, updated_at = $3
-		WHERE id = $4 AND deleted_at IS NULL`
+		WHERE id = $4 AND tenant_id = $5 AND deleted_at IS NULL`
 
-	tag, err := r.pool.Exec(ctx, query, token, expiresAt, time.Now().UTC(), userID)
+	tag, err := r.pool.Exec(ctx, query, token, expiresAt, time.Now().UTC(), userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("set email verify token: %w", err)
 	}
@@ -162,22 +163,22 @@ func (r *PostgresUserRepository) SetEmailVerifyToken(ctx context.Context, userID
 }
 
 // ConsumeEmailVerifyToken marks the email as verified if the token matches and hasn't expired.
-func (r *PostgresUserRepository) ConsumeEmailVerifyToken(ctx context.Context, token string) (*domain.User, error) {
+func (r *PostgresUserRepository) ConsumeEmailVerifyToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error) {
 	query := `UPDATE users
 		SET email_verified = TRUE,
 		    email_verify_token = NULL,
 		    email_verify_token_expires_at = NULL,
 		    updated_at = $1
-		WHERE email_verify_token = $2 AND deleted_at IS NULL
-		RETURNING id, email, password_hash, name, roles, locked, locked_at, locked_reason,
+		WHERE email_verify_token = $2 AND tenant_id = $3 AND deleted_at IS NULL
+		RETURNING id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason,
 		          email_verified, email_verify_token, email_verify_token_expires_at,
 		          last_login_at, force_password_change, password_changed_at,
 		          created_at, updated_at, deleted_at`
 
 	now := time.Now().UTC()
 	user := &domain.User{}
-	err := r.pool.QueryRow(ctx, query, now, token).Scan(
-		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
+	err := r.pool.QueryRow(ctx, query, now, token, tenantID).Scan(
+		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
 		&user.Locked, &user.LockedAt, &user.LockedReason,
 		&user.EmailVerified, &user.EmailVerifyToken, &user.EmailVerifyTokenExpiresAt,
 		&user.LastLoginAt, &user.ForcePasswordChange, &user.PasswordChangedAt,
@@ -195,13 +196,13 @@ func (r *PostgresUserRepository) ConsumeEmailVerifyToken(ctx context.Context, to
 
 // UpdatePasswordHash updates a user's password hash and marks password_changed_at.
 // Clears force_password_change flag.
-func (r *PostgresUserRepository) UpdatePasswordHash(ctx context.Context, userID, newHash string) error {
+func (r *PostgresUserRepository) UpdatePasswordHash(ctx context.Context, tenantID uuid.UUID, userID, newHash string) error {
 	now := time.Now().UTC()
 	query := `UPDATE users
 		SET password_hash = $1, password_changed_at = $2, force_password_change = FALSE, updated_at = $2
-		WHERE id = $3 AND deleted_at IS NULL`
+		WHERE id = $3 AND tenant_id = $4 AND deleted_at IS NULL`
 
-	tag, err := r.pool.Exec(ctx, query, newHash, now, userID)
+	tag, err := r.pool.Exec(ctx, query, newHash, now, userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("update password hash: %w", err)
 	}
@@ -212,9 +213,9 @@ func (r *PostgresUserRepository) UpdatePasswordHash(ctx context.Context, userID,
 }
 
 // SetForcePasswordChange sets the force_password_change flag for a user.
-func (r *PostgresUserRepository) SetForcePasswordChange(ctx context.Context, userID string, force bool) error {
-	query := `UPDATE users SET force_password_change = $1, updated_at = $2 WHERE id = $3 AND deleted_at IS NULL`
-	tag, err := r.pool.Exec(ctx, query, force, time.Now().UTC(), userID)
+func (r *PostgresUserRepository) SetForcePasswordChange(ctx context.Context, tenantID uuid.UUID, userID string, force bool) error {
+	query := `UPDATE users SET force_password_change = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4 AND deleted_at IS NULL`
+	tag, err := r.pool.Exec(ctx, query, force, time.Now().UTC(), userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("set force password change: %w", err)
 	}
@@ -225,14 +226,14 @@ func (r *PostgresUserRepository) SetForcePasswordChange(ctx context.Context, use
 }
 
 // GetPasswordHistory returns the most recent N password history entries for a user.
-func (r *PostgresUserRepository) GetPasswordHistory(ctx context.Context, userID string, limit int) ([]domain.PasswordHistoryEntry, error) {
-	query := `SELECT id, user_id, password_hash, created_at
+func (r *PostgresUserRepository) GetPasswordHistory(ctx context.Context, tenantID uuid.UUID, userID string, limit int) ([]domain.PasswordHistoryEntry, error) {
+	query := `SELECT id, tenant_id, user_id, password_hash, created_at
 		FROM password_history
-		WHERE user_id = $1
+		WHERE user_id = $1 AND tenant_id = $2
 		ORDER BY created_at DESC
-		LIMIT $2`
+		LIMIT $3`
 
-	rows, err := r.pool.Query(ctx, query, userID, limit)
+	rows, err := r.pool.Query(ctx, query, userID, tenantID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get password history: %w", err)
 	}
@@ -241,7 +242,7 @@ func (r *PostgresUserRepository) GetPasswordHistory(ctx context.Context, userID 
 	var entries []domain.PasswordHistoryEntry
 	for rows.Next() {
 		var e domain.PasswordHistoryEntry
-		if err := rows.Scan(&e.ID, &e.UserID, &e.PasswordHash, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.UserID, &e.PasswordHash, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan password history: %w", err)
 		}
 		entries = append(entries, e)
@@ -250,9 +251,9 @@ func (r *PostgresUserRepository) GetPasswordHistory(ctx context.Context, userID 
 }
 
 // AddPasswordHistory appends a password hash to the user's history.
-func (r *PostgresUserRepository) AddPasswordHistory(ctx context.Context, userID, passwordHash string) error {
-	query := `INSERT INTO password_history (user_id, password_hash) VALUES ($1, $2)`
-	_, err := r.pool.Exec(ctx, query, userID, passwordHash)
+func (r *PostgresUserRepository) AddPasswordHistory(ctx context.Context, tenantID uuid.UUID, userID, passwordHash string) error {
+	query := `INSERT INTO password_history (tenant_id, user_id, password_hash) VALUES ($1, $2, $3)`
+	_, err := r.pool.Exec(ctx, query, tenantID, userID, passwordHash)
 	if err != nil {
 		return fmt.Errorf("add password history: %w", err)
 	}

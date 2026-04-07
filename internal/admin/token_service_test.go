@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -48,12 +49,12 @@ func (m *mockTokenValidator) IsRevoked(ctx context.Context, tokenID string) (boo
 // --- Mock RefreshTokenLookup ---
 
 type mockRefreshTokenLookup struct {
-	findBySignatureFn func(ctx context.Context, signature string) (*domain.RefreshTokenRecord, error)
+	findBySignatureFn func(ctx context.Context, tenantID uuid.UUID, signature string) (*domain.RefreshTokenRecord, error)
 }
 
-func (m *mockRefreshTokenLookup) FindBySignature(ctx context.Context, signature string) (*domain.RefreshTokenRecord, error) {
+func (m *mockRefreshTokenLookup) FindBySignature(ctx context.Context, tenantID uuid.UUID, signature string) (*domain.RefreshTokenRecord, error) {
 	if m.findBySignatureFn != nil {
-		return m.findBySignatureFn(ctx, signature)
+		return m.findBySignatureFn(ctx, tenantID, signature)
 	}
 	now := time.Now()
 	return &domain.RefreshTokenRecord{
@@ -182,7 +183,7 @@ func TestTokenService_Introspect_RefreshToken_Active(t *testing.T) {
 func TestTokenService_Introspect_RefreshToken_SignatureParsing(t *testing.T) {
 	var capturedSig string
 	lookup := &mockRefreshTokenLookup{
-		findBySignatureFn: func(_ context.Context, sig string) (*domain.RefreshTokenRecord, error) {
+		findBySignatureFn: func(_ context.Context, _ uuid.UUID, sig string) (*domain.RefreshTokenRecord, error) {
 			capturedSig = sig
 			now := time.Now()
 			return &domain.RefreshTokenRecord{
@@ -205,7 +206,7 @@ func TestTokenService_Introspect_RefreshToken_SignatureParsing(t *testing.T) {
 func TestTokenService_Introspect_RefreshToken_Revoked(t *testing.T) {
 	revokedAt := time.Now().Add(-1 * time.Hour)
 	lookup := &mockRefreshTokenLookup{
-		findBySignatureFn: func(_ context.Context, sig string) (*domain.RefreshTokenRecord, error) {
+		findBySignatureFn: func(_ context.Context, _ uuid.UUID, sig string) (*domain.RefreshTokenRecord, error) {
 			return &domain.RefreshTokenRecord{
 				Signature: sig,
 				UserID:    "user-5",
@@ -226,7 +227,7 @@ func TestTokenService_Introspect_RefreshToken_Revoked(t *testing.T) {
 
 func TestTokenService_Introspect_RefreshToken_Expired(t *testing.T) {
 	lookup := &mockRefreshTokenLookup{
-		findBySignatureFn: func(_ context.Context, sig string) (*domain.RefreshTokenRecord, error) {
+		findBySignatureFn: func(_ context.Context, _ uuid.UUID, sig string) (*domain.RefreshTokenRecord, error) {
 			return &domain.RefreshTokenRecord{
 				Signature: sig,
 				UserID:    "user-6",
@@ -246,7 +247,7 @@ func TestTokenService_Introspect_RefreshToken_Expired(t *testing.T) {
 
 func TestTokenService_Introspect_RefreshToken_NotFound(t *testing.T) {
 	lookup := &mockRefreshTokenLookup{
-		findBySignatureFn: func(_ context.Context, _ string) (*domain.RefreshTokenRecord, error) {
+		findBySignatureFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.RefreshTokenRecord, error) {
 			return nil, fmt.Errorf("sig unknown: %w", storage.ErrNotFound)
 		},
 	}

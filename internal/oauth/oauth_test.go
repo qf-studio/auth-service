@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -40,13 +41,13 @@ type mockOAuthRepo struct {
 func (m *mockOAuthRepo) Create(_ context.Context, account *domain.OAuthAccount) (*domain.OAuthAccount, error) {
 	return account, nil
 }
-func (m *mockOAuthRepo) FindByProviderAndProviderUserID(_ context.Context, _, _ string) (*domain.OAuthAccount, error) {
+func (m *mockOAuthRepo) FindByProviderAndProviderUserID(_ context.Context, _ uuid.UUID, _, _ string) (*domain.OAuthAccount, error) {
 	return m.findResult, m.findErr
 }
-func (m *mockOAuthRepo) FindByUserID(_ context.Context, _ string) ([]domain.OAuthAccount, error) {
+func (m *mockOAuthRepo) FindByUserID(_ context.Context, _ uuid.UUID, _ string) ([]domain.OAuthAccount, error) {
 	return m.accounts, m.findAllErr
 }
-func (m *mockOAuthRepo) Delete(_ context.Context, _, _ string) error {
+func (m *mockOAuthRepo) Delete(_ context.Context, _ uuid.UUID, _, _ string) error {
 	return m.deleteErr
 }
 

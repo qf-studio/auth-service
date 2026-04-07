@@ -50,9 +50,10 @@ func NewAPIKeyService(repo storage.APIKeyRepository, hasher password.Hasher, log
 
 // ListAPIKeys returns a paginated list of API keys, optionally filtered by client_id.
 func (s *APIKeyService) ListAPIKeys(ctx context.Context, page, perPage int, clientID string) (*api.AdminAPIKeyList, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	offset := (page - 1) * perPage
 
-	keys, total, err := s.repo.List(ctx, perPage, offset, clientID)
+	keys, total, err := s.repo.List(ctx, tenantID, perPage, offset, clientID)
 	if err != nil {
 		s.logger.Error("list api keys failed", zap.Error(err))
 		return nil, fmt.Errorf("list api keys: %w", api.ErrInternalError)
@@ -74,12 +75,13 @@ func (s *APIKeyService) ListAPIKeys(ctx context.Context, page, perPage int, clie
 
 // GetAPIKey retrieves a single API key by ID.
 func (s *APIKeyService) GetAPIKey(ctx context.Context, keyID string) (*api.AdminAPIKey, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(keyID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid api key ID: %w", api.ErrNotFound)
 	}
 
-	k, err := s.repo.FindByID(ctx, id)
+	k, err := s.repo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("api key %s: %w", keyID, api.ErrNotFound)
@@ -94,6 +96,7 @@ func (s *APIKeyService) GetAPIKey(ctx context.Context, keyID string) (*api.Admin
 
 // CreateAPIKey creates a new API key with a generated raw key.
 func (s *APIKeyService) CreateAPIKey(ctx context.Context, req *api.CreateAPIKeyRequest) (*api.AdminAPIKeyWithSecret, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	clientID, err := uuid.Parse(req.ClientID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client ID: %w", api.ErrNotFound)
@@ -136,6 +139,7 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, req *api.CreateAPIKeyR
 
 	key := &domain.APIKey{
 		ID:        uuid.New(),
+		TenantID:  tenantID,
 		ClientID:  clientID,
 		Name:      req.Name,
 		KeyHash:   hash,
@@ -168,12 +172,13 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, req *api.CreateAPIKeyR
 
 // UpdateAPIKey modifies API key fields (name, scopes, rate_limit).
 func (s *APIKeyService) UpdateAPIKey(ctx context.Context, keyID string, req *api.UpdateAPIKeyRequest) (*api.AdminAPIKey, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(keyID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid api key ID: %w", api.ErrNotFound)
 	}
 
-	existing, err := s.repo.FindByID(ctx, id)
+	existing, err := s.repo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("api key %s: %w", keyID, api.ErrNotFound)
@@ -212,12 +217,13 @@ func (s *APIKeyService) UpdateAPIKey(ctx context.Context, keyID string, req *api
 
 // RevokeAPIKey marks an API key as revoked.
 func (s *APIKeyService) RevokeAPIKey(ctx context.Context, keyID string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(keyID)
 	if err != nil {
 		return fmt.Errorf("invalid api key ID: %w", api.ErrNotFound)
 	}
 
-	err = s.repo.Revoke(ctx, id)
+	err = s.repo.Revoke(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return fmt.Errorf("api key %s: %w", keyID, api.ErrNotFound)
@@ -238,6 +244,7 @@ func (s *APIKeyService) RevokeAPIKey(ctx context.Context, keyID string) error {
 
 // RotateAPIKey generates a new key for the API key with a grace period.
 func (s *APIKeyService) RotateAPIKey(ctx context.Context, keyID string) (*api.AdminAPIKeyWithSecret, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(keyID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid api key ID: %w", api.ErrNotFound)
@@ -257,7 +264,7 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, keyID string) (*api.Ad
 
 	graceEnd := time.Now().UTC().Add(apiKeyGracePeriod)
 
-	if err := s.repo.RotateKey(ctx, id, hash, graceEnd); err != nil {
+	if err := s.repo.RotateKey(ctx, tenantID, id, hash, graceEnd); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("api key %s: %w", keyID, api.ErrNotFound)
 		}
@@ -265,7 +272,7 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, keyID string) (*api.Ad
 		return nil, fmt.Errorf("rotate api key: %w", api.ErrInternalError)
 	}
 
-	key, err := s.repo.FindByID(ctx, id)
+	key, err := s.repo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		s.logger.Error("re-read api key after rotation failed", zap.String("key_id", keyID), zap.Error(err))
 		return nil, fmt.Errorf("rotate api key: %w", api.ErrInternalError)
@@ -286,13 +293,14 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, keyID string) (*api.Ad
 // ValidateAPIKey validates a raw API key and returns its metadata.
 // This method satisfies middleware.APIKeyValidator.
 func (s *APIKeyService) ValidateAPIKey(ctx context.Context, rawKey string) (*middleware.APIKeyInfo, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	hash, err := s.hasher.Hash(rawKey)
 	if err != nil {
 		s.logger.Error("hash api key for validation failed", zap.Error(err))
 		return nil, fmt.Errorf("validate api key: %w", err)
 	}
 
-	key, err := s.repo.FindByKeyHash(ctx, hash)
+	key, err := s.repo.FindByKeyHash(ctx, tenantID, hash)
 	if err != nil {
 		return nil, fmt.Errorf("validate api key: %w", err)
 	}
@@ -302,7 +310,7 @@ func (s *APIKeyService) ValidateAPIKey(ctx context.Context, rawKey string) (*mid
 	}
 
 	// Best-effort update of last_used_at.
-	_ = s.repo.UpdateLastUsed(ctx, key.ID)
+	_ = s.repo.UpdateLastUsed(ctx, tenantID, key.ID)
 
 	return &middleware.APIKeyInfo{
 		ClientID:  key.ClientID.String(),

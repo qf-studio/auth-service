@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/google/uuid"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/domain"
@@ -95,37 +96,41 @@ func (m *mockUserRepo) Create(_ context.Context, user *domain.User) (*domain.Use
 	return user, nil
 }
 
-func (m *mockUserRepo) FindByID(_ context.Context, id string) (*domain.User, error) {
+func (m *mockUserRepo) FindByID(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
 	if u, ok := m.users[id]; ok {
 		return u, nil
 	}
 	return nil, fmt.Errorf("user not found")
 }
 
-func (m *mockUserRepo) FindByEmail(_ context.Context, _ string) (*domain.User, error) {
+func (m *mockUserRepo) FindByEmail(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockUserRepo) UpdateLastLogin(_ context.Context, _ string, _ time.Time) error {
+func (m *mockUserRepo) UpdateLastLogin(_ context.Context, _ uuid.UUID, _ string, _ time.Time) error {
 	return nil
 }
 
-func (m *mockUserRepo) SetEmailVerifyToken(_ context.Context, _ string, _ string, _ time.Time) error {
+func (m *mockUserRepo) SetEmailVerifyToken(_ context.Context, _ uuid.UUID, _ string, _ string, _ time.Time) error {
 	return nil
 }
 
-func (m *mockUserRepo) ConsumeEmailVerifyToken(_ context.Context, _ string) (*domain.User, error) {
+func (m *mockUserRepo) ConsumeEmailVerifyToken(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockUserRepo) UpdatePasswordHash(_ context.Context, _, _ string) error { return nil }
-func (m *mockUserRepo) SetForcePasswordChange(_ context.Context, _ string, _ bool) error {
+func (m *mockUserRepo) UpdatePasswordHash(_ context.Context, _ uuid.UUID, _, _ string) error {
 	return nil
 }
-func (m *mockUserRepo) GetPasswordHistory(_ context.Context, _ string, _ int) ([]domain.PasswordHistoryEntry, error) {
+func (m *mockUserRepo) SetForcePasswordChange(_ context.Context, _ uuid.UUID, _ string, _ bool) error {
+	return nil
+}
+func (m *mockUserRepo) GetPasswordHistory(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.PasswordHistoryEntry, error) {
 	return nil, nil
 }
-func (m *mockUserRepo) AddPasswordHistory(_ context.Context, _, _ string) error { return nil }
+func (m *mockUserRepo) AddPasswordHistory(_ context.Context, _ uuid.UUID, _, _ string) error {
+	return nil
+}
 
 // mockMetricsRecorder implements grpc.MetricsRecorder for testing.
 type mockMetricsRecorder struct {

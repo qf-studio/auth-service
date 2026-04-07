@@ -148,7 +148,9 @@ func newWebAuthnServiceWithProvider(
 // BeginRegistration starts a WebAuthn credential registration ceremony.
 // Returns the credential creation options to send to the client and stores the session server-side.
 func (s *WebAuthnService) BeginRegistration(ctx context.Context, user *domain.User) (*protocol.CredentialCreation, error) {
-	existing, err := s.creds.GetCredentialsByUser(ctx, user.ID)
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	existing, err := s.creds.GetCredentialsByUser(ctx, tenantID, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("get existing credentials: %w", err)
 	}
@@ -194,6 +196,8 @@ func (s *WebAuthnService) FinishRegistration(
 	credentialName string,
 	parsedResponse *protocol.ParsedCredentialCreationData,
 ) (*domain.WebAuthnCredential, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
+
 	sessionBytes, err := s.sessions.ConsumeWebAuthnSession(ctx, user.ID, sessionPurposeRegistration)
 	if err != nil {
 		return nil, fmt.Errorf("consume registration session: %w", err)
@@ -204,7 +208,7 @@ func (s *WebAuthnService) FinishRegistration(
 		return nil, fmt.Errorf("unmarshal registration session: %w", err)
 	}
 
-	existing, err := s.creds.GetCredentialsByUser(ctx, user.ID)
+	existing, err := s.creds.GetCredentialsByUser(ctx, tenantID, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("get existing credentials: %w", err)
 	}
@@ -224,6 +228,7 @@ func (s *WebAuthnService) FinishRegistration(
 	now := time.Now().UTC()
 	domainCred := &domain.WebAuthnCredential{
 		ID:              uuid.New().String(),
+		TenantID:        tenantID,
 		UserID:          user.ID,
 		CredentialID:    credential.ID,
 		PublicKey:       credential.PublicKey,
@@ -251,7 +256,9 @@ func (s *WebAuthnService) FinishRegistration(
 // BeginLogin starts a WebAuthn authentication ceremony.
 // Returns the credential assertion options to send to the client and stores the session server-side.
 func (s *WebAuthnService) BeginLogin(ctx context.Context, user *domain.User) (*protocol.CredentialAssertion, error) {
-	existing, err := s.creds.GetCredentialsByUser(ctx, user.ID)
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	existing, err := s.creds.GetCredentialsByUser(ctx, tenantID, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("get credentials: %w", err)
 	}
@@ -291,6 +298,8 @@ func (s *WebAuthnService) FinishLogin(
 	user *domain.User,
 	parsedResponse *protocol.ParsedCredentialAssertionData,
 ) (*domain.WebAuthnCredential, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
+
 	sessionBytes, err := s.sessions.ConsumeWebAuthnSession(ctx, user.ID, sessionPurposeLogin)
 	if err != nil {
 		return nil, fmt.Errorf("consume login session: %w", err)
@@ -301,7 +310,7 @@ func (s *WebAuthnService) FinishLogin(
 		return nil, fmt.Errorf("unmarshal login session: %w", err)
 	}
 
-	existing, err := s.creds.GetCredentialsByUser(ctx, user.ID)
+	existing, err := s.creds.GetCredentialsByUser(ctx, tenantID, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("get credentials: %w", err)
 	}
@@ -319,7 +328,7 @@ func (s *WebAuthnService) FinishLogin(
 	}
 
 	// Update sign count and clone warning in storage.
-	if err := s.creds.UpdateSignCount(ctx, credential.ID, credential.Authenticator.SignCount, credential.Authenticator.CloneWarning); err != nil {
+	if err := s.creds.UpdateSignCount(ctx, tenantID, credential.ID, credential.Authenticator.SignCount, credential.Authenticator.CloneWarning); err != nil {
 		s.logger.Error("failed to update sign count",
 			zap.Error(err),
 			zap.String("user_id", user.ID),

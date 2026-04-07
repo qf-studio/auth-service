@@ -34,10 +34,10 @@ const (
 
 // RedisMFAStore manages temporary MFA tokens and failed-attempt tracking in Redis.
 type RedisMFAStore struct {
-	client            redis.Cmdable
-	tokenTTL          time.Duration
-	failedTTL         time.Duration
-	maxAttempts       int
+	client             redis.Cmdable
+	tokenTTL           time.Duration
+	failedTTL          time.Duration
+	maxAttempts        int
 	webauthnSessionTTL time.Duration
 }
 

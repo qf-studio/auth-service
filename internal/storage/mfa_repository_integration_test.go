@@ -13,7 +13,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/storage"
 )
 
-// ────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────��────────────────────────────────
 // MFARepository tests
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -21,6 +21,7 @@ func newTestMFASecret(userID string) *domain.MFASecret {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return &domain.MFASecret{
 		ID:        uuid.New().String(),
+		TenantID:  domain.DefaultTenantID,
 		UserID:    userID,
 		Type:      "totp",
 		Secret:    "JBSWY3DPEHPK3PXP",
@@ -36,6 +37,7 @@ func newTestBackupCodes(userID string, n int) []domain.BackupCode {
 	for i := range codes {
 		codes[i] = domain.BackupCode{
 			ID:        uuid.New().String(),
+			TenantID:  domain.DefaultTenantID,
 			UserID:    userID,
 			CodeHash:  "hash_" + uuid.New().String()[:8],
 			CreatedAt: now,
@@ -49,6 +51,7 @@ func TestPostgresMFARepository_SaveSecret(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
@@ -65,6 +68,8 @@ func TestPostgresMFARepository_SaveSecret(t *testing.T) {
 	assert.False(t, created.Confirmed)
 	assert.Nil(t, created.ConfirmedAt)
 	assert.Nil(t, created.DeletedAt)
+
+	_ = tid // used by other tests in this file
 }
 
 func TestPostgresMFARepository_SaveSecret_DuplicateType(t *testing.T) {
@@ -92,6 +97,7 @@ func TestPostgresMFARepository_GetSecret(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
@@ -101,7 +107,7 @@ func TestPostgresMFARepository_GetSecret(t *testing.T) {
 	_, err = repo.SaveSecret(ctx, secret)
 	require.NoError(t, err)
 
-	got, err := repo.GetSecret(ctx, user.ID)
+	got, err := repo.GetSecret(ctx, tid, user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, secret.ID, got.ID)
 	assert.Equal(t, secret.Secret, got.Secret)
@@ -111,8 +117,9 @@ func TestPostgresMFARepository_GetSecret_NotFound(t *testing.T) {
 	pool := testPool(t)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
-	_, err := repo.GetSecret(ctx, "nonexistent-user-id")
+	_, err := repo.GetSecret(ctx, tid, "nonexistent-user-id")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
@@ -122,6 +129,7 @@ func TestPostgresMFARepository_ConfirmSecret(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
@@ -131,10 +139,10 @@ func TestPostgresMFARepository_ConfirmSecret(t *testing.T) {
 	_, err = repo.SaveSecret(ctx, secret)
 	require.NoError(t, err)
 
-	err = repo.ConfirmSecret(ctx, user.ID)
+	err = repo.ConfirmSecret(ctx, tid, user.ID)
 	require.NoError(t, err)
 
-	got, err := repo.GetSecret(ctx, user.ID)
+	got, err := repo.GetSecret(ctx, tid, user.ID)
 	require.NoError(t, err)
 	assert.True(t, got.Confirmed)
 	assert.NotNil(t, got.ConfirmedAt)
@@ -144,8 +152,9 @@ func TestPostgresMFARepository_ConfirmSecret_NotFound(t *testing.T) {
 	pool := testPool(t)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
-	err := repo.ConfirmSecret(ctx, "nonexistent-user-id")
+	err := repo.ConfirmSecret(ctx, tid, "nonexistent-user-id")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
@@ -155,6 +164,7 @@ func TestPostgresMFARepository_DeleteSecret(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
@@ -164,11 +174,11 @@ func TestPostgresMFARepository_DeleteSecret(t *testing.T) {
 	_, err = repo.SaveSecret(ctx, secret)
 	require.NoError(t, err)
 
-	err = repo.DeleteSecret(ctx, user.ID)
+	err = repo.DeleteSecret(ctx, tid, user.ID)
 	require.NoError(t, err)
 
 	// Should not be found after deletion.
-	_, err = repo.GetSecret(ctx, user.ID)
+	_, err = repo.GetSecret(ctx, tid, user.ID)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
@@ -177,8 +187,9 @@ func TestPostgresMFARepository_DeleteSecret_NotFound(t *testing.T) {
 	pool := testPool(t)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
-	err := repo.DeleteSecret(ctx, "nonexistent-user-id")
+	err := repo.DeleteSecret(ctx, tid, "nonexistent-user-id")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
@@ -188,16 +199,17 @@ func TestPostgresMFARepository_SaveAndGetBackupCodes(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
 	require.NoError(t, err)
 
 	codes := newTestBackupCodes(user.ID, 10)
-	err = repo.SaveBackupCodes(ctx, user.ID, codes)
+	err = repo.SaveBackupCodes(ctx, tid, user.ID, codes)
 	require.NoError(t, err)
 
-	got, err := repo.GetBackupCodes(ctx, user.ID)
+	got, err := repo.GetBackupCodes(ctx, tid, user.ID)
 	require.NoError(t, err)
 	assert.Len(t, got, 10)
 
@@ -213,6 +225,7 @@ func TestPostgresMFARepository_SaveBackupCodes_ReplacesUnused(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
@@ -220,19 +233,19 @@ func TestPostgresMFARepository_SaveBackupCodes_ReplacesUnused(t *testing.T) {
 
 	// Save initial codes.
 	codes1 := newTestBackupCodes(user.ID, 10)
-	err = repo.SaveBackupCodes(ctx, user.ID, codes1)
+	err = repo.SaveBackupCodes(ctx, tid, user.ID, codes1)
 	require.NoError(t, err)
 
 	// Consume one code.
-	err = repo.ConsumeBackupCode(ctx, user.ID, codes1[0].CodeHash)
+	err = repo.ConsumeBackupCode(ctx, tid, user.ID, codes1[0].CodeHash)
 	require.NoError(t, err)
 
 	// Save new set — should replace only the 9 unused codes.
 	codes2 := newTestBackupCodes(user.ID, 10)
-	err = repo.SaveBackupCodes(ctx, user.ID, codes2)
+	err = repo.SaveBackupCodes(ctx, tid, user.ID, codes2)
 	require.NoError(t, err)
 
-	got, err := repo.GetBackupCodes(ctx, user.ID)
+	got, err := repo.GetBackupCodes(ctx, tid, user.ID)
 	require.NoError(t, err)
 	// 1 used from first batch + 10 new = 11
 	assert.Len(t, got, 11)
@@ -243,20 +256,21 @@ func TestPostgresMFARepository_ConsumeBackupCode(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
 	require.NoError(t, err)
 
 	codes := newTestBackupCodes(user.ID, 3)
-	err = repo.SaveBackupCodes(ctx, user.ID, codes)
+	err = repo.SaveBackupCodes(ctx, tid, user.ID, codes)
 	require.NoError(t, err)
 
-	err = repo.ConsumeBackupCode(ctx, user.ID, codes[1].CodeHash)
+	err = repo.ConsumeBackupCode(ctx, tid, user.ID, codes[1].CodeHash)
 	require.NoError(t, err)
 
 	// Consuming same code again should fail.
-	err = repo.ConsumeBackupCode(ctx, user.ID, codes[1].CodeHash)
+	err = repo.ConsumeBackupCode(ctx, tid, user.ID, codes[1].CodeHash)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
@@ -265,8 +279,9 @@ func TestPostgresMFARepository_ConsumeBackupCode_NotFound(t *testing.T) {
 	pool := testPool(t)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
-	err := repo.ConsumeBackupCode(ctx, "nonexistent", "nonexistent-hash")
+	err := repo.ConsumeBackupCode(ctx, tid, "nonexistent", "nonexistent-hash")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
@@ -276,12 +291,13 @@ func TestPostgresMFARepository_GetMFAStatus_NoMFA(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
 	require.NoError(t, err)
 
-	status, err := repo.GetMFAStatus(ctx, user.ID)
+	status, err := repo.GetMFAStatus(ctx, tid, user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, user.ID, status.UserID)
 	assert.False(t, status.Enabled)
@@ -295,6 +311,7 @@ func TestPostgresMFARepository_GetMFAStatus_Enrolled(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
@@ -304,20 +321,20 @@ func TestPostgresMFARepository_GetMFAStatus_Enrolled(t *testing.T) {
 	_, err = repo.SaveSecret(ctx, secret)
 	require.NoError(t, err)
 
-	err = repo.ConfirmSecret(ctx, user.ID)
+	err = repo.ConfirmSecret(ctx, tid, user.ID)
 	require.NoError(t, err)
 
 	codes := newTestBackupCodes(user.ID, 10)
-	err = repo.SaveBackupCodes(ctx, user.ID, codes)
+	err = repo.SaveBackupCodes(ctx, tid, user.ID, codes)
 	require.NoError(t, err)
 
 	// Consume 2 codes.
-	err = repo.ConsumeBackupCode(ctx, user.ID, codes[0].CodeHash)
+	err = repo.ConsumeBackupCode(ctx, tid, user.ID, codes[0].CodeHash)
 	require.NoError(t, err)
-	err = repo.ConsumeBackupCode(ctx, user.ID, codes[1].CodeHash)
+	err = repo.ConsumeBackupCode(ctx, tid, user.ID, codes[1].CodeHash)
 	require.NoError(t, err)
 
-	status, err := repo.GetMFAStatus(ctx, user.ID)
+	status, err := repo.GetMFAStatus(ctx, tid, user.ID)
 	require.NoError(t, err)
 	assert.True(t, status.Enabled)
 	assert.Equal(t, "totp", status.Type)
@@ -330,6 +347,7 @@ func TestPostgresMFARepository_DeleteSecret_AllowsReenrollment(t *testing.T) {
 	userRepo := storage.NewPostgresUserRepository(pool)
 	repo := storage.NewPostgresMFARepository(pool)
 	ctx := context.Background()
+	tid := domain.DefaultTenantID
 
 	user := newTestUser()
 	_, err := userRepo.Create(ctx, user)
@@ -339,9 +357,9 @@ func TestPostgresMFARepository_DeleteSecret_AllowsReenrollment(t *testing.T) {
 	secret1 := newTestMFASecret(user.ID)
 	_, err = repo.SaveSecret(ctx, secret1)
 	require.NoError(t, err)
-	err = repo.ConfirmSecret(ctx, user.ID)
+	err = repo.ConfirmSecret(ctx, tid, user.ID)
 	require.NoError(t, err)
-	err = repo.DeleteSecret(ctx, user.ID)
+	err = repo.DeleteSecret(ctx, tid, user.ID)
 	require.NoError(t, err)
 
 	// Re-enroll with a new secret — should succeed because old one is soft-deleted.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,7 +14,7 @@ import (
 )
 
 // oauthAccountColumns lists the columns returned by oauth_accounts queries.
-const oauthAccountColumns = `id, user_id, provider, provider_user_id, email, created_at`
+const oauthAccountColumns = `id, tenant_id, user_id, provider, provider_user_id, email, created_at`
 
 // PostgresOAuthAccountRepository implements OAuthAccountRepository using pgx against PostgreSQL.
 type PostgresOAuthAccountRepository struct {
@@ -28,7 +29,7 @@ func NewPostgresOAuthAccountRepository(pool *pgxpool.Pool) *PostgresOAuthAccount
 // scanOAuthAccount scans a single row into a domain.OAuthAccount.
 func scanOAuthAccount(row pgx.Row) (*domain.OAuthAccount, error) {
 	a := &domain.OAuthAccount{}
-	err := row.Scan(&a.ID, &a.UserID, &a.Provider, &a.ProviderUserID, &a.Email, &a.CreatedAt)
+	err := row.Scan(&a.ID, &a.TenantID, &a.UserID, &a.Provider, &a.ProviderUserID, &a.Email, &a.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -42,12 +43,12 @@ func scanOAuthAccount(row pgx.Row) (*domain.OAuthAccount, error) {
 // provider+provider_user_id combination already exists.
 func (r *PostgresOAuthAccountRepository) Create(ctx context.Context, account *domain.OAuthAccount) (*domain.OAuthAccount, error) {
 	query := fmt.Sprintf(`
-		INSERT INTO oauth_accounts (id, user_id, provider, provider_user_id, email, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO oauth_accounts (id, tenant_id, user_id, provider, provider_user_id, email, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING %s`, oauthAccountColumns)
 
 	out, err := scanOAuthAccount(r.pool.QueryRow(ctx, query,
-		account.ID, account.UserID, account.Provider,
+		account.ID, account.TenantID, account.UserID, account.Provider,
 		account.ProviderUserID, account.Email, account.CreatedAt,
 	))
 	if err != nil {
@@ -62,10 +63,10 @@ func (r *PostgresOAuthAccountRepository) Create(ctx context.Context, account *do
 
 // FindByProviderAndProviderUserID returns the OAuth account for a given provider and provider user ID.
 // Returns ErrNotFound if no matching account exists.
-func (r *PostgresOAuthAccountRepository) FindByProviderAndProviderUserID(ctx context.Context, provider, providerUserID string) (*domain.OAuthAccount, error) {
-	query := fmt.Sprintf(`SELECT %s FROM oauth_accounts WHERE provider = $1 AND provider_user_id = $2`, oauthAccountColumns)
+func (r *PostgresOAuthAccountRepository) FindByProviderAndProviderUserID(ctx context.Context, tenantID uuid.UUID, provider, providerUserID string) (*domain.OAuthAccount, error) {
+	query := fmt.Sprintf(`SELECT %s FROM oauth_accounts WHERE provider = $1 AND provider_user_id = $2 AND tenant_id = $3`, oauthAccountColumns)
 
-	out, err := scanOAuthAccount(r.pool.QueryRow(ctx, query, provider, providerUserID))
+	out, err := scanOAuthAccount(r.pool.QueryRow(ctx, query, provider, providerUserID, tenantID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("provider %s user %s: %w", provider, providerUserID, ErrNotFound)
@@ -76,10 +77,10 @@ func (r *PostgresOAuthAccountRepository) FindByProviderAndProviderUserID(ctx con
 }
 
 // FindByUserID returns all OAuth accounts linked to a user.
-func (r *PostgresOAuthAccountRepository) FindByUserID(ctx context.Context, userID string) ([]domain.OAuthAccount, error) {
-	query := fmt.Sprintf(`SELECT %s FROM oauth_accounts WHERE user_id = $1 ORDER BY created_at`, oauthAccountColumns)
+func (r *PostgresOAuthAccountRepository) FindByUserID(ctx context.Context, tenantID uuid.UUID, userID string) ([]domain.OAuthAccount, error) {
+	query := fmt.Sprintf(`SELECT %s FROM oauth_accounts WHERE user_id = $1 AND tenant_id = $2 ORDER BY created_at`, oauthAccountColumns)
 
-	rows, err := r.pool.Query(ctx, query, userID)
+	rows, err := r.pool.Query(ctx, query, userID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("find oauth accounts for user %s: %w", userID, err)
 	}
@@ -88,7 +89,7 @@ func (r *PostgresOAuthAccountRepository) FindByUserID(ctx context.Context, userI
 	var accounts []domain.OAuthAccount
 	for rows.Next() {
 		var a domain.OAuthAccount
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Provider, &a.ProviderUserID, &a.Email, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.UserID, &a.Provider, &a.ProviderUserID, &a.Email, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan oauth account: %w", err)
 		}
 		accounts = append(accounts, a)
@@ -102,10 +103,10 @@ func (r *PostgresOAuthAccountRepository) FindByUserID(ctx context.Context, userI
 
 // Delete removes the OAuth account link for a user and provider.
 // Returns ErrNotFound if no matching account exists.
-func (r *PostgresOAuthAccountRepository) Delete(ctx context.Context, userID, provider string) error {
-	query := `DELETE FROM oauth_accounts WHERE user_id = $1 AND provider = $2`
+func (r *PostgresOAuthAccountRepository) Delete(ctx context.Context, tenantID uuid.UUID, userID, provider string) error {
+	query := `DELETE FROM oauth_accounts WHERE user_id = $1 AND tenant_id = $2 AND provider = $3`
 
-	tag, err := r.pool.Exec(ctx, query, userID, provider)
+	tag, err := r.pool.Exec(ctx, query, userID, tenantID, provider)
 	if err != nil {
 		return fmt.Errorf("delete oauth account: %w", err)
 	}

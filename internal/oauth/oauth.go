@@ -110,7 +110,8 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state stri
 	}
 
 	// Look up existing linked account.
-	existing, err := s.repo.FindByProviderAndProviderUserID(ctx, provider, oauthUser.ProviderUserID)
+	tenantID := domain.TenantIDFromContext(ctx)
+	existing, err := s.repo.FindByProviderAndProviderUserID(ctx, tenantID, provider, oauthUser.ProviderUserID)
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return nil, fmt.Errorf("find oauth account: %w", err)
 	}
@@ -138,7 +139,8 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state stri
 
 // ListLinkedAccounts returns all OAuth accounts linked to a user.
 func (s *Service) ListLinkedAccounts(ctx context.Context, userID string) (*domain.OAuthLinkedAccounts, error) {
-	accounts, err := s.repo.FindByUserID(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+	accounts, err := s.repo.FindByUserID(ctx, tenantID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list linked accounts: %w", err)
 	}
@@ -148,7 +150,8 @@ func (s *Service) ListLinkedAccounts(ctx context.Context, userID string) (*domai
 
 // UnlinkAccount removes the OAuth link for the specified provider.
 func (s *Service) UnlinkAccount(ctx context.Context, userID, provider string) error {
-	err := s.repo.Delete(ctx, userID, provider)
+	tenantID := domain.TenantIDFromContext(ctx)
+	err := s.repo.Delete(ctx, tenantID, userID, provider)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return fmt.Errorf("%w: %s", api.ErrNotFound, domain.ErrOAuthAccountNotFound.Error())

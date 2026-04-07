@@ -20,8 +20,10 @@ func TestScanRARResourceType_ErrNoRows(t *testing.T) {
 func TestScanRARResourceType_Success(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	id := uuid.New()
+	tenantID := uuid.New()
 	row := &fakeRARResourceTypeRow{
 		id:               id,
+		tenantID:         tenantID,
 		typeName:         "payment_initiation",
 		description:      "Payment initiation",
 		allowedActions:   []string{"initiate", "status"},
@@ -33,6 +35,7 @@ func TestScanRARResourceType_Success(t *testing.T) {
 	rt, err := scanRARResourceType(row)
 	require.NoError(t, err)
 	assert.Equal(t, id, rt.ID)
+	assert.Equal(t, tenantID, rt.TenantID)
 	assert.Equal(t, "payment_initiation", rt.Type)
 	assert.Equal(t, "Payment initiation", rt.Description)
 	assert.Equal(t, []string{"initiate", "status"}, rt.AllowedActions)
@@ -60,6 +63,7 @@ func (r *errRARRow) Scan(_ ...interface{}) error {
 // fakeRARResourceTypeRow implements pgx.Row, populating scan destinations with preset values.
 type fakeRARResourceTypeRow struct {
 	id               uuid.UUID
+	tenantID         uuid.UUID
 	typeName         string
 	description      string
 	allowedActions   []string
@@ -69,15 +73,16 @@ type fakeRARResourceTypeRow struct {
 }
 
 func (r *fakeRARResourceTypeRow) Scan(dest ...interface{}) error {
-	if len(dest) != 7 {
+	if len(dest) != 8 {
 		return pgx.ErrNoRows
 	}
 	*dest[0].(*uuid.UUID) = r.id
-	*dest[1].(*string) = r.typeName
-	*dest[2].(*string) = r.description
-	*dest[3].(*[]string) = r.allowedActions
-	*dest[4].(*[]string) = r.allowedDataTypes
-	*dest[5].(*time.Time) = r.createdAt
-	*dest[6].(*time.Time) = r.updatedAt
+	*dest[1].(*uuid.UUID) = r.tenantID
+	*dest[2].(*string) = r.typeName
+	*dest[3].(*string) = r.description
+	*dest[4].(*[]string) = r.allowedActions
+	*dest[5].(*[]string) = r.allowedDataTypes
+	*dest[6].(*time.Time) = r.createdAt
+	*dest[7].(*time.Time) = r.updatedAt
 	return nil
 }

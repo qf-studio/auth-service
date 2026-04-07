@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -19,49 +20,49 @@ import (
 // --- Mock AdminUserRepository ---
 
 type mockAdminUserRepo struct {
-	listFn            func(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error)
-	searchUsersFn     func(ctx context.Context, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error)
-	findByIDFn        func(ctx context.Context, id string) (*domain.User, error)
+	listFn            func(ctx context.Context, tenantID uuid.UUID, limit, offset int, status string) ([]*domain.User, int, error)
+	searchUsersFn     func(ctx context.Context, tenantID uuid.UUID, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error)
+	findByIDFn        func(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
 	createFn          func(ctx context.Context, user *domain.User) (*domain.User, error)
 	updateFn          func(ctx context.Context, user *domain.User) (*domain.User, error)
-	softDeleteFn      func(ctx context.Context, id string) error
-	lockFn            func(ctx context.Context, id, reason string) (*domain.User, error)
-	unlockFn          func(ctx context.Context, id string) (*domain.User, error)
-	bulkUpdateStatFn  func(ctx context.Context, ids []string, action string, reason string) (int64, error)
-	bulkAssignRoleFn  func(ctx context.Context, ids []string, role string) (int64, error)
+	softDeleteFn      func(ctx context.Context, tenantID uuid.UUID, id string) error
+	lockFn            func(ctx context.Context, tenantID uuid.UUID, id, reason string) (*domain.User, error)
+	unlockFn          func(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
+	bulkUpdateStatFn  func(ctx context.Context, tenantID uuid.UUID, ids []string, action string, reason string) (int64, error)
+	bulkAssignRoleFn  func(ctx context.Context, tenantID uuid.UUID, ids []string, role string) (int64, error)
 }
 
-func (m *mockAdminUserRepo) List(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error) {
+func (m *mockAdminUserRepo) List(ctx context.Context, tenantID uuid.UUID, limit, offset int, status string) ([]*domain.User, int, error) {
 	if m.listFn != nil {
-		return m.listFn(ctx, limit, offset, status)
+		return m.listFn(ctx, tenantID, limit, offset, status)
 	}
 	return []*domain.User{testUser()}, 1, nil
 }
 
-func (m *mockAdminUserRepo) SearchUsers(ctx context.Context, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
+func (m *mockAdminUserRepo) SearchUsers(ctx context.Context, tenantID uuid.UUID, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
 	if m.searchUsersFn != nil {
-		return m.searchUsersFn(ctx, limit, offset, filter)
+		return m.searchUsersFn(ctx, tenantID, limit, offset, filter)
 	}
 	return []*domain.User{testUser()}, 1, nil
 }
 
-func (m *mockAdminUserRepo) BulkUpdateStatus(ctx context.Context, ids []string, action string, reason string) (int64, error) {
+func (m *mockAdminUserRepo) BulkUpdateStatus(ctx context.Context, tenantID uuid.UUID, ids []string, action string, reason string) (int64, error) {
 	if m.bulkUpdateStatFn != nil {
-		return m.bulkUpdateStatFn(ctx, ids, action, reason)
+		return m.bulkUpdateStatFn(ctx, tenantID, ids, action, reason)
 	}
 	return int64(len(ids)), nil
 }
 
-func (m *mockAdminUserRepo) BulkAssignRole(ctx context.Context, ids []string, role string) (int64, error) {
+func (m *mockAdminUserRepo) BulkAssignRole(ctx context.Context, tenantID uuid.UUID, ids []string, role string) (int64, error) {
 	if m.bulkAssignRoleFn != nil {
-		return m.bulkAssignRoleFn(ctx, ids, role)
+		return m.bulkAssignRoleFn(ctx, tenantID, ids, role)
 	}
 	return int64(len(ids)), nil
 }
 
-func (m *mockAdminUserRepo) FindByID(ctx context.Context, id string) (*domain.User, error) {
+func (m *mockAdminUserRepo) FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error) {
 	if m.findByIDFn != nil {
-		return m.findByIDFn(ctx, id)
+		return m.findByIDFn(ctx, tenantID, id)
 	}
 	u := testUser()
 	u.ID = id
@@ -82,16 +83,16 @@ func (m *mockAdminUserRepo) Update(ctx context.Context, user *domain.User) (*dom
 	return user, nil
 }
 
-func (m *mockAdminUserRepo) SoftDelete(ctx context.Context, id string) error {
+func (m *mockAdminUserRepo) SoftDelete(ctx context.Context, tenantID uuid.UUID, id string) error {
 	if m.softDeleteFn != nil {
-		return m.softDeleteFn(ctx, id)
+		return m.softDeleteFn(ctx, tenantID, id)
 	}
 	return nil
 }
 
-func (m *mockAdminUserRepo) Lock(ctx context.Context, id, reason string) (*domain.User, error) {
+func (m *mockAdminUserRepo) Lock(ctx context.Context, tenantID uuid.UUID, id, reason string) (*domain.User, error) {
 	if m.lockFn != nil {
-		return m.lockFn(ctx, id, reason)
+		return m.lockFn(ctx, tenantID, id, reason)
 	}
 	u := testUser()
 	u.ID = id
@@ -102,9 +103,9 @@ func (m *mockAdminUserRepo) Lock(ctx context.Context, id, reason string) (*domai
 	return u, nil
 }
 
-func (m *mockAdminUserRepo) Unlock(ctx context.Context, id string) (*domain.User, error) {
+func (m *mockAdminUserRepo) Unlock(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error) {
 	if m.unlockFn != nil {
-		return m.unlockFn(ctx, id)
+		return m.unlockFn(ctx, tenantID, id)
 	}
 	u := testUser()
 	u.ID = id
@@ -157,7 +158,7 @@ func newTestUserService(repo *mockAdminUserRepo) *UserService {
 
 func TestUserService_ListUsers(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		listFn: func(_ context.Context, limit, offset int, status string) ([]*domain.User, int, error) {
+		listFn: func(_ context.Context, _ uuid.UUID, limit, offset int, status string) ([]*domain.User, int, error) {
 			assert.Equal(t, 20, limit)
 			assert.Equal(t, 0, offset)
 			assert.Equal(t, "", status)
@@ -176,7 +177,7 @@ func TestUserService_ListUsers(t *testing.T) {
 
 func TestUserService_ListUsers_Pagination(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		listFn: func(_ context.Context, limit, offset int, _ string) ([]*domain.User, int, error) {
+		listFn: func(_ context.Context, _ uuid.UUID, limit, offset int, _ string) ([]*domain.User, int, error) {
 			assert.Equal(t, 10, limit)
 			assert.Equal(t, 20, offset) // page 3 * perPage 10 - 10 = 20
 			return []*domain.User{}, 50, nil
@@ -192,7 +193,7 @@ func TestUserService_ListUsers_Pagination(t *testing.T) {
 
 func TestUserService_ListUsers_Error(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		listFn: func(_ context.Context, _, _ int, _ string) ([]*domain.User, int, error) {
+		listFn: func(_ context.Context, _ uuid.UUID, _, _ int, _ string) ([]*domain.User, int, error) {
 			return nil, 0, fmt.Errorf("db error")
 		},
 	}
@@ -215,7 +216,7 @@ func TestUserService_GetUser(t *testing.T) {
 
 func TestUserService_GetUser_NotFound(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
 			return nil, storage.ErrNotFound
 		},
 	}
@@ -289,7 +290,7 @@ func TestUserService_UpdateUser(t *testing.T) {
 
 func TestUserService_UpdateUser_NotFound(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
 			return nil, storage.ErrNotFound
 		},
 	}
@@ -312,7 +313,7 @@ func TestUserService_DeleteUser(t *testing.T) {
 
 func TestUserService_DeleteUser_NotFound(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		softDeleteFn: func(_ context.Context, _ string) error {
+		softDeleteFn: func(_ context.Context, _ uuid.UUID, _ string) error {
 			return fmt.Errorf("not found: %w", storage.ErrNotFound)
 		},
 	}
@@ -325,7 +326,7 @@ func TestUserService_DeleteUser_NotFound(t *testing.T) {
 
 func TestUserService_DeleteUser_AlreadyDeleted(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		softDeleteFn: func(_ context.Context, _ string) error {
+		softDeleteFn: func(_ context.Context, _ uuid.UUID, _ string) error {
 			return fmt.Errorf("already deleted: %w", storage.ErrAlreadyDeleted)
 		},
 	}
@@ -349,7 +350,7 @@ func TestUserService_LockUser(t *testing.T) {
 
 func TestUserService_LockUser_NotFound(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		lockFn: func(_ context.Context, _, _ string) (*domain.User, error) {
+		lockFn: func(_ context.Context, _ uuid.UUID, _, _ string) (*domain.User, error) {
 			return nil, fmt.Errorf("not found: %w", storage.ErrNotFound)
 		},
 	}
@@ -372,7 +373,7 @@ func TestUserService_UnlockUser(t *testing.T) {
 
 func TestUserService_UnlockUser_NotFound(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		unlockFn: func(_ context.Context, _ string) (*domain.User, error) {
+		unlockFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
 			return nil, fmt.Errorf("not found: %w", storage.ErrNotFound)
 		},
 	}
@@ -386,12 +387,12 @@ func TestUserService_UnlockUser_NotFound(t *testing.T) {
 // --- Mock AuditReadRepository ---
 
 type mockAuditReadRepo struct {
-	listByTargetIDFn func(ctx context.Context, targetID string, limit, offset int) ([]storage.AuditEntry, int, error)
+	listByTargetIDFn func(ctx context.Context, tenantID uuid.UUID, targetID string, limit, offset int) ([]storage.AuditEntry, int, error)
 }
 
-func (m *mockAuditReadRepo) ListByTargetID(ctx context.Context, targetID string, limit, offset int) ([]storage.AuditEntry, int, error) {
+func (m *mockAuditReadRepo) ListByTargetID(ctx context.Context, tenantID uuid.UUID, targetID string, limit, offset int) ([]storage.AuditEntry, int, error) {
 	if m.listByTargetIDFn != nil {
-		return m.listByTargetIDFn(ctx, targetID, limit, offset)
+		return m.listByTargetIDFn(ctx, tenantID, targetID, limit, offset)
 	}
 	return []storage.AuditEntry{}, 0, nil
 }
@@ -406,7 +407,7 @@ func newTestUserServiceWithAudit(repo *mockAdminUserRepo, auditRepo *mockAuditRe
 
 func TestUserService_SearchUsers(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		searchUsersFn: func(_ context.Context, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
+		searchUsersFn: func(_ context.Context, _ uuid.UUID, limit, offset int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
 			assert.Equal(t, 20, limit)
 			assert.Equal(t, 0, offset)
 			assert.Equal(t, "alice", filter.Email)
@@ -427,7 +428,7 @@ func TestUserService_SearchUsers_WithDateRange(t *testing.T) {
 	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	before := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
 	repo := &mockAdminUserRepo{
-		searchUsersFn: func(_ context.Context, _, _ int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
+		searchUsersFn: func(_ context.Context, _ uuid.UUID, _, _ int, filter storage.UserSearchFilter) ([]*domain.User, int, error) {
 			assert.Equal(t, &after, filter.CreatedAfter)
 			assert.Equal(t, &before, filter.CreatedBefore)
 			return []*domain.User{}, 0, nil
@@ -442,7 +443,7 @@ func TestUserService_SearchUsers_WithDateRange(t *testing.T) {
 
 func TestUserService_SearchUsers_Error(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		searchUsersFn: func(_ context.Context, _, _ int, _ storage.UserSearchFilter) ([]*domain.User, int, error) {
+		searchUsersFn: func(_ context.Context, _ uuid.UUID, _, _ int, _ storage.UserSearchFilter) ([]*domain.User, int, error) {
 			return nil, 0, fmt.Errorf("db error")
 		},
 	}
@@ -457,7 +458,7 @@ func TestUserService_SearchUsers_Error(t *testing.T) {
 
 func TestUserService_BulkLock(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		bulkUpdateStatFn: func(_ context.Context, ids []string, action, reason string) (int64, error) {
+		bulkUpdateStatFn: func(_ context.Context, _ uuid.UUID, ids []string, action, reason string) (int64, error) {
 			assert.Equal(t, []string{"u1", "u2"}, ids)
 			assert.Equal(t, "lock", action)
 			assert.Equal(t, "policy violation", reason)
@@ -476,7 +477,7 @@ func TestUserService_BulkLock(t *testing.T) {
 
 func TestUserService_BulkLock_Error(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		bulkUpdateStatFn: func(_ context.Context, _ []string, _, _ string) (int64, error) {
+		bulkUpdateStatFn: func(_ context.Context, _ uuid.UUID, _ []string, _, _ string) (int64, error) {
 			return 0, fmt.Errorf("db error")
 		},
 	}
@@ -501,7 +502,7 @@ func TestUserService_BulkUnlock(t *testing.T) {
 
 func TestUserService_BulkSuspend(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		bulkUpdateStatFn: func(_ context.Context, _ []string, action, _ string) (int64, error) {
+		bulkUpdateStatFn: func(_ context.Context, _ uuid.UUID, _ []string, action, _ string) (int64, error) {
 			assert.Equal(t, "suspend", action)
 			return 3, nil
 		},
@@ -520,7 +521,7 @@ func TestUserService_BulkSuspend(t *testing.T) {
 
 func TestUserService_BulkAssignRole(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		bulkAssignRoleFn: func(_ context.Context, ids []string, role string) (int64, error) {
+		bulkAssignRoleFn: func(_ context.Context, _ uuid.UUID, ids []string, role string) (int64, error) {
 			assert.Equal(t, "admin", role)
 			return 2, nil
 		},
@@ -537,7 +538,7 @@ func TestUserService_BulkAssignRole(t *testing.T) {
 
 func TestUserService_BulkAssignRole_Error(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		bulkAssignRoleFn: func(_ context.Context, _ []string, _ string) (int64, error) {
+		bulkAssignRoleFn: func(_ context.Context, _ uuid.UUID, _ []string, _ string) (int64, error) {
 			return 0, fmt.Errorf("db error")
 		},
 	}
@@ -556,7 +557,7 @@ func TestUserService_BulkAssignRole_Error(t *testing.T) {
 func TestUserService_GetActivity(t *testing.T) {
 	now := time.Now()
 	auditRepo := &mockAuditReadRepo{
-		listByTargetIDFn: func(_ context.Context, targetID string, limit, offset int) ([]storage.AuditEntry, int, error) {
+		listByTargetIDFn: func(_ context.Context, _ uuid.UUID, targetID string, limit, offset int) ([]storage.AuditEntry, int, error) {
 			assert.Equal(t, "user-1", targetID)
 			assert.Equal(t, 20, limit)
 			assert.Equal(t, 0, offset)
@@ -579,7 +580,7 @@ func TestUserService_GetActivity(t *testing.T) {
 
 func TestUserService_GetActivity_UserNotFound(t *testing.T) {
 	repo := &mockAdminUserRepo{
-		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
 			return nil, storage.ErrNotFound
 		},
 	}
@@ -600,7 +601,7 @@ func TestUserService_GetActivity_NoAuditRepo(t *testing.T) {
 
 func TestUserService_GetActivity_AuditError(t *testing.T) {
 	auditRepo := &mockAuditReadRepo{
-		listByTargetIDFn: func(_ context.Context, _ string, _, _ int) ([]storage.AuditEntry, int, error) {
+		listByTargetIDFn: func(_ context.Context, _ uuid.UUID, _ string, _, _ int) ([]storage.AuditEntry, int, error) {
 			return nil, 0, fmt.Errorf("db error")
 		},
 	}

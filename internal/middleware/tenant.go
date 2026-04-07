@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/domain"
@@ -109,6 +110,7 @@ func TenantMiddleware(cfg config.TenantConfig, resolver TenantResolver, cache *T
 			}
 			c.Set(tenantIDContextKey, cached.TenantID)
 			c.Set(tenantConfigContextKey, cached)
+			injectTenantContext(c, cached.TenantID)
 			c.Next()
 			return
 		}
@@ -131,6 +133,7 @@ func TenantMiddleware(cfg config.TenantConfig, resolver TenantResolver, cache *T
 
 		c.Set(tenantIDContextKey, tenantCfg.TenantID)
 		c.Set(tenantConfigContextKey, tenantCfg)
+		injectTenantContext(c, tenantCfg.TenantID)
 		c.Next()
 	}
 }
@@ -178,6 +181,17 @@ func extractSubdomain(host, baseDomain string) string {
 		return ""
 	}
 	return sub
+}
+
+// injectTenantContext stores the tenant ID in the request's standard context.Context
+// so that downstream services accessing c.Request.Context() can retrieve it via
+// domain.TenantIDFromContext.
+func injectTenantContext(c *gin.Context, tenantID string) {
+	parsed, err := uuid.Parse(tenantID)
+	if err != nil {
+		return
+	}
+	c.Request = c.Request.WithContext(domain.WithTenantID(c.Request.Context(), parsed))
 }
 
 // TenantIDFromContext retrieves the resolved tenant ID from the Gin context.

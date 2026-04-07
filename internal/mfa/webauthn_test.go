@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -35,28 +36,28 @@ func (m *mockWebAuthnCredRepo) CreateCredential(ctx context.Context, cred *domai
 	return nil
 }
 
-func (m *mockWebAuthnCredRepo) GetCredentialsByUser(ctx context.Context, userID string) ([]domain.WebAuthnCredential, error) {
+func (m *mockWebAuthnCredRepo) GetCredentialsByUser(ctx context.Context, _ uuid.UUID, userID string) ([]domain.WebAuthnCredential, error) {
 	if m.getByUserFn != nil {
 		return m.getByUserFn(ctx, userID)
 	}
 	return nil, nil
 }
 
-func (m *mockWebAuthnCredRepo) GetCredentialByCredentialID(ctx context.Context, credentialID []byte) (*domain.WebAuthnCredential, error) {
+func (m *mockWebAuthnCredRepo) GetCredentialByCredentialID(ctx context.Context, _ uuid.UUID, credentialID []byte) (*domain.WebAuthnCredential, error) {
 	if m.getByCredentialIDFn != nil {
 		return m.getByCredentialIDFn(ctx, credentialID)
 	}
 	return nil, storage.ErrNotFound
 }
 
-func (m *mockWebAuthnCredRepo) UpdateSignCount(ctx context.Context, credentialID []byte, signCount uint32, cloneWarning bool) error {
+func (m *mockWebAuthnCredRepo) UpdateSignCount(ctx context.Context, _ uuid.UUID, credentialID []byte, signCount uint32, cloneWarning bool) error {
 	if m.updateSignCountFn != nil {
 		return m.updateSignCountFn(ctx, credentialID, signCount, cloneWarning)
 	}
 	return nil
 }
 
-func (m *mockWebAuthnCredRepo) DeleteCredential(ctx context.Context, id string) error {
+func (m *mockWebAuthnCredRepo) DeleteCredential(ctx context.Context, _ uuid.UUID, id string) error {
 	if m.deleteFn != nil {
 		return m.deleteFn(ctx, id)
 	}

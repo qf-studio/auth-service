@@ -56,4 +56,7 @@ var (
 
 	// ErrDuplicateSAMLAccount indicates a SAML account with the same IdP + NameID already exists.
 	ErrDuplicateSAMLAccount = errors.New("duplicate saml account")
+
+	// ErrDuplicateTenant indicates a tenant with the same slug already exists.
+	ErrDuplicateTenant = errors.New("duplicate tenant slug")
 )

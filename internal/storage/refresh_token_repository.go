@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -15,18 +16,18 @@ import (
 // RefreshTokenRepository defines the persistence operations for refresh tokens.
 type RefreshTokenRepository interface {
 	// Store persists a new refresh token signature.
-	Store(ctx context.Context, signature, userID string, expiresAt time.Time) error
+	Store(ctx context.Context, tenantID uuid.UUID, signature, userID string, expiresAt time.Time) error
 
 	// FindBySignature retrieves a token record by its signature.
 	// Returns ErrNotFound if absent.
-	FindBySignature(ctx context.Context, signature string) (*domain.RefreshTokenRecord, error)
+	FindBySignature(ctx context.Context, tenantID uuid.UUID, signature string) (*domain.RefreshTokenRecord, error)
 
 	// Revoke marks a single refresh token as revoked.
 	// Returns ErrNotFound if the signature does not exist.
-	Revoke(ctx context.Context, signature string) error
+	Revoke(ctx context.Context, tenantID uuid.UUID, signature string) error
 
 	// RevokeAllForUser marks all non-revoked refresh tokens for a user as revoked.
-	RevokeAllForUser(ctx context.Context, userID string) error
+	RevokeAllForUser(ctx context.Context, tenantID uuid.UUID, userID string) error
 }
 
 // PostgresRefreshTokenRepository implements RefreshTokenRepository using pgx.
@@ -40,13 +41,13 @@ func NewPostgresRefreshTokenRepository(pool *pgxpool.Pool) *PostgresRefreshToken
 }
 
 // Store inserts a new refresh token record.
-func (r *PostgresRefreshTokenRepository) Store(ctx context.Context, signature, userID string, expiresAt time.Time) error {
+func (r *PostgresRefreshTokenRepository) Store(ctx context.Context, tenantID uuid.UUID, signature, userID string, expiresAt time.Time) error {
 	query := `
-		INSERT INTO refresh_tokens (signature, user_id, expires_at, created_at)
-		VALUES ($1, $2, $3, $4)`
+		INSERT INTO refresh_tokens (signature, tenant_id, user_id, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5)`
 
 	now := time.Now().UTC()
-	_, err := r.pool.Exec(ctx, query, signature, userID, expiresAt, now)
+	_, err := r.pool.Exec(ctx, query, signature, tenantID, userID, expiresAt, now)
 	if err != nil {
 		return fmt.Errorf("store refresh token: %w", err)
 	}
@@ -55,15 +56,15 @@ func (r *PostgresRefreshTokenRepository) Store(ctx context.Context, signature, u
 }
 
 // FindBySignature retrieves a refresh token record by its signature.
-func (r *PostgresRefreshTokenRepository) FindBySignature(ctx context.Context, signature string) (*domain.RefreshTokenRecord, error) {
+func (r *PostgresRefreshTokenRepository) FindBySignature(ctx context.Context, tenantID uuid.UUID, signature string) (*domain.RefreshTokenRecord, error) {
 	query := `
-		SELECT signature, user_id, expires_at, created_at, revoked_at
+		SELECT signature, tenant_id, user_id, expires_at, created_at, revoked_at
 		FROM refresh_tokens
-		WHERE signature = $1`
+		WHERE signature = $1 AND tenant_id = $2`
 
 	rec := &domain.RefreshTokenRecord{}
-	err := r.pool.QueryRow(ctx, query, signature).Scan(
-		&rec.Signature, &rec.UserID, &rec.ExpiresAt, &rec.CreatedAt, &rec.RevokedAt,
+	err := r.pool.QueryRow(ctx, query, signature, tenantID).Scan(
+		&rec.Signature, &rec.TenantID, &rec.UserID, &rec.ExpiresAt, &rec.CreatedAt, &rec.RevokedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -76,14 +77,14 @@ func (r *PostgresRefreshTokenRepository) FindBySignature(ctx context.Context, si
 }
 
 // Revoke marks a refresh token as revoked by setting revoked_at.
-func (r *PostgresRefreshTokenRepository) Revoke(ctx context.Context, signature string) error {
+func (r *PostgresRefreshTokenRepository) Revoke(ctx context.Context, tenantID uuid.UUID, signature string) error {
 	query := `
 		UPDATE refresh_tokens
 		SET revoked_at = $1
-		WHERE signature = $2 AND revoked_at IS NULL`
+		WHERE signature = $2 AND tenant_id = $3 AND revoked_at IS NULL`
 
 	now := time.Now().UTC()
-	tag, err := r.pool.Exec(ctx, query, now, signature)
+	tag, err := r.pool.Exec(ctx, query, now, signature, tenantID)
 	if err != nil {
 		return fmt.Errorf("revoke refresh token: %w", err)
 	}
@@ -95,14 +96,14 @@ func (r *PostgresRefreshTokenRepository) Revoke(ctx context.Context, signature s
 }
 
 // RevokeAllForUser marks all non-revoked refresh tokens for a user as revoked.
-func (r *PostgresRefreshTokenRepository) RevokeAllForUser(ctx context.Context, userID string) error {
+func (r *PostgresRefreshTokenRepository) RevokeAllForUser(ctx context.Context, tenantID uuid.UUID, userID string) error {
 	query := `
 		UPDATE refresh_tokens
 		SET revoked_at = $1
-		WHERE user_id = $2 AND revoked_at IS NULL`
+		WHERE user_id = $2 AND tenant_id = $3 AND revoked_at IS NULL`
 
 	now := time.Now().UTC()
-	_, err := r.pool.Exec(ctx, query, now, userID)
+	_, err := r.pool.Exec(ctx, query, now, userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("revoke all refresh tokens for user %s: %w", userID, err)
 	}

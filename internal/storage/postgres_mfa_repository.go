@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,17 +27,17 @@ func NewPostgresMFARepository(pool *pgxpool.Pool) *PostgresMFARepository {
 // SaveSecret inserts a new MFA secret for a user.
 func (r *PostgresMFARepository) SaveSecret(ctx context.Context, secret *domain.MFASecret) (*domain.MFASecret, error) {
 	query := `
-		INSERT INTO mfa_secrets (id, user_id, type, secret, confirmed, confirmed_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, user_id, type, secret, confirmed, confirmed_at, created_at, updated_at, deleted_at`
+		INSERT INTO mfa_secrets (id, tenant_id, user_id, type, secret, confirmed, confirmed_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, tenant_id, user_id, type, secret, confirmed, confirmed_at, created_at, updated_at, deleted_at`
 
 	out := &domain.MFASecret{}
 	err := r.pool.QueryRow(ctx, query,
-		secret.ID, secret.UserID, secret.Type, secret.Secret,
+		secret.ID, secret.TenantID, secret.UserID, secret.Type, secret.Secret,
 		secret.Confirmed, secret.ConfirmedAt,
 		secret.CreatedAt, secret.UpdatedAt,
 	).Scan(
-		&out.ID, &out.UserID, &out.Type, &out.Secret,
+		&out.ID, &out.TenantID, &out.UserID, &out.Type, &out.Secret,
 		&out.Confirmed, &out.ConfirmedAt,
 		&out.CreatedAt, &out.UpdatedAt, &out.DeletedAt,
 	)
@@ -52,15 +53,15 @@ func (r *PostgresMFARepository) SaveSecret(ctx context.Context, secret *domain.M
 }
 
 // GetSecret retrieves the active MFA secret for a user.
-func (r *PostgresMFARepository) GetSecret(ctx context.Context, userID string) (*domain.MFASecret, error) {
+func (r *PostgresMFARepository) GetSecret(ctx context.Context, tenantID uuid.UUID, userID string) (*domain.MFASecret, error) {
 	query := `
-		SELECT id, user_id, type, secret, confirmed, confirmed_at, created_at, updated_at, deleted_at
+		SELECT id, tenant_id, user_id, type, secret, confirmed, confirmed_at, created_at, updated_at, deleted_at
 		FROM mfa_secrets
-		WHERE user_id = $1 AND deleted_at IS NULL`
+		WHERE user_id = $1 AND tenant_id = $2 AND deleted_at IS NULL`
 
 	out := &domain.MFASecret{}
-	err := r.pool.QueryRow(ctx, query, userID).Scan(
-		&out.ID, &out.UserID, &out.Type, &out.Secret,
+	err := r.pool.QueryRow(ctx, query, userID, tenantID).Scan(
+		&out.ID, &out.TenantID, &out.UserID, &out.Type, &out.Secret,
 		&out.Confirmed, &out.ConfirmedAt,
 		&out.CreatedAt, &out.UpdatedAt, &out.DeletedAt,
 	)
@@ -75,14 +76,14 @@ func (r *PostgresMFARepository) GetSecret(ctx context.Context, userID string) (*
 }
 
 // ConfirmSecret marks the user's MFA secret as confirmed.
-func (r *PostgresMFARepository) ConfirmSecret(ctx context.Context, userID string) error {
+func (r *PostgresMFARepository) ConfirmSecret(ctx context.Context, tenantID uuid.UUID, userID string) error {
 	now := time.Now().UTC()
 	query := `
 		UPDATE mfa_secrets
 		SET confirmed = TRUE, confirmed_at = $1, updated_at = $2
-		WHERE user_id = $3 AND deleted_at IS NULL AND confirmed = FALSE`
+		WHERE user_id = $3 AND tenant_id = $4 AND deleted_at IS NULL AND confirmed = FALSE`
 
-	tag, err := r.pool.Exec(ctx, query, now, now, userID)
+	tag, err := r.pool.Exec(ctx, query, now, now, userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("confirm mfa secret: %w", err)
 	}
@@ -94,14 +95,14 @@ func (r *PostgresMFARepository) ConfirmSecret(ctx context.Context, userID string
 }
 
 // DeleteSecret soft-deletes the user's active MFA secret.
-func (r *PostgresMFARepository) DeleteSecret(ctx context.Context, userID string) error {
+func (r *PostgresMFARepository) DeleteSecret(ctx context.Context, tenantID uuid.UUID, userID string) error {
 	now := time.Now().UTC()
 	query := `
 		UPDATE mfa_secrets
 		SET deleted_at = $1, updated_at = $2
-		WHERE user_id = $3 AND deleted_at IS NULL`
+		WHERE user_id = $3 AND tenant_id = $4 AND deleted_at IS NULL`
 
-	tag, err := r.pool.Exec(ctx, query, now, now, userID)
+	tag, err := r.pool.Exec(ctx, query, now, now, userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("delete mfa secret: %w", err)
 	}
@@ -113,7 +114,7 @@ func (r *PostgresMFARepository) DeleteSecret(ctx context.Context, userID string)
 }
 
 // SaveBackupCodes stores hashed backup codes, deleting any existing unused codes first.
-func (r *PostgresMFARepository) SaveBackupCodes(ctx context.Context, userID string, codes []domain.BackupCode) error {
+func (r *PostgresMFARepository) SaveBackupCodes(ctx context.Context, tenantID uuid.UUID, userID string, codes []domain.BackupCode) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -121,7 +122,7 @@ func (r *PostgresMFARepository) SaveBackupCodes(ctx context.Context, userID stri
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Remove existing unused codes.
-	_, err = tx.Exec(ctx, `DELETE FROM mfa_backup_codes WHERE user_id = $1 AND used = FALSE`, userID)
+	_, err = tx.Exec(ctx, `DELETE FROM mfa_backup_codes WHERE user_id = $1 AND tenant_id = $2 AND used = FALSE`, userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("delete old backup codes: %w", err)
 	}
@@ -129,8 +130,8 @@ func (r *PostgresMFARepository) SaveBackupCodes(ctx context.Context, userID stri
 	// Insert new codes.
 	for _, c := range codes {
 		_, err = tx.Exec(ctx,
-			`INSERT INTO mfa_backup_codes (id, user_id, code_hash, created_at) VALUES ($1, $2, $3, $4)`,
-			c.ID, c.UserID, c.CodeHash, c.CreatedAt,
+			`INSERT INTO mfa_backup_codes (id, tenant_id, user_id, code_hash, created_at) VALUES ($1, $2, $3, $4, $5)`,
+			c.ID, c.TenantID, c.UserID, c.CodeHash, c.CreatedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("insert backup code: %w", err)
@@ -145,14 +146,14 @@ func (r *PostgresMFARepository) SaveBackupCodes(ctx context.Context, userID stri
 }
 
 // GetBackupCodes returns all backup codes for a user.
-func (r *PostgresMFARepository) GetBackupCodes(ctx context.Context, userID string) ([]domain.BackupCode, error) {
+func (r *PostgresMFARepository) GetBackupCodes(ctx context.Context, tenantID uuid.UUID, userID string) ([]domain.BackupCode, error) {
 	query := `
-		SELECT id, user_id, code_hash, used, used_at, created_at
+		SELECT id, tenant_id, user_id, code_hash, used, used_at, created_at
 		FROM mfa_backup_codes
-		WHERE user_id = $1
+		WHERE user_id = $1 AND tenant_id = $2
 		ORDER BY created_at`
 
-	rows, err := r.pool.Query(ctx, query, userID)
+	rows, err := r.pool.Query(ctx, query, userID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("get backup codes: %w", err)
 	}
@@ -161,7 +162,7 @@ func (r *PostgresMFARepository) GetBackupCodes(ctx context.Context, userID strin
 	var codes []domain.BackupCode
 	for rows.Next() {
 		var c domain.BackupCode
-		if err := rows.Scan(&c.ID, &c.UserID, &c.CodeHash, &c.Used, &c.UsedAt, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.UserID, &c.CodeHash, &c.Used, &c.UsedAt, &c.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan backup code: %w", err)
 		}
 		codes = append(codes, c)
@@ -174,14 +175,14 @@ func (r *PostgresMFARepository) GetBackupCodes(ctx context.Context, userID strin
 }
 
 // ConsumeBackupCode marks a single unused backup code as used.
-func (r *PostgresMFARepository) ConsumeBackupCode(ctx context.Context, userID, codeHash string) error {
+func (r *PostgresMFARepository) ConsumeBackupCode(ctx context.Context, tenantID uuid.UUID, userID, codeHash string) error {
 	now := time.Now().UTC()
 	query := `
 		UPDATE mfa_backup_codes
 		SET used = TRUE, used_at = $1
-		WHERE user_id = $2 AND code_hash = $3 AND used = FALSE`
+		WHERE user_id = $2 AND tenant_id = $3 AND code_hash = $4 AND used = FALSE`
 
-	tag, err := r.pool.Exec(ctx, query, now, userID, codeHash)
+	tag, err := r.pool.Exec(ctx, query, now, userID, tenantID, codeHash)
 	if err != nil {
 		return fmt.Errorf("consume backup code: %w", err)
 	}
@@ -193,15 +194,15 @@ func (r *PostgresMFARepository) ConsumeBackupCode(ctx context.Context, userID, c
 }
 
 // GetMFAStatus returns the MFA enrollment status for a user.
-func (r *PostgresMFARepository) GetMFAStatus(ctx context.Context, userID string) (*domain.MFAStatus, error) {
+func (r *PostgresMFARepository) GetMFAStatus(ctx context.Context, tenantID uuid.UUID, userID string) (*domain.MFAStatus, error) {
 	status := &domain.MFAStatus{UserID: userID}
 
 	// Check for active secret.
 	var mfaType string
 	var confirmed bool
 	err := r.pool.QueryRow(ctx,
-		`SELECT type, confirmed FROM mfa_secrets WHERE user_id = $1 AND deleted_at IS NULL`,
-		userID,
+		`SELECT type, confirmed FROM mfa_secrets WHERE user_id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+		userID, tenantID,
 	).Scan(&mfaType, &confirmed)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("get mfa status: %w", err)
@@ -214,8 +215,8 @@ func (r *PostgresMFARepository) GetMFAStatus(ctx context.Context, userID string)
 
 	// Count remaining backup codes.
 	err = r.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM mfa_backup_codes WHERE user_id = $1 AND used = FALSE`,
-		userID,
+		`SELECT COUNT(*) FROM mfa_backup_codes WHERE user_id = $1 AND tenant_id = $2 AND used = FALSE`,
+		userID, tenantID,
 	).Scan(&status.BackupLeft)
 	if err != nil {
 		return nil, fmt.Errorf("count backup codes: %w", err)

@@ -20,35 +20,35 @@ import (
 // --- Mock ClientRepository ---
 
 type mockClientRepo struct {
-	listFn             func(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error)
-	findByIDFn         func(ctx context.Context, id uuid.UUID) (*domain.Client, error)
-	findByNameFn       func(ctx context.Context, name string) (*domain.Client, error)
+	listFn             func(ctx context.Context, tenantID uuid.UUID, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error)
+	findByIDFn         func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.Client, error)
+	findByNameFn       func(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Client, error)
 	createFn           func(ctx context.Context, client *domain.Client) (*domain.Client, error)
 	updateFn           func(ctx context.Context, client *domain.Client) (*domain.Client, error)
-	updateSecretHashFn func(ctx context.Context, id uuid.UUID, secretHash string) error
-	rotateSecretFn     func(ctx context.Context, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
-	softDeleteFn       func(ctx context.Context, id uuid.UUID) error
+	updateSecretHashFn func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, secretHash string) error
+	rotateSecretFn     func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
+	softDeleteFn       func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
 }
 
-func (m *mockClientRepo) List(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error) {
+func (m *mockClientRepo) List(ctx context.Context, tenantID uuid.UUID, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error) {
 	if m.listFn != nil {
-		return m.listFn(ctx, limit, offset, clientType, includeRevoked)
+		return m.listFn(ctx, tenantID, limit, offset, clientType, includeRevoked)
 	}
 	return []*domain.Client{testClient()}, 1, nil
 }
 
-func (m *mockClientRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.Client, error) {
+func (m *mockClientRepo) FindByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.Client, error) {
 	if m.findByIDFn != nil {
-		return m.findByIDFn(ctx, id)
+		return m.findByIDFn(ctx, tenantID, id)
 	}
 	c := testClient()
 	c.ID = id
 	return c, nil
 }
 
-func (m *mockClientRepo) FindByName(ctx context.Context, name string) (*domain.Client, error) {
+func (m *mockClientRepo) FindByName(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Client, error) {
 	if m.findByNameFn != nil {
-		return m.findByNameFn(ctx, name)
+		return m.findByNameFn(ctx, tenantID, name)
 	}
 	c := testClient()
 	c.Name = name
@@ -69,23 +69,23 @@ func (m *mockClientRepo) Update(ctx context.Context, client *domain.Client) (*do
 	return client, nil
 }
 
-func (m *mockClientRepo) UpdateSecretHash(ctx context.Context, id uuid.UUID, secretHash string) error {
+func (m *mockClientRepo) UpdateSecretHash(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, secretHash string) error {
 	if m.updateSecretHashFn != nil {
-		return m.updateSecretHashFn(ctx, id, secretHash)
+		return m.updateSecretHashFn(ctx, tenantID, id, secretHash)
 	}
 	return nil
 }
 
-func (m *mockClientRepo) RotateSecret(ctx context.Context, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error {
+func (m *mockClientRepo) RotateSecret(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error {
 	if m.rotateSecretFn != nil {
-		return m.rotateSecretFn(ctx, id, newSecretHash, gracePeriodEnds)
+		return m.rotateSecretFn(ctx, tenantID, id, newSecretHash, gracePeriodEnds)
 	}
 	return nil
 }
 
-func (m *mockClientRepo) SoftDelete(ctx context.Context, id uuid.UUID) error {
+func (m *mockClientRepo) SoftDelete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
 	if m.softDeleteFn != nil {
-		return m.softDeleteFn(ctx, id)
+		return m.softDeleteFn(ctx, tenantID, id)
 	}
 	return nil
 }
@@ -125,7 +125,7 @@ func TestClientService_ListClients(t *testing.T) {
 
 func TestClientService_ListClients_Error(t *testing.T) {
 	repo := &mockClientRepo{
-		listFn: func(_ context.Context, _, _ int, _ string, _ bool) ([]*domain.Client, int, error) {
+		listFn: func(_ context.Context, _ uuid.UUID, _, _ int, _ string, _ bool) ([]*domain.Client, int, error) {
 			return nil, 0, fmt.Errorf("db error")
 		},
 	}
@@ -141,7 +141,7 @@ func TestClientService_ListClients_Error(t *testing.T) {
 func TestClientService_GetClient(t *testing.T) {
 	clientID := uuid.New()
 	repo := &mockClientRepo{
-		findByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Client, error) {
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
 			assert.Equal(t, clientID, id)
 			c := testClient()
 			c.ID = id
@@ -165,7 +165,7 @@ func TestClientService_GetClient_InvalidID(t *testing.T) {
 
 func TestClientService_GetClient_NotFound(t *testing.T) {
 	repo := &mockClientRepo{
-		findByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Client, error) {
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
 			return nil, storage.ErrNotFound
 		},
 	}
@@ -214,7 +214,7 @@ func TestClientService_CreateClient_Conflict(t *testing.T) {
 func TestClientService_UpdateClient(t *testing.T) {
 	clientID := uuid.New()
 	repo := &mockClientRepo{
-		findByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Client, error) {
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
 			c := testClient()
 			c.ID = id
 			return c, nil
@@ -230,7 +230,7 @@ func TestClientService_UpdateClient(t *testing.T) {
 
 func TestClientService_UpdateClient_NotFound(t *testing.T) {
 	repo := &mockClientRepo{
-		findByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Client, error) {
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
 			return nil, storage.ErrNotFound
 		},
 	}
@@ -253,7 +253,7 @@ func TestClientService_DeleteClient(t *testing.T) {
 
 func TestClientService_DeleteClient_NotFound(t *testing.T) {
 	repo := &mockClientRepo{
-		softDeleteFn: func(_ context.Context, _ uuid.UUID) error {
+		softDeleteFn: func(_ context.Context, _ uuid.UUID, _ uuid.UUID) error {
 			return fmt.Errorf("not found: %w", storage.ErrNotFound)
 		},
 	}
@@ -277,7 +277,7 @@ func TestClientService_DeleteClient_InvalidID(t *testing.T) {
 func TestClientService_RotateSecret(t *testing.T) {
 	clientID := uuid.New()
 	repo := &mockClientRepo{
-		findByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Client, error) {
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
 			c := testClient()
 			c.ID = id
 			return c, nil
@@ -293,7 +293,7 @@ func TestClientService_RotateSecret(t *testing.T) {
 
 func TestClientService_RotateSecret_NotFound(t *testing.T) {
 	repo := &mockClientRepo{
-		rotateSecretFn: func(_ context.Context, _ uuid.UUID, _ string, _ time.Time) error {
+		rotateSecretFn: func(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ string, _ time.Time) error {
 			return fmt.Errorf("not found: %w", storage.ErrNotFound)
 		},
 	}

@@ -24,7 +24,7 @@ type memWebhookRepo struct {
 	webhooks []*domain.Webhook
 }
 
-func (r *memWebhookRepo) List(_ context.Context, limit, offset int, _ bool) ([]*domain.Webhook, int, error) {
+func (r *memWebhookRepo) List(_ context.Context, _ uuid.UUID, limit, offset int, _ bool) ([]*domain.Webhook, int, error) {
 	total := len(r.webhooks)
 	if offset >= total {
 		return nil, total, nil
@@ -36,7 +36,7 @@ func (r *memWebhookRepo) List(_ context.Context, limit, offset int, _ bool) ([]*
 	return r.webhooks[offset:end], total, nil
 }
 
-func (r *memWebhookRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Webhook, error) {
+func (r *memWebhookRepo) FindByID(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Webhook, error) {
 	for _, wh := range r.webhooks {
 		if wh.ID == id {
 			return wh, nil
@@ -45,7 +45,7 @@ func (r *memWebhookRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Webh
 	return nil, fmt.Errorf("not found")
 }
 
-func (r *memWebhookRepo) FindActiveByEventType(_ context.Context, eventType string) ([]*domain.Webhook, error) {
+func (r *memWebhookRepo) FindActiveByEventType(_ context.Context, _ uuid.UUID, eventType string) ([]*domain.Webhook, error) {
 	var result []*domain.Webhook
 	for _, wh := range r.webhooks {
 		if !wh.Active {
@@ -76,7 +76,7 @@ func (r *memWebhookRepo) Update(_ context.Context, wh *domain.Webhook) (*domain.
 	return nil, fmt.Errorf("not found")
 }
 
-func (r *memWebhookRepo) Delete(_ context.Context, id uuid.UUID) error {
+func (r *memWebhookRepo) Delete(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
 	for i, wh := range r.webhooks {
 		if wh.ID == id {
 			r.webhooks = append(r.webhooks[:i], r.webhooks[i+1:]...)
@@ -86,7 +86,7 @@ func (r *memWebhookRepo) Delete(_ context.Context, id uuid.UUID) error {
 	return fmt.Errorf("not found")
 }
 
-func (r *memWebhookRepo) IncrementFailureCount(_ context.Context, id uuid.UUID) error {
+func (r *memWebhookRepo) IncrementFailureCount(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
 	for _, wh := range r.webhooks {
 		if wh.ID == id {
 			wh.FailureCount++
@@ -96,7 +96,7 @@ func (r *memWebhookRepo) IncrementFailureCount(_ context.Context, id uuid.UUID) 
 	return nil
 }
 
-func (r *memWebhookRepo) ResetFailureCount(_ context.Context, id uuid.UUID) error {
+func (r *memWebhookRepo) ResetFailureCount(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
 	for _, wh := range r.webhooks {
 		if wh.ID == id {
 			wh.FailureCount = 0
@@ -106,7 +106,7 @@ func (r *memWebhookRepo) ResetFailureCount(_ context.Context, id uuid.UUID) erro
 	return nil
 }
 
-func (r *memWebhookRepo) Disable(_ context.Context, id uuid.UUID) error {
+func (r *memWebhookRepo) Disable(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
 	for _, wh := range r.webhooks {
 		if wh.ID == id {
 			wh.Active = false
@@ -120,7 +120,7 @@ type memDeliveryRepo struct {
 	deliveries []*domain.WebhookDelivery
 }
 
-func (r *memDeliveryRepo) List(_ context.Context, webhookID uuid.UUID, limit, offset int) ([]*domain.WebhookDelivery, int, error) {
+func (r *memDeliveryRepo) List(_ context.Context, _ uuid.UUID, webhookID uuid.UUID, limit, offset int) ([]*domain.WebhookDelivery, int, error) {
 	var filtered []*domain.WebhookDelivery
 	for _, d := range r.deliveries {
 		if d.WebhookID == webhookID {
@@ -138,7 +138,7 @@ func (r *memDeliveryRepo) List(_ context.Context, webhookID uuid.UUID, limit, of
 	return filtered[offset:end], total, nil
 }
 
-func (r *memDeliveryRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.WebhookDelivery, error) {
+func (r *memDeliveryRepo) FindByID(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.WebhookDelivery, error) {
 	for _, d := range r.deliveries {
 		if d.ID == id {
 			return d, nil
@@ -152,7 +152,7 @@ func (r *memDeliveryRepo) Create(_ context.Context, d *domain.WebhookDelivery) (
 	return d, nil
 }
 
-func (r *memDeliveryRepo) UpdateStatus(_ context.Context, id uuid.UUID, status string, responseCode *int, responseBody *string, deliveredAt *time.Time) error {
+func (r *memDeliveryRepo) UpdateStatus(_ context.Context, _ uuid.UUID, id uuid.UUID, status string, responseCode *int, responseBody *string, deliveredAt *time.Time) error {
 	for _, d := range r.deliveries {
 		if d.ID == id {
 			d.Status = status
@@ -165,7 +165,7 @@ func (r *memDeliveryRepo) UpdateStatus(_ context.Context, id uuid.UUID, status s
 	return nil
 }
 
-func (r *memDeliveryRepo) FindPendingRetries(_ context.Context, _ time.Time, _ int) ([]*domain.WebhookDelivery, error) {
+func (r *memDeliveryRepo) FindPendingRetries(_ context.Context, _ uuid.UUID, _ time.Time, _ int) ([]*domain.WebhookDelivery, error) {
 	return nil, nil
 }
 
