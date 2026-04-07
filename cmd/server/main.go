@@ -188,6 +188,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	adminUserRepo := storage.NewPostgresAdminUserRepository(pgPool)
 	clientRepo := storage.NewPostgresClientRepository(pgPool)
 	apiKeyRepo := storage.NewPostgresAPIKeyRepository(pgPool)
+	tenantRepo := storage.NewPostgresTenantRepository(pgPool)
 
 	// ── Webhook repositories ─────────────────────────────────────────────
 	webhookRepo := storage.NewPostgresWebhookRepository(pgPool)
@@ -202,6 +203,11 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
 	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, hasher, log, auditSvc)
 	adminWebhookSvc := admin.NewWebhookService(webhookRepo, webhookDeliveryRepo, webhookDispatcher, log, auditSvc)
+	adminTenantSvc := admin.NewTenantService(tenantRepo, log, auditSvc)
+
+	// ── Tenant resolution ─────────────────────────────────────────────────
+	tenantCache := middleware.NewTenantCache(cfg.Tenant.CacheTTL)
+	tenantResolver := middleware.NewTenantRepositoryResolver(tenantRepo)
 
 	// ── Middleware ─────────────────────────────────────────────────────────
 	rateLimiter := middleware.NewRateLimiter(cfg.Rate)
@@ -221,6 +227,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Auth:            middleware.AuthMiddleware(tokenSvc),
 		DPoP:            dpopMW,
 		Metrics:         metricsCollector.Middleware(),
+		Tenant:          middleware.TenantMiddleware(cfg.Tenant, tenantResolver, tenantCache),
 	}
 
 	// Consent and client approval services are registered in subsequent issues.
@@ -246,6 +253,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Webhooks:       adminWebhookSvc,
 		Brokers:        adminBrokerSvc,
 		SAML:           adminSAMLSvc,
+		Tenants:        adminTenantSvc,
 	}
 
 	adminDeps := &api.AdminDeps{

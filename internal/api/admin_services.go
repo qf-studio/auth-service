@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"time"
+
+	"github.com/qf-studio/auth-service/internal/domain"
 )
 
 // --- Admin response types ---
@@ -450,6 +452,15 @@ type AdminSAMLService interface {
 	GetAttributeMapping(ctx context.Context, idpID string) (map[string]string, error)
 }
 
+// AdminTenantService defines admin operations for tenant management.
+type AdminTenantService interface {
+	GetTenant(ctx context.Context, id string) (*domain.Tenant, error)
+	ListTenants(ctx context.Context, page, perPage int) ([]*domain.Tenant, int, error)
+	CreateTenant(ctx context.Context, tenant *domain.Tenant) (*domain.Tenant, error)
+	UpdateTenant(ctx context.Context, tenant *domain.Tenant) (*domain.Tenant, error)
+	DeleteTenant(ctx context.Context, id string) error
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users          AdminUserService
@@ -462,4 +473,5 @@ type AdminServices struct {
 	Webhooks       AdminWebhookService
 	Brokers        AdminBrokerService
 	SAML           AdminSAMLService
+	Tenants        AdminTenantService
 }
