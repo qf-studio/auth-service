@@ -53,6 +53,11 @@ const (
 	EventBrokerTokenIssue            = "broker_token_issue"
 	EventBrokerTokenDenied           = "broker_token_denied"
 
+	// Tenant events.
+	EventAdminTenantCreate = "admin_tenant_create"
+	EventAdminTenantUpdate = "admin_tenant_update"
+	EventAdminTenantDelete = "admin_tenant_delete"
+
 	// SAML events.
 	EventSAMLLogin            = "saml_login"
 	EventSAMLLoginFailure     = "saml_login_failure"

@@ -237,6 +237,79 @@ type AdminAPIKeyService interface {
 	RotateAPIKey(ctx context.Context, keyID string) (*AdminAPIKeyWithSecret, error)
 }
 
+// --- Tenant admin types ---
+
+// AdminTenant represents a tenant in admin API responses.
+type AdminTenant struct {
+	ID        string              `json:"id"`
+	Name      string              `json:"name"`
+	Slug      string              `json:"slug"`
+	Config    AdminTenantConfig   `json:"config"`
+	Status    string              `json:"status"`
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
+}
+
+// AdminTenantConfig mirrors domain.TenantConfig for API responses.
+type AdminTenantConfig struct {
+	PasswordPolicy        *AdminTenantPasswordPolicy `json:"password_policy,omitempty"`
+	MFA                   *AdminTenantMFAConfig      `json:"mfa,omitempty"`
+	AllowedOAuthProviders []string                   `json:"allowed_oauth_providers,omitempty"`
+	TokenTTLs             *AdminTenantTokenTTLs      `json:"token_ttls,omitempty"`
+}
+
+// AdminTenantPasswordPolicy mirrors domain.TenantPasswordPolicy for API responses.
+type AdminTenantPasswordPolicy struct {
+	MinLength    *int `json:"min_length,omitempty"`
+	MaxLength    *int `json:"max_length,omitempty"`
+	MaxAgeDays   *int `json:"max_age_days,omitempty"`
+	HistoryCount *int `json:"history_count,omitempty"`
+}
+
+// AdminTenantMFAConfig mirrors domain.TenantMFAConfig for API responses.
+type AdminTenantMFAConfig struct {
+	Required        bool     `json:"required"`
+	AllowedMethods  []string `json:"allowed_methods,omitempty"`
+	GracePeriodDays int      `json:"grace_period_days,omitempty"`
+}
+
+// AdminTenantTokenTTLs mirrors domain.TenantTokenTTLs for API responses.
+type AdminTenantTokenTTLs struct {
+	AccessTokenTTL  *int `json:"access_token_ttl,omitempty"`
+	RefreshTokenTTL *int `json:"refresh_token_ttl,omitempty"`
+}
+
+// AdminTenantList is the paginated response for listing tenants.
+type AdminTenantList struct {
+	Tenants []AdminTenant `json:"tenants"`
+	Total   int           `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
+}
+
+// CreateTenantRequest is the request body for creating a tenant.
+type CreateTenantRequest struct {
+	Name   string              `json:"name"   validate:"required,min=1,max=255"`
+	Slug   string              `json:"slug"   validate:"required,min=1,max=63"`
+	Config *AdminTenantConfig  `json:"config" validate:"omitempty"`
+}
+
+// UpdateTenantRequest is the request body for updating a tenant.
+type UpdateTenantRequest struct {
+	Name   *string             `json:"name"   validate:"omitempty,min=1,max=255"`
+	Config *AdminTenantConfig  `json:"config" validate:"omitempty"`
+	Status *string             `json:"status" validate:"omitempty,oneof=active suspended"`
+}
+
+// AdminTenantService defines admin operations for tenant management.
+type AdminTenantService interface {
+	ListTenants(ctx context.Context, page, perPage int) (*AdminTenantList, error)
+	GetTenant(ctx context.Context, tenantID string) (*AdminTenant, error)
+	CreateTenant(ctx context.Context, req *CreateTenantRequest) (*AdminTenant, error)
+	UpdateTenant(ctx context.Context, tenantID string, req *UpdateTenantRequest) (*AdminTenant, error)
+	DeleteTenant(ctx context.Context, tenantID string) error
+}
+
 // --- Webhook admin types ---
 
 // AdminWebhook represents a webhook subscription in admin API responses.
@@ -462,4 +535,5 @@ type AdminServices struct {
 	Webhooks       AdminWebhookService
 	Brokers        AdminBrokerService
 	SAML           AdminSAMLService
+	Tenants        AdminTenantService
 }
