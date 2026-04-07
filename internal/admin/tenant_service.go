@@ -53,11 +53,11 @@ func NewTenantService(repo storage.TenantRepository, logger *zap.Logger, auditor
 	}
 }
 
-// ListTenants returns a paginated list of tenants.
-func (s *TenantService) ListTenants(ctx context.Context, page, perPage int) (*api.AdminTenantList, error) {
+// ListTenants returns a paginated list of tenants, optionally filtered by status.
+func (s *TenantService) ListTenants(ctx context.Context, page, perPage int, status string) (*api.AdminTenantList, error) {
 	offset := (page - 1) * perPage
 
-	tenants, total, err := s.repo.List(ctx, perPage, offset)
+	tenants, total, err := s.repo.List(ctx, perPage, offset, status)
 	if err != nil {
 		s.logger.Error("list tenants failed", zap.Error(err))
 		return nil, fmt.Errorf("list tenants: %w", api.ErrInternalError)
