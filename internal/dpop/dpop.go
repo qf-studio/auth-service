@@ -170,7 +170,7 @@ func (v *Validator) ValidateProof(ctx context.Context, proofJWT, httpMethod, htt
 	// Compute JWK Thumbprint (RFC 7638) for token binding.
 	thumbprint, err := JWKThumbprint(pubKey)
 	if err != nil {
-		return nil, fmt.Errorf("%w: compute thumbprint: %v", ErrInvalidProof, err)
+		return nil, fmt.Errorf("%w: compute thumbprint: %w", ErrInvalidProof, err)
 	}
 
 	return &Proof{
@@ -191,7 +191,7 @@ func (v *Validator) parseAndVerify(proofJWT string) (crypto.PublicKey, jwt.MapCl
 	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
 	unverified, _, err := parser.ParseUnverified(proofJWT, jwt.MapClaims{})
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: parse failed: %v", ErrInvalidProof, err)
+		return nil, nil, fmt.Errorf("%w: parse failed: %w", ErrInvalidProof, err)
 	}
 
 	// Validate typ header.
@@ -216,7 +216,7 @@ func (v *Validator) parseAndVerify(proofJWT string) (crypto.PublicKey, jwt.MapCl
 	}
 	pubKey, err := parseJWK(jwkRaw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: invalid jwk: %v", ErrInvalidProof, err)
+		return nil, nil, fmt.Errorf("%w: invalid jwk: %w", ErrInvalidProof, err)
 	}
 
 	// Re-parse with full signature verification using the embedded public key.
@@ -227,7 +227,7 @@ func (v *Validator) parseAndVerify(proofJWT string) (crypto.PublicKey, jwt.MapCl
 		return pubKey, nil
 	}, jwt.WithValidMethods([]string{alg}), jwt.WithoutClaimsValidation())
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: signature verification failed: %v", ErrInvalidProof, err)
+		return nil, nil, fmt.Errorf("%w: signature verification failed: %w", ErrInvalidProof, err)
 	}
 
 	claims, ok := verified.Claims.(jwt.MapClaims)
@@ -268,7 +268,7 @@ func (v *Validator) validateClaims(claims jwt.MapClaims, httpMethod, httpURL, ac
 
 	// htu must match scheme + host + path (query/fragment ignored per RFC 9449).
 	if err := matchHTU(htu, httpURL); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidProof, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidProof, err)
 	}
 
 	// iat must be within acceptable time window.
@@ -310,7 +310,7 @@ func (v *Validator) handleNonce(ctx context.Context, nonce string) error {
 		}
 		valid, err := v.validateNonce(ctx, nonce)
 		if err != nil {
-			return fmt.Errorf("%w: nonce check failed: %v", ErrInvalidProof, err)
+			return fmt.Errorf("%w: nonce check failed: %w", ErrInvalidProof, err)
 		}
 		if !valid {
 			return ErrUseNonce
@@ -406,7 +406,7 @@ func (v *Validator) checkAndStoreJTI(ctx context.Context, jti string) error {
 		return fmt.Errorf("%w: jti already used (replay)", ErrInvalidProof)
 	}
 	if err != nil {
-		return fmt.Errorf("%w: jti check failed: %v", ErrInvalidProof, err)
+		return fmt.Errorf("%w: jti check failed: %w", ErrInvalidProof, err)
 	}
 	_ = result
 	return nil
