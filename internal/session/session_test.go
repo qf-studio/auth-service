@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/qf-studio/auth-service/internal/api"
@@ -215,6 +216,44 @@ func TestService_DeleteAllSessions(t *testing.T) {
 
 	sessions, _ := svc.ListSessions(ctx, "user-1")
 	assert.Empty(t, sessions)
+}
+
+// --- Concurrent access safety ---
+
+func TestMemoryStore_ConcurrentAccess(t *testing.T) {
+	store := session.NewMemoryStore()
+	ctx := context.Background()
+
+	const goroutines = 20
+	done := make(chan struct{})
+
+	// Writers: create sessions concurrently.
+	for i := range goroutines {
+		go func(i int) {
+			defer func() { done <- struct{}{} }()
+			_ = store.Create(ctx, &api.SessionInfo{
+				ID:     fmt.Sprintf("sess-%d", i),
+				UserID: "shared-user",
+			})
+		}(i)
+	}
+
+	// Readers: list sessions concurrently.
+	for range goroutines {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			_, _ = store.ListByUser(ctx, "shared-user")
+		}()
+	}
+
+	for range goroutines * 2 {
+		<-done
+	}
+
+	// All goroutines completed without data race — verified by -race flag.
+	sessions, err := store.ListByUser(ctx, "shared-user")
+	require.NoError(t, err)
+	assert.Len(t, sessions, goroutines)
 }
 
 // --- Error propagation tests using a failing store ---
