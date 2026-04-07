@@ -91,6 +91,8 @@ func NewService(
 // InitiateEnrollment generates a new TOTP secret for the user.
 // The secret is stored unconfirmed until the user verifies a code.
 func (s *Service) InitiateEnrollment(ctx context.Context, userID, email string) (*api.MFAEnrollmentResult, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
+
 	otpDigits := otp.DigitsSix
 	if s.cfg.Digits == 8 {
 		otpDigits = otp.DigitsEight
@@ -109,6 +111,7 @@ func (s *Service) InitiateEnrollment(ctx context.Context, userID, email string) 
 
 	secret := &domain.MFASecret{
 		ID:        uuid.New().String(),
+		TenantID:  tenantID,
 		UserID:    userID,
 		Type:      "totp",
 		Secret:    key.Secret(),
@@ -139,7 +142,9 @@ func (s *Service) InitiateEnrollment(ctx context.Context, userID, email string) 
 // ConfirmEnrollment validates a TOTP code against the unconfirmed secret,
 // confirms it, and generates backup codes.
 func (s *Service) ConfirmEnrollment(ctx context.Context, userID, code string) ([]string, error) {
-	secret, err := s.repo.GetSecret(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	secret, err := s.repo.GetSecret(ctx, tenantID, userID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("no pending enrollment: %w", api.ErrNotFound)
@@ -155,17 +160,17 @@ func (s *Service) ConfirmEnrollment(ctx context.Context, userID, code string) ([
 		return nil, fmt.Errorf("invalid totp code: %w", api.ErrUnauthorized)
 	}
 
-	if err := s.repo.ConfirmSecret(ctx, userID); err != nil {
+	if err := s.repo.ConfirmSecret(ctx, tenantID, userID); err != nil {
 		return nil, fmt.Errorf("confirm mfa secret: %w", err)
 	}
 
 	// Generate and store backup codes.
-	plainCodes, hashedCodes, err := s.generateBackupCodes(userID)
+	plainCodes, hashedCodes, err := s.generateBackupCodes(tenantID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("generate backup codes: %w", err)
 	}
 
-	if err := s.repo.SaveBackupCodes(ctx, userID, hashedCodes); err != nil {
+	if err := s.repo.SaveBackupCodes(ctx, tenantID, userID, hashedCodes); err != nil {
 		return nil, fmt.Errorf("save backup codes: %w", err)
 	}
 
@@ -180,7 +185,9 @@ func (s *Service) ConfirmEnrollment(ctx context.Context, userID, code string) ([
 
 // VerifyTOTP validates a TOTP code for a user with confirmed MFA.
 func (s *Service) VerifyTOTP(ctx context.Context, userID, code string) error {
-	secret, err := s.repo.GetSecret(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	secret, err := s.repo.GetSecret(ctx, tenantID, userID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return fmt.Errorf("mfa not enrolled: %w", api.ErrNotFound)
@@ -211,9 +218,10 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID, code string) error {
 
 // VerifyBackupCode validates and consumes a backup code for a user.
 func (s *Service) VerifyBackupCode(ctx context.Context, userID, code string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
 	codeHash := hashBackupCode(code)
 
-	if err := s.repo.ConsumeBackupCode(ctx, userID, codeHash); err != nil {
+	if err := s.repo.ConsumeBackupCode(ctx, tenantID, userID, codeHash); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			if _, err := s.tokens.RecordFailedAttempt(ctx, userID); err != nil {
 				if errors.Is(err, storage.ErrMFAMaxAttempts) {
@@ -280,7 +288,9 @@ func (s *Service) CompleteMFALogin(ctx context.Context, mfaToken, code, codeType
 
 // Disable removes MFA for a user (deletes secret and backup codes).
 func (s *Service) Disable(ctx context.Context, userID string) error {
-	if err := s.repo.DeleteSecret(ctx, userID); err != nil {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	if err := s.repo.DeleteSecret(ctx, tenantID, userID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return fmt.Errorf("mfa not enrolled: %w", api.ErrNotFound)
 		}
@@ -298,7 +308,9 @@ func (s *Service) Disable(ctx context.Context, userID string) error {
 
 // GetStatus returns the MFA status for a user.
 func (s *Service) GetStatus(ctx context.Context, userID string) (*api.MFAStatusResponse, error) {
-	status, err := s.repo.GetMFAStatus(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	status, err := s.repo.GetMFAStatus(ctx, tenantID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get mfa status: %w", err)
 	}
@@ -327,7 +339,9 @@ func (s *Service) GenerateMFAToken(ctx context.Context, userID string) (string, 
 
 // IsMFAEnabled checks if the user has confirmed MFA enrollment.
 func (s *Service) IsMFAEnabled(ctx context.Context, userID string) (bool, error) {
-	status, err := s.repo.GetMFAStatus(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	status, err := s.repo.GetMFAStatus(ctx, tenantID, userID)
 	if err != nil {
 		return false, fmt.Errorf("check mfa status: %w", err)
 	}
@@ -350,7 +364,7 @@ func (s *Service) validateTOTP(secret, code string) bool {
 
 // generateBackupCodes creates the configured number of random backup codes.
 // Returns both plaintext codes (for the user) and hashed domain objects (for storage).
-func (s *Service) generateBackupCodes(userID string) ([]string, []domain.BackupCode, error) {
+func (s *Service) generateBackupCodes(tenantID uuid.UUID, userID string) ([]string, []domain.BackupCode, error) {
 	count := s.cfg.BackupCodeCount
 	if count <= 0 {
 		count = 10
@@ -370,6 +384,7 @@ func (s *Service) generateBackupCodes(userID string) ([]string, []domain.BackupC
 
 		hashed = append(hashed, domain.BackupCode{
 			ID:        uuid.New().String(),
+			TenantID:  tenantID,
 			UserID:    userID,
 			CodeHash:  hashBackupCode(code),
 			Used:      false,

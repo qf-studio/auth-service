@@ -44,9 +44,10 @@ func (s *UserService) SetAuditReadRepo(repo storage.AuditReadRepository) {
 
 // ListUsers returns a paginated list of users filtered by status.
 func (s *UserService) ListUsers(ctx context.Context, page, perPage int, status string) (*api.AdminUserList, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	offset := (page - 1) * perPage
 
-	users, total, err := s.repo.List(ctx, perPage, offset, status)
+	users, total, err := s.repo.List(ctx, tenantID, perPage, offset, status)
 	if err != nil {
 		s.logger.Error("list users failed", zap.Error(err))
 		return nil, fmt.Errorf("list users: %w", api.ErrInternalError)
@@ -68,7 +69,8 @@ func (s *UserService) ListUsers(ctx context.Context, page, perPage int, status s
 
 // GetUser retrieves a single user by ID.
 func (s *UserService) GetUser(ctx context.Context, userID string) (*api.AdminUser, error) {
-	u, err := s.repo.FindByID(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+	u, err := s.repo.FindByID(ctx, tenantID, userID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("user %s: %w", userID, api.ErrNotFound)
@@ -83,6 +85,7 @@ func (s *UserService) GetUser(ctx context.Context, userID string) (*api.AdminUse
 
 // CreateUser creates a new user with a hashed password.
 func (s *UserService) CreateUser(ctx context.Context, req *api.CreateUserRequest) (*api.AdminUser, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	hash, err := s.hasher.Hash(req.Password)
 	if err != nil {
 		s.logger.Error("password hash failed", zap.Error(err))
@@ -97,6 +100,7 @@ func (s *UserService) CreateUser(ctx context.Context, req *api.CreateUserRequest
 
 	user := &domain.User{
 		ID:           uuid.New().String(),
+		TenantID:     tenantID,
 		Email:        req.Email,
 		PasswordHash: hash,
 		Name:         req.Name,
@@ -126,7 +130,8 @@ func (s *UserService) CreateUser(ctx context.Context, req *api.CreateUserRequest
 
 // UpdateUser modifies user fields.
 func (s *UserService) UpdateUser(ctx context.Context, userID string, req *api.UpdateUserRequest) (*api.AdminUser, error) {
-	existing, err := s.repo.FindByID(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+	existing, err := s.repo.FindByID(ctx, tenantID, userID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("user %s: %w", userID, api.ErrNotFound)
@@ -168,7 +173,8 @@ func (s *UserService) UpdateUser(ctx context.Context, userID string, req *api.Up
 
 // DeleteUser performs a soft delete.
 func (s *UserService) DeleteUser(ctx context.Context, userID string) error {
-	err := s.repo.SoftDelete(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+	err := s.repo.SoftDelete(ctx, tenantID, userID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return fmt.Errorf("user %s: %w", userID, api.ErrNotFound)
@@ -188,7 +194,8 @@ func (s *UserService) DeleteUser(ctx context.Context, userID string) error {
 
 // LockUser locks a user account with a reason.
 func (s *UserService) LockUser(ctx context.Context, userID string, reason string) (*api.AdminUser, error) {
-	u, err := s.repo.Lock(ctx, userID, reason)
+	tenantID := domain.TenantIDFromContext(ctx)
+	u, err := s.repo.Lock(ctx, tenantID, userID, reason)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("user %s: %w", userID, api.ErrNotFound)
@@ -209,7 +216,8 @@ func (s *UserService) LockUser(ctx context.Context, userID string, reason string
 
 // UnlockUser removes the lock from a user account.
 func (s *UserService) UnlockUser(ctx context.Context, userID string) (*api.AdminUser, error) {
-	u, err := s.repo.Unlock(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+	u, err := s.repo.Unlock(ctx, tenantID, userID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("user %s: %w", userID, api.ErrNotFound)
@@ -239,7 +247,8 @@ func (s *UserService) SearchUsers(ctx context.Context, page, perPage int, email,
 		CreatedBefore: createdBefore,
 	}
 
-	users, total, err := s.repo.SearchUsers(ctx, perPage, offset, filter)
+	tenantID := domain.TenantIDFromContext(ctx)
+	users, total, err := s.repo.SearchUsers(ctx, tenantID, perPage, offset, filter)
 	if err != nil {
 		s.logger.Error("search users failed", zap.Error(err))
 		return nil, fmt.Errorf("search users: %w", api.ErrInternalError)
@@ -259,7 +268,8 @@ func (s *UserService) SearchUsers(ctx context.Context, page, perPage int, email,
 
 // BulkLock locks multiple user accounts at once.
 func (s *UserService) BulkLock(ctx context.Context, req *api.BulkUserActionRequest) (*api.BulkActionResult, error) {
-	affected, err := s.repo.BulkUpdateStatus(ctx, req.UserIDs, "lock", req.Reason)
+	tenantID := domain.TenantIDFromContext(ctx)
+	affected, err := s.repo.BulkUpdateStatus(ctx, tenantID, req.UserIDs, "lock", req.Reason)
 	if err != nil {
 		s.logger.Error("bulk lock failed", zap.Error(err))
 		return nil, fmt.Errorf("bulk lock: %w", api.ErrInternalError)
@@ -276,7 +286,8 @@ func (s *UserService) BulkLock(ctx context.Context, req *api.BulkUserActionReque
 
 // BulkUnlock unlocks multiple user accounts at once.
 func (s *UserService) BulkUnlock(ctx context.Context, req *api.BulkUserActionRequest) (*api.BulkActionResult, error) {
-	affected, err := s.repo.BulkUpdateStatus(ctx, req.UserIDs, "unlock", "")
+	tenantID := domain.TenantIDFromContext(ctx)
+	affected, err := s.repo.BulkUpdateStatus(ctx, tenantID, req.UserIDs, "unlock", "")
 	if err != nil {
 		s.logger.Error("bulk unlock failed", zap.Error(err))
 		return nil, fmt.Errorf("bulk unlock: %w", api.ErrInternalError)
@@ -293,7 +304,8 @@ func (s *UserService) BulkUnlock(ctx context.Context, req *api.BulkUserActionReq
 
 // BulkSuspend soft-deletes multiple user accounts at once.
 func (s *UserService) BulkSuspend(ctx context.Context, req *api.BulkUserActionRequest) (*api.BulkActionResult, error) {
-	affected, err := s.repo.BulkUpdateStatus(ctx, req.UserIDs, "suspend", req.Reason)
+	tenantID := domain.TenantIDFromContext(ctx)
+	affected, err := s.repo.BulkUpdateStatus(ctx, tenantID, req.UserIDs, "suspend", req.Reason)
 	if err != nil {
 		s.logger.Error("bulk suspend failed", zap.Error(err))
 		return nil, fmt.Errorf("bulk suspend: %w", api.ErrInternalError)
@@ -310,7 +322,8 @@ func (s *UserService) BulkSuspend(ctx context.Context, req *api.BulkUserActionRe
 
 // BulkAssignRole assigns a role to multiple users at once.
 func (s *UserService) BulkAssignRole(ctx context.Context, req *api.BulkAssignRoleRequest) (*api.BulkActionResult, error) {
-	affected, err := s.repo.BulkAssignRole(ctx, req.UserIDs, req.Role)
+	tenantID := domain.TenantIDFromContext(ctx)
+	affected, err := s.repo.BulkAssignRole(ctx, tenantID, req.UserIDs, req.Role)
 	if err != nil {
 		s.logger.Error("bulk assign role failed", zap.Error(err))
 		return nil, fmt.Errorf("bulk assign role: %w", api.ErrInternalError)
@@ -331,8 +344,10 @@ func (s *UserService) GetActivity(ctx context.Context, userID string, page, perP
 		return nil, fmt.Errorf("activity timeline not available: %w", api.ErrInternalError)
 	}
 
+	tenantID := domain.TenantIDFromContext(ctx)
+
 	// Verify user exists.
-	if _, err := s.repo.FindByID(ctx, userID); err != nil {
+	if _, err := s.repo.FindByID(ctx, tenantID, userID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("user %s: %w", userID, api.ErrNotFound)
 		}
@@ -341,7 +356,7 @@ func (s *UserService) GetActivity(ctx context.Context, userID string, page, perP
 	}
 
 	offset := (page - 1) * perPage
-	entries, total, err := s.auditRepo.ListByTargetID(ctx, userID, perPage, offset)
+	entries, total, err := s.auditRepo.ListByTargetID(ctx, tenantID, userID, perPage, offset)
 	if err != nil {
 		s.logger.Error("get user activity failed", zap.String("user_id", userID), zap.Error(err))
 		return nil, fmt.Errorf("get activity: %w", api.ErrInternalError)

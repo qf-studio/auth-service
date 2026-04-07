@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,54 +38,54 @@ func (m *mockUserRepository) Create(ctx context.Context, user *domain.User) (*do
 	return user, nil
 }
 
-func (m *mockUserRepository) FindByID(ctx context.Context, id string) (*domain.User, error) {
+func (m *mockUserRepository) FindByID(ctx context.Context, _ uuid.UUID, id string) (*domain.User, error) {
 	if m.findByIDFn != nil {
 		return m.findByIDFn(ctx, id)
 	}
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockUserRepository) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
+func (m *mockUserRepository) FindByEmail(ctx context.Context, _ uuid.UUID, email string) (*domain.User, error) {
 	if m.findByEmailFn != nil {
 		return m.findByEmailFn(ctx, email)
 	}
 	return nil, storage.ErrNotFound
 }
 
-func (m *mockUserRepository) UpdateLastLogin(ctx context.Context, userID string, ts time.Time) error {
+func (m *mockUserRepository) UpdateLastLogin(ctx context.Context, _ uuid.UUID, userID string, ts time.Time) error {
 	if m.updateLastLogin != nil {
 		return m.updateLastLogin(ctx, userID, ts)
 	}
 	return nil
 }
 
-func (m *mockUserRepository) SetEmailVerifyToken(_ context.Context, _ string, _ string, _ time.Time) error {
+func (m *mockUserRepository) SetEmailVerifyToken(_ context.Context, _ uuid.UUID, _ string, _ string, _ time.Time) error {
 	return nil
 }
 
-func (m *mockUserRepository) ConsumeEmailVerifyToken(_ context.Context, _ string) (*domain.User, error) {
+func (m *mockUserRepository) ConsumeEmailVerifyToken(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockUserRepository) UpdatePasswordHash(ctx context.Context, userID, newHash string) error {
+func (m *mockUserRepository) UpdatePasswordHash(ctx context.Context, _ uuid.UUID, userID, newHash string) error {
 	if m.updatePasswordHashFn != nil {
 		return m.updatePasswordHashFn(ctx, userID, newHash)
 	}
 	return nil
 }
 
-func (m *mockUserRepository) SetForcePasswordChange(_ context.Context, _ string, _ bool) error {
+func (m *mockUserRepository) SetForcePasswordChange(_ context.Context, _ uuid.UUID, _ string, _ bool) error {
 	return nil
 }
 
-func (m *mockUserRepository) GetPasswordHistory(ctx context.Context, userID string, limit int) ([]domain.PasswordHistoryEntry, error) {
+func (m *mockUserRepository) GetPasswordHistory(ctx context.Context, _ uuid.UUID, userID string, limit int) ([]domain.PasswordHistoryEntry, error) {
 	if m.getPasswordHistoryFn != nil {
 		return m.getPasswordHistoryFn(ctx, userID, limit)
 	}
 	return nil, nil
 }
 
-func (m *mockUserRepository) AddPasswordHistory(ctx context.Context, userID, hash string) error {
+func (m *mockUserRepository) AddPasswordHistory(ctx context.Context, _ uuid.UUID, userID, hash string) error {
 	if m.addPasswordHistoryFn != nil {
 		return m.addPasswordHistoryFn(ctx, userID, hash)
 	}
@@ -96,22 +97,22 @@ type mockRefreshTokenRepository struct {
 	revokeAllForUser func(ctx context.Context, userID string) error
 }
 
-func (m *mockRefreshTokenRepository) Store(ctx context.Context, sig, userID string, exp time.Time) error {
+func (m *mockRefreshTokenRepository) Store(ctx context.Context, _ uuid.UUID, sig, userID string, exp time.Time) error {
 	if m.storeFn != nil {
 		return m.storeFn(ctx, sig, userID, exp)
 	}
 	return nil
 }
 
-func (m *mockRefreshTokenRepository) FindBySignature(_ context.Context, _ string) (*domain.RefreshTokenRecord, error) {
+func (m *mockRefreshTokenRepository) FindBySignature(_ context.Context, _ uuid.UUID, _ string) (*domain.RefreshTokenRecord, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockRefreshTokenRepository) Revoke(_ context.Context, _ string) error {
+func (m *mockRefreshTokenRepository) Revoke(_ context.Context, _ uuid.UUID, _ string) error {
 	return nil
 }
 
-func (m *mockRefreshTokenRepository) RevokeAllForUser(ctx context.Context, userID string) error {
+func (m *mockRefreshTokenRepository) RevokeAllForUser(ctx context.Context, _ uuid.UUID, userID string) error {
 	if m.revokeAllForUser != nil {
 		return m.revokeAllForUser(ctx, userID)
 	}

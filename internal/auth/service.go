@@ -98,6 +98,8 @@ func (s *Service) SetMFAChecker(mfa MFAChecker) {
 
 // Register creates a new user account with policy-aware password validation.
 func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.UserInfo, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
+
 	if err := s.policy.ValidatePassword(pwd); err != nil {
 		return nil, fmt.Errorf("password policy: %w", err)
 	}
@@ -110,6 +112,7 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 	now := time.Now().UTC()
 	user := &domain.User{
 		ID:                fmt.Sprintf("usr_%s", generateID()),
+		TenantID:          tenantID,
 		Email:             email,
 		PasswordHash:      hash,
 		Name:              name,
@@ -126,7 +129,7 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 
 	// Seed password history with initial hash.
 	if s.policy.HistoryCount() > 0 {
-		if histErr := s.users.AddPasswordHistory(ctx, created.ID, hash); histErr != nil {
+		if histErr := s.users.AddPasswordHistory(ctx, tenantID, created.ID, hash); histErr != nil {
 			s.logger.Error("failed to seed password history", zap.String("user_id", created.ID), zap.Error(histErr))
 		}
 	}
@@ -148,7 +151,9 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 // Login authenticates a user by email and password.
 // Returns a generic ErrUnauthorized for all failure modes to prevent user enumeration.
 func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult, error) {
-	user, err := s.users.FindByEmail(ctx, email)
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	user, err := s.users.FindByEmail(ctx, tenantID, email)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			s.audit.LogEvent(ctx, audit.Event{
@@ -202,7 +207,7 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		if hashErr != nil {
 			s.logger.Error("failed to re-hash password", zap.String("user_id", user.ID), zap.Error(hashErr))
 		} else {
-			if upErr := s.users.UpdatePasswordHash(ctx, user.ID, newHash); upErr != nil {
+			if upErr := s.users.UpdatePasswordHash(ctx, tenantID, user.ID, newHash); upErr != nil {
 				s.logger.Error("failed to persist upgraded hash", zap.String("user_id", user.ID), zap.Error(upErr))
 			} else {
 				s.audit.LogEvent(ctx, audit.Event{
@@ -271,12 +276,12 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	result.UserID = user.ID
 
 	// Store refresh token signature in DB (best-effort — don't fail login).
-	if err := s.tokens.Store(ctx, result.RefreshToken, user.ID, time.Now().Add(24*time.Hour)); err != nil {
+	if err := s.tokens.Store(ctx, tenantID, result.RefreshToken, user.ID, time.Now().Add(24*time.Hour)); err != nil {
 		s.logger.Error("failed to store refresh token signature", zap.String("user_id", user.ID), zap.Error(err))
 	}
 
 	// Update last_login_at (best-effort — don't fail login).
-	if err := s.users.UpdateLastLogin(ctx, user.ID, time.Now().UTC()); err != nil {
+	if err := s.users.UpdateLastLogin(ctx, tenantID, user.ID, time.Now().UTC()); err != nil {
 		s.logger.Error("failed to update last_login_at", zap.String("user_id", user.ID), zap.Error(err))
 	}
 
@@ -335,13 +340,15 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 		return fmt.Errorf("retrieve reset token: %w", err)
 	}
 
+	tenantID := domain.TenantIDFromContext(ctx)
+
 	// Validate new password against policy.
 	if err := s.policy.ValidatePassword(newPassword); err != nil {
 		return fmt.Errorf("password policy: %w", err)
 	}
 
 	// Find user to get current hash for history.
-	user, err := s.users.FindByEmail(ctx, email)
+	user, err := s.users.FindByEmail(ctx, tenantID, email)
 	if err != nil {
 		s.logger.Error("failed to find user for password reset", zap.String("email", email), zap.Error(err))
 		return fmt.Errorf("find user: %w", err)
@@ -349,7 +356,7 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 
 	// Check password history for reuse.
 	if s.policy.HistoryCount() > 0 {
-		history, histErr := s.users.GetPasswordHistory(ctx, user.ID, s.policy.HistoryCount())
+		history, histErr := s.users.GetPasswordHistory(ctx, tenantID, user.ID, s.policy.HistoryCount())
 		if histErr != nil {
 			s.logger.Error("failed to get password history", zap.String("user_id", user.ID), zap.Error(histErr))
 		} else if reuseErr := s.policy.CheckHistory(newPassword, history); reuseErr != nil {
@@ -370,18 +377,18 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 
 	// Save old hash to history.
 	if s.policy.HistoryCount() > 0 {
-		if histErr := s.users.AddPasswordHistory(ctx, user.ID, user.PasswordHash); histErr != nil {
+		if histErr := s.users.AddPasswordHistory(ctx, tenantID, user.ID, user.PasswordHash); histErr != nil {
 			s.logger.Error("failed to add password history", zap.String("user_id", user.ID), zap.Error(histErr))
 		}
 	}
 
 	// Update password hash in database.
-	if err := s.users.UpdatePasswordHash(ctx, user.ID, newHash); err != nil {
+	if err := s.users.UpdatePasswordHash(ctx, tenantID, user.ID, newHash); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
 
 	// Revoke all sessions for this user.
-	if err := s.tokens.RevokeAllForUser(ctx, user.ID); err != nil {
+	if err := s.tokens.RevokeAllForUser(ctx, tenantID, user.ID); err != nil {
 		s.logger.Error("failed to revoke sessions after password reset", zap.String("user_id", user.ID), zap.Error(err))
 	}
 
@@ -409,7 +416,9 @@ func (s *Service) GetMe(_ context.Context, userID string) (*api.UserInfo, error)
 // ChangePassword changes the authenticated user's password.
 // Validates old password, checks policy, checks history, then updates.
 func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
-	user, err := s.users.FindByID(ctx, userID)
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	user, err := s.users.FindByID(ctx, tenantID, userID)
 	if err != nil {
 		return fmt.Errorf("find user: %w", err)
 	}
@@ -430,7 +439,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 
 	// Check password history for reuse.
 	if s.policy.HistoryCount() > 0 {
-		history, histErr := s.users.GetPasswordHistory(ctx, userID, s.policy.HistoryCount())
+		history, histErr := s.users.GetPasswordHistory(ctx, tenantID, userID, s.policy.HistoryCount())
 		if histErr != nil {
 			s.logger.Error("failed to get password history", zap.String("user_id", userID), zap.Error(histErr))
 		} else if reuseErr := s.policy.CheckHistory(newPassword, history); reuseErr != nil {
@@ -451,12 +460,12 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 
 	// Save old hash to history before updating.
 	if s.policy.HistoryCount() > 0 {
-		if histErr := s.users.AddPasswordHistory(ctx, userID, user.PasswordHash); histErr != nil {
+		if histErr := s.users.AddPasswordHistory(ctx, tenantID, userID, user.PasswordHash); histErr != nil {
 			s.logger.Error("failed to add password history", zap.String("user_id", userID), zap.Error(histErr))
 		}
 	}
 
-	if err := s.users.UpdatePasswordHash(ctx, userID, newHash); err != nil {
+	if err := s.users.UpdatePasswordHash(ctx, tenantID, userID, newHash); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
 
@@ -492,7 +501,9 @@ func (s *Service) Logout(ctx context.Context, userID, token string) error {
 
 // LogoutAll terminates all sessions for the user by revoking all refresh tokens.
 func (s *Service) LogoutAll(ctx context.Context, userID string) error {
-	if err := s.tokens.RevokeAllForUser(ctx, userID); err != nil {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	if err := s.tokens.RevokeAllForUser(ctx, tenantID, userID); err != nil {
 		s.logger.Error("failed to revoke all refresh tokens",
 			zap.String("user_id", userID),
 			zap.Error(err),

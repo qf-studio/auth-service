@@ -69,7 +69,8 @@ func (s *AuthServiceServer) GetUser(ctx context.Context, req *authv1.GetUserRequ
 		return nil, status.Error(codes.InvalidArgument, "user_id is required")
 	}
 
-	user, err := s.userRepo.FindByID(ctx, req.GetUserId())
+	tenantID := domain.TenantIDFromContext(ctx)
+	user, err := s.userRepo.FindByID(ctx, tenantID, req.GetUserId())
 	if err != nil {
 		s.logger.Error("grpc: user lookup failed",
 			zap.String("user_id", req.GetUserId()),

@@ -78,7 +78,8 @@ func NewDispatcher(
 
 // Dispatch enqueues a webhook delivery for all webhooks subscribed to the event type.
 func (d *Dispatcher) Dispatch(ctx context.Context, eventType string, data map[string]string) {
-	webhooks, err := d.webhookRepo.FindActiveByEventType(ctx, eventType)
+	tenantID := domain.TenantIDFromContext(ctx)
+	webhooks, err := d.webhookRepo.FindActiveByEventType(ctx, tenantID, eventType)
 	if err != nil {
 		d.logger.Error("find webhooks for dispatch failed", zap.String("event_type", eventType), zap.Error(err))
 		return
@@ -141,6 +142,7 @@ func (d *Dispatcher) deliver(ctx context.Context, wh *domain.Webhook, payload Pa
 	now := time.Now().UTC()
 	delivery := &domain.WebhookDelivery{
 		ID:        uuid.New(),
+		TenantID:  wh.TenantID,
 		WebhookID: wh.ID,
 		EventType: payload.EventType,
 		Payload:   string(body),
@@ -162,15 +164,15 @@ func (d *Dispatcher) deliver(ctx context.Context, wh *domain.Webhook, payload Pa
 		delivery.ResponseCode = responseCode
 		delivery.ResponseBody = responseBody
 		delivery.DeliveredAt = &deliveredAt
-		_ = d.deliveryRepo.UpdateStatus(ctx, delivery.ID, delivery.Status, responseCode, responseBody, &deliveredAt)
-		_ = d.webhookRepo.ResetFailureCount(ctx, wh.ID)
+		_ = d.deliveryRepo.UpdateStatus(ctx, wh.TenantID, delivery.ID, delivery.Status, responseCode, responseBody, &deliveredAt)
+		_ = d.webhookRepo.ResetFailureCount(ctx, wh.TenantID, wh.ID)
 		return delivery, nil
 	}
 
 	// Delivery failed — schedule retry if within limits.
 	delivery.ResponseCode = responseCode
 	delivery.ResponseBody = responseBody
-	_ = d.webhookRepo.IncrementFailureCount(ctx, wh.ID)
+	_ = d.webhookRepo.IncrementFailureCount(ctx, wh.TenantID, wh.ID)
 
 	if delivery.Attempt < maxRetries {
 		retryAt := time.Now().UTC().Add(retryDelays[delivery.Attempt-1])
@@ -180,11 +182,11 @@ func (d *Dispatcher) deliver(ctx context.Context, wh *domain.Webhook, payload Pa
 		delivery.Status = domain.WebhookDeliveryStatusFailed
 	}
 
-	_ = d.deliveryRepo.UpdateStatus(ctx, delivery.ID, delivery.Status, responseCode, responseBody, nil)
+	_ = d.deliveryRepo.UpdateStatus(ctx, wh.TenantID, delivery.ID, delivery.Status, responseCode, responseBody, nil)
 
 	// Auto-disable webhook after too many consecutive failures.
 	if wh.FailureCount+1 >= domain.MaxWebhookFailures {
-		_ = d.webhookRepo.Disable(ctx, wh.ID)
+		_ = d.webhookRepo.Disable(ctx, wh.TenantID, wh.ID)
 		d.logger.Warn("webhook auto-disabled due to excessive failures",
 			zap.String("webhook_id", wh.ID.String()),
 			zap.Int("failure_count", wh.FailureCount+1),

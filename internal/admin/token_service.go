@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
@@ -20,7 +21,7 @@ type TokenValidator interface {
 
 // RefreshTokenLookup abstracts DB lookup for refresh token introspection.
 type RefreshTokenLookup interface {
-	FindBySignature(ctx context.Context, signature string) (*domain.RefreshTokenRecord, error)
+	FindBySignature(ctx context.Context, tenantID uuid.UUID, signature string) (*domain.RefreshTokenRecord, error)
 }
 
 // TokenService implements api.AdminTokenService.
@@ -128,7 +129,8 @@ func (s *TokenService) introspectRefreshToken(ctx context.Context, token string)
 	}
 	signature := parts[1]
 
-	rec, err := s.refreshTokens.FindBySignature(ctx, signature)
+	tenantID := domain.TenantIDFromContext(ctx)
+	rec, err := s.refreshTokens.FindBySignature(ctx, tenantID, signature)
 	if err != nil {
 		// Not found or other lookup error: return active=false, not an error to the caller.
 		s.logger.Debug("refresh token lookup failed during introspect", zap.Error(err))

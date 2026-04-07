@@ -52,9 +52,10 @@ func NewWebhookService(
 
 // ListWebhooks returns a paginated list of webhooks.
 func (s *WebhookService) ListWebhooks(ctx context.Context, page, perPage int, activeOnly bool) (*api.AdminWebhookList, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	offset := (page - 1) * perPage
 
-	webhooks, total, err := s.webhookRepo.List(ctx, perPage, offset, activeOnly)
+	webhooks, total, err := s.webhookRepo.List(ctx, tenantID, perPage, offset, activeOnly)
 	if err != nil {
 		s.logger.Error("list webhooks failed", zap.Error(err))
 		return nil, fmt.Errorf("list webhooks: %w", api.ErrInternalError)
@@ -76,12 +77,13 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, page, perPage int, ac
 
 // GetWebhook retrieves a single webhook by ID.
 func (s *WebhookService) GetWebhook(ctx context.Context, webhookID string) (*api.AdminWebhook, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(webhookID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid webhook ID: %w", api.ErrNotFound)
 	}
 
-	wh, err := s.webhookRepo.FindByID(ctx, id)
+	wh, err := s.webhookRepo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("webhook %s: %w", webhookID, api.ErrNotFound)
@@ -96,6 +98,7 @@ func (s *WebhookService) GetWebhook(ctx context.Context, webhookID string) (*api
 
 // CreateWebhook creates a new webhook subscription with a generated signing secret.
 func (s *WebhookService) CreateWebhook(ctx context.Context, req *api.CreateWebhookRequest) (*api.AdminWebhookWithSecret, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	secret, err := generateWebhookSecret()
 	if err != nil {
 		s.logger.Error("generate webhook secret failed", zap.Error(err))
@@ -110,6 +113,7 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *api.CreateWebho
 
 	wh := &domain.Webhook{
 		ID:           uuid.New(),
+		TenantID:     tenantID,
 		URL:          req.URL,
 		SecretHash:   secret, // stored as the raw secret for HMAC signing
 		EventTypes:   eventTypes,
@@ -139,12 +143,13 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *api.CreateWebho
 
 // UpdateWebhook modifies webhook fields (url, event_types, active).
 func (s *WebhookService) UpdateWebhook(ctx context.Context, webhookID string, req *api.UpdateWebhookRequest) (*api.AdminWebhook, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(webhookID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid webhook ID: %w", api.ErrNotFound)
 	}
 
-	existing, err := s.webhookRepo.FindByID(ctx, id)
+	existing, err := s.webhookRepo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("webhook %s: %w", webhookID, api.ErrNotFound)
@@ -183,12 +188,13 @@ func (s *WebhookService) UpdateWebhook(ctx context.Context, webhookID string, re
 
 // DeleteWebhook removes a webhook by ID.
 func (s *WebhookService) DeleteWebhook(ctx context.Context, webhookID string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(webhookID)
 	if err != nil {
 		return fmt.Errorf("invalid webhook ID: %w", api.ErrNotFound)
 	}
 
-	err = s.webhookRepo.Delete(ctx, id)
+	err = s.webhookRepo.Delete(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return fmt.Errorf("webhook %s: %w", webhookID, api.ErrNotFound)
@@ -206,13 +212,14 @@ func (s *WebhookService) DeleteWebhook(ctx context.Context, webhookID string) er
 
 // ListDeliveries returns a paginated list of delivery log entries for a webhook.
 func (s *WebhookService) ListDeliveries(ctx context.Context, webhookID string, page, perPage int) (*api.AdminWebhookDeliveryList, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(webhookID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid webhook ID: %w", api.ErrNotFound)
 	}
 
 	// Verify webhook exists.
-	if _, err := s.webhookRepo.FindByID(ctx, id); err != nil {
+	if _, err := s.webhookRepo.FindByID(ctx, tenantID, id); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("webhook %s: %w", webhookID, api.ErrNotFound)
 		}
@@ -221,7 +228,7 @@ func (s *WebhookService) ListDeliveries(ctx context.Context, webhookID string, p
 	}
 
 	offset := (page - 1) * perPage
-	deliveries, total, err := s.deliveryRepo.List(ctx, id, perPage, offset)
+	deliveries, total, err := s.deliveryRepo.List(ctx, tenantID, id, perPage, offset)
 	if err != nil {
 		s.logger.Error("list deliveries failed", zap.String("webhook_id", webhookID), zap.Error(err))
 		return nil, fmt.Errorf("list deliveries: %w", api.ErrInternalError)
@@ -243,6 +250,7 @@ func (s *WebhookService) ListDeliveries(ctx context.Context, webhookID string, p
 
 // RetryDelivery manually retries a failed webhook delivery.
 func (s *WebhookService) RetryDelivery(ctx context.Context, webhookID, deliveryID string) (*api.AdminWebhookDelivery, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	whID, err := uuid.Parse(webhookID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid webhook ID: %w", api.ErrNotFound)
@@ -253,7 +261,7 @@ func (s *WebhookService) RetryDelivery(ctx context.Context, webhookID, deliveryI
 		return nil, fmt.Errorf("invalid delivery ID: %w", api.ErrNotFound)
 	}
 
-	wh, err := s.webhookRepo.FindByID(ctx, whID)
+	wh, err := s.webhookRepo.FindByID(ctx, tenantID, whID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("webhook %s: %w", webhookID, api.ErrNotFound)
@@ -262,7 +270,7 @@ func (s *WebhookService) RetryDelivery(ctx context.Context, webhookID, deliveryI
 		return nil, fmt.Errorf("retry delivery: %w", api.ErrInternalError)
 	}
 
-	existing, err := s.deliveryRepo.FindByID(ctx, dID)
+	existing, err := s.deliveryRepo.FindByID(ctx, tenantID, dID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("delivery %s: %w", deliveryID, api.ErrNotFound)
@@ -314,12 +322,13 @@ func (s *WebhookService) RetryDelivery(ctx context.Context, webhookID, deliveryI
 
 // TestWebhook sends a test event to a webhook and returns the delivery result.
 func (s *WebhookService) TestWebhook(ctx context.Context, webhookID string, req *api.TestWebhookRequest) (*api.TestWebhookResponse, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(webhookID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid webhook ID: %w", api.ErrNotFound)
 	}
 
-	wh, err := s.webhookRepo.FindByID(ctx, id)
+	wh, err := s.webhookRepo.FindByID(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, fmt.Errorf("webhook %s: %w", webhookID, api.ErrNotFound)
