@@ -1088,3 +1088,299 @@ func TestPostgresClientRepository_SoftDelete_AlreadyDeleted(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, storage.ErrAlreadyDeleted)
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// TenantRepository tests
+// ────────────────────────────────────────────────────────────────────────────
+
+// newTestTenant returns a domain.Tenant with unique values for testing.
+func newTestTenant(status domain.TenantStatus) *domain.Tenant {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	id := uuid.New()
+	return &domain.Tenant{
+		ID:        id,
+		Name:      "Tenant-" + id.String()[:8],
+		Slug:      "tenant-" + id.String()[:8],
+		Config:    domain.TenantConfig{},
+		Status:    status,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+}
+
+func TestPostgresTenantRepository_Create(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	tenant := newTestTenant(domain.TenantStatusActive)
+	created, err := repo.Create(ctx, tenant)
+	require.NoError(t, err)
+
+	assert.Equal(t, tenant.ID, created.ID)
+	assert.Equal(t, tenant.Name, created.Name)
+	assert.Equal(t, tenant.Slug, created.Slug)
+	assert.Equal(t, domain.TenantStatusActive, created.Status)
+}
+
+func TestPostgresTenantRepository_Create_DuplicateSlug(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	tenant := newTestTenant(domain.TenantStatusActive)
+	_, err := repo.Create(ctx, tenant)
+	require.NoError(t, err)
+
+	dup := newTestTenant(domain.TenantStatusActive)
+	dup.Slug = tenant.Slug
+	_, err = repo.Create(ctx, dup)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrDuplicateTenant)
+}
+
+func TestPostgresTenantRepository_FindByID(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	tenant := newTestTenant(domain.TenantStatusActive)
+	_, err := repo.Create(ctx, tenant)
+	require.NoError(t, err)
+
+	found, err := repo.FindByID(ctx, tenant.ID)
+	require.NoError(t, err)
+	assert.Equal(t, tenant.Name, found.Name)
+	assert.Equal(t, tenant.Slug, found.Slug)
+}
+
+func TestPostgresTenantRepository_FindByID_NotFound(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.FindByID(ctx, uuid.New())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestPostgresTenantRepository_FindBySlug(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	tenant := newTestTenant(domain.TenantStatusActive)
+	_, err := repo.Create(ctx, tenant)
+	require.NoError(t, err)
+
+	found, err := repo.FindBySlug(ctx, tenant.Slug)
+	require.NoError(t, err)
+	assert.Equal(t, tenant.ID, found.ID)
+	assert.Equal(t, tenant.Name, found.Name)
+}
+
+func TestPostgresTenantRepository_List(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	// Create 3 additional tenants (default tenant already exists).
+	for i := 0; i < 3; i++ {
+		_, err := repo.Create(ctx, newTestTenant(domain.TenantStatusActive))
+		require.NoError(t, err)
+	}
+
+	tenants, total, err := repo.List(ctx, 10, 0, "")
+	require.NoError(t, err)
+	assert.Equal(t, 4, total) // 3 new + 1 default
+	assert.Len(t, tenants, 4)
+}
+
+func TestPostgresTenantRepository_List_Pagination(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		_, err := repo.Create(ctx, newTestTenant(domain.TenantStatusActive))
+		require.NoError(t, err)
+	}
+
+	// Page 1: 2 items
+	tenants, total, err := repo.List(ctx, 2, 0, "")
+	require.NoError(t, err)
+	assert.Equal(t, 6, total) // 5 new + 1 default
+	assert.Len(t, tenants, 2)
+
+	// Page 2: 2 items
+	tenants, total, err = repo.List(ctx, 2, 2, "")
+	require.NoError(t, err)
+	assert.Equal(t, 6, total)
+	assert.Len(t, tenants, 2)
+}
+
+func TestPostgresTenantRepository_List_StatusFilter(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	// Default tenant is "active". Create tenants with different statuses.
+	for i := 0; i < 2; i++ {
+		_, err := repo.Create(ctx, newTestTenant(domain.TenantStatusActive))
+		require.NoError(t, err)
+	}
+	for i := 0; i < 3; i++ {
+		_, err := repo.Create(ctx, newTestTenant(domain.TenantStatusSuspended))
+		require.NoError(t, err)
+	}
+	_, err := repo.Create(ctx, newTestTenant(domain.TenantStatusDeleted))
+	require.NoError(t, err)
+
+	// Filter: active → 2 new + 1 default = 3
+	tenants, total, err := repo.List(ctx, 10, 0, "active")
+	require.NoError(t, err)
+	assert.Equal(t, 3, total)
+	assert.Len(t, tenants, 3)
+	for _, ten := range tenants {
+		assert.Equal(t, domain.TenantStatusActive, ten.Status)
+	}
+
+	// Filter: suspended → 3
+	tenants, total, err = repo.List(ctx, 10, 0, "suspended")
+	require.NoError(t, err)
+	assert.Equal(t, 3, total)
+	assert.Len(t, tenants, 3)
+	for _, ten := range tenants {
+		assert.Equal(t, domain.TenantStatusSuspended, ten.Status)
+	}
+
+	// Filter: deleted → 1
+	tenants, total, err = repo.List(ctx, 10, 0, "deleted")
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	assert.Len(t, tenants, 1)
+	assert.Equal(t, domain.TenantStatusDeleted, tenants[0].Status)
+
+	// No filter → all 7
+	tenants, total, err = repo.List(ctx, 10, 0, "")
+	require.NoError(t, err)
+	assert.Equal(t, 7, total) // 2 active + 1 default + 3 suspended + 1 deleted
+	assert.Len(t, tenants, 7)
+}
+
+func TestPostgresTenantRepository_List_StatusFilter_Pagination(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	// Create 5 active tenants (plus the default = 6 total active).
+	for i := 0; i < 5; i++ {
+		_, err := repo.Create(ctx, newTestTenant(domain.TenantStatusActive))
+		require.NoError(t, err)
+	}
+	// 2 suspended
+	for i := 0; i < 2; i++ {
+		_, err := repo.Create(ctx, newTestTenant(domain.TenantStatusSuspended))
+		require.NoError(t, err)
+	}
+
+	// Page through active tenants with limit=2
+	tenants, total, err := repo.List(ctx, 2, 0, "active")
+	require.NoError(t, err)
+	assert.Equal(t, 6, total)
+	assert.Len(t, tenants, 2)
+
+	tenants, total, err = repo.List(ctx, 2, 4, "active")
+	require.NoError(t, err)
+	assert.Equal(t, 6, total)
+	assert.Len(t, tenants, 2)
+}
+
+func TestPostgresTenantRepository_Update(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	tenant := newTestTenant(domain.TenantStatusActive)
+	created, err := repo.Create(ctx, tenant)
+	require.NoError(t, err)
+
+	created.Name = "Updated Name"
+	created.Status = domain.TenantStatusSuspended
+	updated, err := repo.Update(ctx, created)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated Name", updated.Name)
+	assert.Equal(t, domain.TenantStatusSuspended, updated.Status)
+}
+
+func TestPostgresTenantRepository_Update_Config(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	tenant := newTestTenant(domain.TenantStatusActive)
+	created, err := repo.Create(ctx, tenant)
+	require.NoError(t, err)
+
+	created.Config = domain.TenantConfig{
+		AllowedOAuthProviders: []string{"google", "github"},
+	}
+	updated, err := repo.Update(ctx, created)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"google", "github"}, updated.Config.AllowedOAuthProviders)
+
+	// Verify via FindByID
+	found, err := repo.FindByID(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"google", "github"}, found.Config.AllowedOAuthProviders)
+}
+
+func TestPostgresTenantRepository_Delete(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	tenant := newTestTenant(domain.TenantStatusActive)
+	_, err := repo.Create(ctx, tenant)
+	require.NoError(t, err)
+
+	err = repo.Delete(ctx, tenant.ID)
+	require.NoError(t, err)
+
+	_, err = repo.FindByID(ctx, tenant.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestPostgresTenantRepository_Delete_NotFound(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	err := repo.Delete(ctx, uuid.New())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+// TestPostgresTenantRepository_Create_WithConfig verifies JSONB config round-trips.
+func TestPostgresTenantRepository_Create_WithConfig(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	minLen := 20
+	tenant := newTestTenant(domain.TenantStatusActive)
+	tenant.Config = domain.TenantConfig{
+		AllowedOAuthProviders: []string{"google"},
+		PasswordPolicy: &domain.TenantPasswordPolicy{
+			MinLength: &minLen,
+		},
+	}
+
+	created, err := repo.Create(ctx, tenant)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"google"}, created.Config.AllowedOAuthProviders)
+	require.NotNil(t, created.Config.PasswordPolicy)
+	assert.Equal(t, 20, *created.Config.PasswordPolicy.MinLength)
+}
+
