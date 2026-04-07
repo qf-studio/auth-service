@@ -147,12 +147,12 @@ func parseHash(encoded string) (salt, key []byte, err error) {
 
 	salt, err = base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: decode salt: %s", ErrInvalidHash, err)
+		return nil, nil, fmt.Errorf("%w: decode salt: %w", ErrInvalidHash, err)
 	}
 
 	key, err = base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: decode key: %s", ErrInvalidHash, err)
+		return nil, nil, fmt.Errorf("%w: decode key: %w", ErrInvalidHash, err)
 	}
 
 	return salt, key, nil
