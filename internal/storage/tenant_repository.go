@@ -20,7 +20,7 @@ type TenantRepository interface {
 	Create(ctx context.Context, tenant *domain.Tenant) (*domain.Tenant, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.Tenant, error)
 	FindBySlug(ctx context.Context, slug string) (*domain.Tenant, error)
-	List(ctx context.Context, limit, offset int) ([]*domain.Tenant, int, error)
+	List(ctx context.Context, limit, offset int, status string) ([]*domain.Tenant, int, error)
 	Update(ctx context.Context, tenant *domain.Tenant) (*domain.Tenant, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -104,15 +104,27 @@ func (r *PostgresTenantRepository) FindBySlug(ctx context.Context, slug string) 
 	return t, nil
 }
 
-// List returns a paginated list of tenants ordered by name.
-func (r *PostgresTenantRepository) List(ctx context.Context, limit, offset int) ([]*domain.Tenant, int, error) {
+// List returns a paginated list of tenants ordered by name, optionally filtered by status.
+func (r *PostgresTenantRepository) List(ctx context.Context, limit, offset int, status string) ([]*domain.Tenant, int, error) {
 	var total int
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM tenants`).Scan(&total); err != nil {
+	args := []interface{}{}
+	where := ""
+	if status != "" {
+		where = " WHERE status = $1"
+		args = append(args, status)
+	}
+
+	countQuery := `SELECT COUNT(*) FROM tenants` + where
+	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count tenants: %w", err)
 	}
 
-	query := fmt.Sprintf(`SELECT %s FROM tenants ORDER BY name LIMIT $1 OFFSET $2`, tenantColumns)
-	rows, err := r.pool.Query(ctx, query, limit, offset)
+	limitIdx := len(args) + 1
+	offsetIdx := len(args) + 2
+	query := fmt.Sprintf(`SELECT %s FROM tenants%s ORDER BY name LIMIT $%d OFFSET $%d`,
+		tenantColumns, where, limitIdx, offsetIdx)
+	listArgs := append(args, limit, offset)
+	rows, err := r.pool.Query(ctx, query, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list tenants: %w", err)
 	}

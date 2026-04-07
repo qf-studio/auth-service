@@ -13,7 +13,7 @@ type MockTenantRepository struct {
 	CreateFn     func(ctx context.Context, tenant *domain.Tenant) (*domain.Tenant, error)
 	FindByIDFn   func(ctx context.Context, id uuid.UUID) (*domain.Tenant, error)
 	FindBySlugFn func(ctx context.Context, slug string) (*domain.Tenant, error)
-	ListFn       func(ctx context.Context, limit, offset int) ([]*domain.Tenant, int, error)
+	ListFn       func(ctx context.Context, limit, offset int, status string) ([]*domain.Tenant, int, error)
 	UpdateFn     func(ctx context.Context, tenant *domain.Tenant) (*domain.Tenant, error)
 	DeleteFn     func(ctx context.Context, id uuid.UUID) error
 }
@@ -34,8 +34,8 @@ func (m *MockTenantRepository) FindBySlug(ctx context.Context, slug string) (*do
 }
 
 // List delegates to ListFn.
-func (m *MockTenantRepository) List(ctx context.Context, limit, offset int) ([]*domain.Tenant, int, error) {
-	return m.ListFn(ctx, limit, offset)
+func (m *MockTenantRepository) List(ctx context.Context, limit, offset int, status string) ([]*domain.Tenant, int, error) {
+	return m.ListFn(ctx, limit, offset, status)
 }
 
 // Update delegates to UpdateFn.

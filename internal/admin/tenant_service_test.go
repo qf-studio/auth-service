@@ -42,30 +42,59 @@ func newTestTenantService(repo *mocks.MockTenantRepository) *TenantService {
 func TestTenantService_ListTenants(t *testing.T) {
 	tenant := testTenant()
 	repo := &mocks.MockTenantRepository{
-		ListFn: func(_ context.Context, limit, offset int) ([]*domain.Tenant, int, error) {
+		ListFn: func(_ context.Context, limit, offset int, status string) ([]*domain.Tenant, int, error) {
 			assert.Equal(t, 20, limit)
 			assert.Equal(t, 0, offset)
+			assert.Equal(t, "", status)
 			return []*domain.Tenant{tenant}, 1, nil
 		},
 	}
 	svc := newTestTenantService(repo)
 
-	result, err := svc.ListTenants(context.Background(), 1, 20)
+	result, err := svc.ListTenants(context.Background(), 1, 20, "")
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Total)
 	assert.Len(t, result.Tenants, 1)
 	assert.Equal(t, tenant.ID.String(), result.Tenants[0].ID)
 }
 
+func TestTenantService_ListTenants_StatusFilter(t *testing.T) {
+	activeTenant := testTenant()
+	tests := []struct {
+		name   string
+		status string
+	}{
+		{"filter active", "active"},
+		{"filter suspended", "suspended"},
+		{"filter deleted", "deleted"},
+		{"no filter", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &mocks.MockTenantRepository{
+				ListFn: func(_ context.Context, limit, offset int, status string) ([]*domain.Tenant, int, error) {
+					assert.Equal(t, tt.status, status)
+					return []*domain.Tenant{activeTenant}, 1, nil
+				},
+			}
+			svc := newTestTenantService(repo)
+
+			result, err := svc.ListTenants(context.Background(), 1, 20, tt.status)
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Total)
+		})
+	}
+}
+
 func TestTenantService_ListTenants_Error(t *testing.T) {
 	repo := &mocks.MockTenantRepository{
-		ListFn: func(_ context.Context, _, _ int) ([]*domain.Tenant, int, error) {
+		ListFn: func(_ context.Context, _, _ int, _ string) ([]*domain.Tenant, int, error) {
 			return nil, 0, fmt.Errorf("db error")
 		},
 	}
 	svc := newTestTenantService(repo)
 
-	_, err := svc.ListTenants(context.Background(), 1, 20)
+	_, err := svc.ListTenants(context.Background(), 1, 20, "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrInternalError)
 }
