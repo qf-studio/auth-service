@@ -1,10 +1,15 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // SAMLIdPConfig represents a SAML Identity Provider configuration.
 type SAMLIdPConfig struct {
 	ID                string
+	TenantID          uuid.UUID
 	EntityID          string
 	MetadataURL       string
 	MetadataXML       string
@@ -21,6 +26,7 @@ type SAMLIdPConfig struct {
 // SAMLAccount links a SAML NameID to an internal user account.
 type SAMLAccount struct {
 	ID               string
+	TenantID         uuid.UUID
 	UserID           string
 	IdPID            string
 	NameID           string

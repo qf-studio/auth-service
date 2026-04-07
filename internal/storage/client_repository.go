@@ -18,14 +18,14 @@ import (
 type ClientRepository interface {
 	// List returns a paginated list of clients. clientType filters by type (empty = all).
 	// When includeRevoked is false, revoked clients are excluded.
-	List(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error)
-	FindByID(ctx context.Context, id uuid.UUID) (*domain.Client, error)
-	FindByName(ctx context.Context, name string) (*domain.Client, error)
+	List(ctx context.Context, tenantID uuid.UUID, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error)
+	FindByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.Client, error)
+	FindByName(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Client, error)
 	Create(ctx context.Context, client *domain.Client) (*domain.Client, error)
 	Update(ctx context.Context, client *domain.Client) (*domain.Client, error)
-	UpdateSecretHash(ctx context.Context, id uuid.UUID, secretHash string) error
-	RotateSecret(ctx context.Context, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
-	SoftDelete(ctx context.Context, id uuid.UUID) error
+	UpdateSecretHash(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, secretHash string) error
+	RotateSecret(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
+	SoftDelete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
 }
 
 // PostgresClientRepository implements ClientRepository using PostgreSQL.
@@ -38,12 +38,12 @@ func NewPostgresClientRepository(pool *pgxpool.Pool) *PostgresClientRepository {
 	return &PostgresClientRepository{pool: pool}
 }
 
-const clientColumns = `id, name, client_type, secret_hash, previous_secret_hash, previous_secret_expires_at, scopes, owner, access_token_ttl, status, created_at, updated_at, last_used_at`
+const clientColumns = `id, tenant_id, name, client_type, secret_hash, previous_secret_hash, previous_secret_expires_at, scopes, owner, access_token_ttl, status, created_at, updated_at, last_used_at`
 
 func scanClient(row pgx.Row) (*domain.Client, error) {
 	c := &domain.Client{}
 	err := row.Scan(
-		&c.ID, &c.Name, &c.ClientType, &c.SecretHash,
+		&c.ID, &c.TenantID, &c.Name, &c.ClientType, &c.SecretHash,
 		&c.PreviousSecretHash, &c.PreviousSecretExpiresAt,
 		&c.Scopes, &c.Owner, &c.AccessTokenTTL, &c.Status,
 		&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt,
@@ -59,9 +59,9 @@ func scanClient(row pgx.Row) (*domain.Client, error) {
 
 // List returns a paginated list of clients. clientType filters by type (empty = all).
 // When includeRevoked is false, revoked clients are excluded.
-func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error) {
-	conditions := []string{}
-	args := []interface{}{}
+func (r *PostgresClientRepository) List(ctx context.Context, tenantID uuid.UUID, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error) {
+	args := []interface{}{tenantID}
+	conditions := []string{fmt.Sprintf("tenant_id = $%d", len(args))}
 
 	if !includeRevoked {
 		conditions = append(conditions, "status != 'revoked'")
@@ -71,12 +71,9 @@ func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, 
 		conditions = append(conditions, fmt.Sprintf("client_type = $%d", len(args)))
 	}
 
-	whereClause := ""
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + conditions[0]
-		for _, c := range conditions[1:] {
-			whereClause += " AND " + c
-		}
+	whereClause := "WHERE " + conditions[0]
+	for _, c := range conditions[1:] {
+		whereClause += " AND " + c
 	}
 
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM clients %s`, whereClause)
@@ -100,7 +97,7 @@ func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, 
 	for rows.Next() {
 		c := &domain.Client{}
 		if err := rows.Scan(
-			&c.ID, &c.Name, &c.ClientType, &c.SecretHash,
+			&c.ID, &c.TenantID, &c.Name, &c.ClientType, &c.SecretHash,
 			&c.PreviousSecretHash, &c.PreviousSecretExpiresAt,
 			&c.Scopes, &c.Owner, &c.AccessTokenTTL, &c.Status,
 			&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt,
@@ -117,9 +114,9 @@ func (r *PostgresClientRepository) List(ctx context.Context, limit, offset int, 
 }
 
 // FindByID retrieves a client by primary key.
-func (r *PostgresClientRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Client, error) {
-	query := fmt.Sprintf(`SELECT %s FROM clients WHERE id = $1`, clientColumns)
-	c, err := scanClient(r.pool.QueryRow(ctx, query, id))
+func (r *PostgresClientRepository) FindByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.Client, error) {
+	query := fmt.Sprintf(`SELECT %s FROM clients WHERE id = $1 AND tenant_id = $2`, clientColumns)
+	c, err := scanClient(r.pool.QueryRow(ctx, query, id, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("find client %s: %w", id, err)
 	}
@@ -127,9 +124,9 @@ func (r *PostgresClientRepository) FindByID(ctx context.Context, id uuid.UUID) (
 }
 
 // FindByName retrieves a client by name.
-func (r *PostgresClientRepository) FindByName(ctx context.Context, name string) (*domain.Client, error) {
-	query := fmt.Sprintf(`SELECT %s FROM clients WHERE name = $1`, clientColumns)
-	c, err := scanClient(r.pool.QueryRow(ctx, query, name))
+func (r *PostgresClientRepository) FindByName(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Client, error) {
+	query := fmt.Sprintf(`SELECT %s FROM clients WHERE name = $1 AND tenant_id = $2`, clientColumns)
+	c, err := scanClient(r.pool.QueryRow(ctx, query, name, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("find client %s: %w", name, err)
 	}
@@ -139,12 +136,12 @@ func (r *PostgresClientRepository) FindByName(ctx context.Context, name string) 
 // Create inserts a new client. Returns ErrDuplicateClient on name conflict.
 func (r *PostgresClientRepository) Create(ctx context.Context, client *domain.Client) (*domain.Client, error) {
 	query := fmt.Sprintf(`
-		INSERT INTO clients (id, name, client_type, secret_hash, scopes, owner, access_token_ttl, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO clients (id, tenant_id, name, client_type, secret_hash, scopes, owner, access_token_ttl, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING %s`, clientColumns)
 
 	c, err := scanClient(r.pool.QueryRow(ctx, query,
-		client.ID, client.Name, client.ClientType, client.SecretHash,
+		client.ID, client.TenantID, client.Name, client.ClientType, client.SecretHash,
 		client.Scopes, client.Owner, client.AccessTokenTTL, client.Status,
 		client.CreatedAt, client.UpdatedAt,
 	))
@@ -162,11 +159,11 @@ func (r *PostgresClientRepository) Create(ctx context.Context, client *domain.Cl
 func (r *PostgresClientRepository) Update(ctx context.Context, client *domain.Client) (*domain.Client, error) {
 	query := fmt.Sprintf(`
 		UPDATE clients SET name = $1, scopes = $2, updated_at = $3
-		WHERE id = $4 AND status != 'revoked'
+		WHERE id = $4 AND tenant_id = $5 AND status != 'revoked'
 		RETURNING %s`, clientColumns)
 
 	c, err := scanClient(r.pool.QueryRow(ctx, query,
-		client.Name, client.Scopes, time.Now().UTC(), client.ID,
+		client.Name, client.Scopes, time.Now().UTC(), client.ID, client.TenantID,
 	))
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -182,9 +179,9 @@ func (r *PostgresClientRepository) Update(ctx context.Context, client *domain.Cl
 }
 
 // UpdateSecretHash replaces the secret hash for the given client.
-func (r *PostgresClientRepository) UpdateSecretHash(ctx context.Context, id uuid.UUID, secretHash string) error {
-	query := `UPDATE clients SET secret_hash = $1, updated_at = $2 WHERE id = $3 AND status != 'revoked'`
-	tag, err := r.pool.Exec(ctx, query, secretHash, time.Now().UTC(), id)
+func (r *PostgresClientRepository) UpdateSecretHash(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, secretHash string) error {
+	query := `UPDATE clients SET secret_hash = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4 AND status != 'revoked'`
+	tag, err := r.pool.Exec(ctx, query, secretHash, time.Now().UTC(), id, tenantID)
 	if err != nil {
 		return fmt.Errorf("update secret hash: %w", err)
 	}
@@ -196,17 +193,17 @@ func (r *PostgresClientRepository) UpdateSecretHash(ctx context.Context, id uuid
 
 // RotateSecret moves the current secret to previous_secret_hash with a grace period,
 // then sets the new secret hash. Both secrets are valid until the grace period expires.
-func (r *PostgresClientRepository) RotateSecret(ctx context.Context, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error {
+func (r *PostgresClientRepository) RotateSecret(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error {
 	query := `
 		UPDATE clients
 		SET previous_secret_hash = secret_hash,
 		    previous_secret_expires_at = $1,
 		    secret_hash = $2,
 		    updated_at = $3
-		WHERE id = $4 AND status != 'revoked'`
+		WHERE id = $4 AND tenant_id = $5 AND status != 'revoked'`
 
 	now := time.Now().UTC()
-	tag, err := r.pool.Exec(ctx, query, gracePeriodEnds, newSecretHash, now, id)
+	tag, err := r.pool.Exec(ctx, query, gracePeriodEnds, newSecretHash, now, id, tenantID)
 	if err != nil {
 		return fmt.Errorf("rotate secret: %w", err)
 	}
@@ -217,17 +214,17 @@ func (r *PostgresClientRepository) RotateSecret(ctx context.Context, id uuid.UUI
 }
 
 // SoftDelete marks a client as revoked.
-func (r *PostgresClientRepository) SoftDelete(ctx context.Context, id uuid.UUID) error {
-	query := `UPDATE clients SET status = 'revoked', updated_at = $1 WHERE id = $2 AND status != 'revoked'`
+func (r *PostgresClientRepository) SoftDelete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
+	query := `UPDATE clients SET status = 'revoked', updated_at = $1 WHERE id = $2 AND tenant_id = $3 AND status != 'revoked'`
 	now := time.Now().UTC()
 
-	tag, err := r.pool.Exec(ctx, query, now, id)
+	tag, err := r.pool.Exec(ctx, query, now, id, tenantID)
 	if err != nil {
 		return fmt.Errorf("soft delete client %s: %w", id, err)
 	}
 	if tag.RowsAffected() == 0 {
 		var exists bool
-		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clients WHERE id = $1)`, id).Scan(&exists)
+		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clients WHERE id = $1 AND tenant_id = $2)`, id, tenantID).Scan(&exists)
 		if exists {
 			return fmt.Errorf("client %s already deleted: %w", id, ErrAlreadyDeleted)
 		}

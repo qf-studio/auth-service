@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,8 +22,10 @@ func TestScanOAuthAccount_ErrNoRows(t *testing.T) {
 
 func TestScanOAuthAccount_Success(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	tenantID := uuid.New()
 	row := &fakeOAuthAccountRow{
 		id:             "oa-1",
+		tenantID:       tenantID,
 		userID:         "u-1",
 		provider:       "google",
 		providerUserID: "g-123",
@@ -33,6 +36,7 @@ func TestScanOAuthAccount_Success(t *testing.T) {
 	account, err := scanOAuthAccount(row)
 	require.NoError(t, err)
 	assert.Equal(t, "oa-1", account.ID)
+	assert.Equal(t, tenantID, account.TenantID)
 	assert.Equal(t, "u-1", account.UserID)
 	assert.Equal(t, "google", account.Provider)
 	assert.Equal(t, "g-123", account.ProviderUserID)
@@ -52,19 +56,21 @@ func (r *errRow) Scan(_ ...interface{}) error {
 // fakeOAuthAccountRow implements pgx.Row, populating scan destinations with preset values.
 type fakeOAuthAccountRow struct {
 	id, userID, provider, providerUserID, email string
+	tenantID                                    uuid.UUID
 	createdAt                                   time.Time
 }
 
 func (r *fakeOAuthAccountRow) Scan(dest ...interface{}) error {
-	if len(dest) != 6 {
+	if len(dest) != 7 {
 		return pgx.ErrNoRows
 	}
 	*dest[0].(*string) = r.id
-	*dest[1].(*string) = r.userID
-	*dest[2].(*string) = r.provider
-	*dest[3].(*string) = r.providerUserID
-	*dest[4].(*string) = r.email
-	*dest[5].(*time.Time) = r.createdAt
+	*dest[1].(*uuid.UUID) = r.tenantID
+	*dest[2].(*string) = r.userID
+	*dest[3].(*string) = r.provider
+	*dest[4].(*string) = r.providerUserID
+	*dest[5].(*string) = r.email
+	*dest[6].(*time.Time) = r.createdAt
 	return nil
 }
 
@@ -73,8 +79,8 @@ var _ OAuthAccountRepository = (*PostgresOAuthAccountRepository)(nil)
 
 // Verify domain model fields align with scan order.
 func TestOAuthAccountColumnCount(t *testing.T) {
-	// oauthAccountColumns should have exactly 6 fields matching scanOAuthAccount.
-	expected := "id, user_id, provider, provider_user_id, email, created_at"
+	// oauthAccountColumns should have exactly 7 fields matching scanOAuthAccount.
+	expected := "id, tenant_id, user_id, provider, provider_user_id, email, created_at"
 	assert.Equal(t, expected, oauthAccountColumns)
 }
 
@@ -87,8 +93,10 @@ func TestNewPostgresOAuthAccountRepository(t *testing.T) {
 // Verify the domain struct used by the repository has the expected fields.
 func TestOAuthAccountDomainFields(t *testing.T) {
 	now := time.Now().UTC()
+	tenantID := uuid.New()
 	a := domain.OAuthAccount{
 		ID:             "oa-1",
+		TenantID:       tenantID,
 		UserID:         "u-1",
 		Provider:       "github",
 		ProviderUserID: "gh-456",
@@ -96,6 +104,7 @@ func TestOAuthAccountDomainFields(t *testing.T) {
 		CreatedAt:      now,
 	}
 	assert.Equal(t, "oa-1", a.ID)
+	assert.Equal(t, tenantID, a.TenantID)
 	assert.Equal(t, "u-1", a.UserID)
 	assert.Equal(t, "github", a.Provider)
 	assert.Equal(t, "gh-456", a.ProviderUserID)

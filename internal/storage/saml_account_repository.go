@@ -18,12 +18,12 @@ import (
 // SAMLAccountRepository defines persistence operations for SAML account links.
 type SAMLAccountRepository interface {
 	Create(ctx context.Context, acct *domain.SAMLAccount) (*domain.SAMLAccount, error)
-	FindByID(ctx context.Context, id uuid.UUID) (*domain.SAMLAccount, error)
-	FindByIdPAndNameID(ctx context.Context, idpID uuid.UUID, nameID string) (*domain.SAMLAccount, error)
-	ListByUserID(ctx context.Context, userID uuid.UUID) ([]*domain.SAMLAccount, error)
-	ListByIdPID(ctx context.Context, idpID uuid.UUID) ([]*domain.SAMLAccount, error)
+	FindByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.SAMLAccount, error)
+	FindByIdPAndNameID(ctx context.Context, tenantID uuid.UUID, idpID uuid.UUID, nameID string) (*domain.SAMLAccount, error)
+	ListByUserID(ctx context.Context, tenantID uuid.UUID, userID uuid.UUID) ([]*domain.SAMLAccount, error)
+	ListByIdPID(ctx context.Context, tenantID uuid.UUID, idpID uuid.UUID) ([]*domain.SAMLAccount, error)
 	Update(ctx context.Context, acct *domain.SAMLAccount) (*domain.SAMLAccount, error)
-	Delete(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
 }
 
 // PostgresSAMLAccountRepository implements SAMLAccountRepository using PostgreSQL.
@@ -36,14 +36,14 @@ func NewPostgresSAMLAccountRepository(pool *pgxpool.Pool) *PostgresSAMLAccountRe
 	return &PostgresSAMLAccountRepository{pool: pool}
 }
 
-const samlAccountColumns = `id, user_id, idp_id, name_id, session_index, cached_attributes, created_at, updated_at`
+const samlAccountColumns = `id, tenant_id, user_id, idp_id, name_id, session_index, cached_attributes, created_at, updated_at`
 
 func scanSAMLAccount(row pgx.Row) (*domain.SAMLAccount, error) {
 	acct := &domain.SAMLAccount{}
-	var id, userID, idpID uuid.UUID
+	var id, tenantID, userID, idpID uuid.UUID
 	var attrJSON []byte
 	err := row.Scan(
-		&id, &userID, &idpID, &acct.NameID,
+		&id, &tenantID, &userID, &idpID, &acct.NameID,
 		&acct.SessionIndex, &attrJSON,
 		&acct.CreatedAt, &acct.UpdatedAt,
 	)
@@ -54,6 +54,7 @@ func scanSAMLAccount(row pgx.Row) (*domain.SAMLAccount, error) {
 		return nil, err
 	}
 	acct.ID = id.String()
+	acct.TenantID = tenantID
 	acct.UserID = userID.String()
 	acct.IdPID = idpID.String()
 	if len(attrJSON) > 0 {
@@ -75,12 +76,12 @@ func (r *PostgresSAMLAccountRepository) Create(ctx context.Context, acct *domain
 	}
 
 	query := fmt.Sprintf(`
-		INSERT INTO saml_accounts (id, user_id, idp_id, name_id, session_index, cached_attributes, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO saml_accounts (id, tenant_id, user_id, idp_id, name_id, session_index, cached_attributes, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING %s`, samlAccountColumns)
 
 	result, err := scanSAMLAccount(r.pool.QueryRow(ctx, query,
-		acct.ID, acct.UserID, acct.IdPID, acct.NameID,
+		acct.ID, acct.TenantID, acct.UserID, acct.IdPID, acct.NameID,
 		acct.SessionIndex, attrJSON,
 		acct.CreatedAt, acct.UpdatedAt,
 	))
@@ -95,9 +96,9 @@ func (r *PostgresSAMLAccountRepository) Create(ctx context.Context, acct *domain
 }
 
 // FindByID retrieves a SAML account by primary key.
-func (r *PostgresSAMLAccountRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.SAMLAccount, error) {
-	query := fmt.Sprintf(`SELECT %s FROM saml_accounts WHERE id = $1`, samlAccountColumns)
-	acct, err := scanSAMLAccount(r.pool.QueryRow(ctx, query, id))
+func (r *PostgresSAMLAccountRepository) FindByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.SAMLAccount, error) {
+	query := fmt.Sprintf(`SELECT %s FROM saml_accounts WHERE id = $1 AND tenant_id = $2`, samlAccountColumns)
+	acct, err := scanSAMLAccount(r.pool.QueryRow(ctx, query, id, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("find saml account %s: %w", id, err)
 	}
@@ -105,9 +106,9 @@ func (r *PostgresSAMLAccountRepository) FindByID(ctx context.Context, id uuid.UU
 }
 
 // FindByIdPAndNameID retrieves a SAML account by its unique IdP + NameID combination.
-func (r *PostgresSAMLAccountRepository) FindByIdPAndNameID(ctx context.Context, idpID uuid.UUID, nameID string) (*domain.SAMLAccount, error) {
-	query := fmt.Sprintf(`SELECT %s FROM saml_accounts WHERE idp_id = $1 AND name_id = $2`, samlAccountColumns)
-	acct, err := scanSAMLAccount(r.pool.QueryRow(ctx, query, idpID, nameID))
+func (r *PostgresSAMLAccountRepository) FindByIdPAndNameID(ctx context.Context, tenantID uuid.UUID, idpID uuid.UUID, nameID string) (*domain.SAMLAccount, error) {
+	query := fmt.Sprintf(`SELECT %s FROM saml_accounts WHERE idp_id = $1 AND name_id = $2 AND tenant_id = $3`, samlAccountColumns)
+	acct, err := scanSAMLAccount(r.pool.QueryRow(ctx, query, idpID, nameID, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("find saml account idp=%s name_id=%q: %w", idpID, nameID, err)
 	}
@@ -115,9 +116,9 @@ func (r *PostgresSAMLAccountRepository) FindByIdPAndNameID(ctx context.Context, 
 }
 
 // ListByUserID returns all SAML accounts linked to a given user.
-func (r *PostgresSAMLAccountRepository) ListByUserID(ctx context.Context, userID uuid.UUID) ([]*domain.SAMLAccount, error) {
-	query := fmt.Sprintf(`SELECT %s FROM saml_accounts WHERE user_id = $1 ORDER BY created_at`, samlAccountColumns)
-	rows, err := r.pool.Query(ctx, query, userID)
+func (r *PostgresSAMLAccountRepository) ListByUserID(ctx context.Context, tenantID uuid.UUID, userID uuid.UUID) ([]*domain.SAMLAccount, error) {
+	query := fmt.Sprintf(`SELECT %s FROM saml_accounts WHERE user_id = $1 AND tenant_id = $2 ORDER BY created_at`, samlAccountColumns)
+	rows, err := r.pool.Query(ctx, query, userID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list saml accounts by user: %w", err)
 	}
@@ -125,17 +126,18 @@ func (r *PostgresSAMLAccountRepository) ListByUserID(ctx context.Context, userID
 
 	var accts []*domain.SAMLAccount
 	for rows.Next() {
-		var id, uid, idpID uuid.UUID
+		var id, tid, uid, idpID uuid.UUID
 		var attrJSON []byte
 		acct := &domain.SAMLAccount{}
 		if err := rows.Scan(
-			&id, &uid, &idpID, &acct.NameID,
+			&id, &tid, &uid, &idpID, &acct.NameID,
 			&acct.SessionIndex, &attrJSON,
 			&acct.CreatedAt, &acct.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan saml account: %w", err)
 		}
 		acct.ID = id.String()
+		acct.TenantID = tid
 		acct.UserID = uid.String()
 		acct.IdPID = idpID.String()
 		if len(attrJSON) > 0 {
@@ -155,9 +157,9 @@ func (r *PostgresSAMLAccountRepository) ListByUserID(ctx context.Context, userID
 }
 
 // ListByIdPID returns all SAML accounts linked to a given IdP.
-func (r *PostgresSAMLAccountRepository) ListByIdPID(ctx context.Context, idpID uuid.UUID) ([]*domain.SAMLAccount, error) {
-	query := fmt.Sprintf(`SELECT %s FROM saml_accounts WHERE idp_id = $1 ORDER BY created_at`, samlAccountColumns)
-	rows, err := r.pool.Query(ctx, query, idpID)
+func (r *PostgresSAMLAccountRepository) ListByIdPID(ctx context.Context, tenantID uuid.UUID, idpID uuid.UUID) ([]*domain.SAMLAccount, error) {
+	query := fmt.Sprintf(`SELECT %s FROM saml_accounts WHERE idp_id = $1 AND tenant_id = $2 ORDER BY created_at`, samlAccountColumns)
+	rows, err := r.pool.Query(ctx, query, idpID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list saml accounts by idp: %w", err)
 	}
@@ -165,17 +167,18 @@ func (r *PostgresSAMLAccountRepository) ListByIdPID(ctx context.Context, idpID u
 
 	var accts []*domain.SAMLAccount
 	for rows.Next() {
-		var id, uid, idpIDVal uuid.UUID
+		var id, tid, uid, idpIDVal uuid.UUID
 		var attrJSON []byte
 		acct := &domain.SAMLAccount{}
 		if err := rows.Scan(
-			&id, &uid, &idpIDVal, &acct.NameID,
+			&id, &tid, &uid, &idpIDVal, &acct.NameID,
 			&acct.SessionIndex, &attrJSON,
 			&acct.CreatedAt, &acct.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan saml account: %w", err)
 		}
 		acct.ID = id.String()
+		acct.TenantID = tid
 		acct.UserID = uid.String()
 		acct.IdPID = idpIDVal.String()
 		if len(attrJSON) > 0 {
@@ -204,11 +207,11 @@ func (r *PostgresSAMLAccountRepository) Update(ctx context.Context, acct *domain
 	query := fmt.Sprintf(`
 		UPDATE saml_accounts
 		SET session_index = $1, cached_attributes = $2, updated_at = $3
-		WHERE id = $4
+		WHERE id = $4 AND tenant_id = $5
 		RETURNING %s`, samlAccountColumns)
 
 	result, err := scanSAMLAccount(r.pool.QueryRow(ctx, query,
-		acct.SessionIndex, attrJSON, time.Now().UTC(), acct.ID,
+		acct.SessionIndex, attrJSON, time.Now().UTC(), acct.ID, acct.TenantID,
 	))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -220,9 +223,9 @@ func (r *PostgresSAMLAccountRepository) Update(ctx context.Context, acct *domain
 }
 
 // Delete removes a SAML account link.
-func (r *PostgresSAMLAccountRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	query := `DELETE FROM saml_accounts WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, query, id)
+func (r *PostgresSAMLAccountRepository) Delete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
+	query := `DELETE FROM saml_accounts WHERE id = $1 AND tenant_id = $2`
+	tag, err := r.pool.Exec(ctx, query, id, tenantID)
 	if err != nil {
 		return fmt.Errorf("delete saml account %s: %w", id, err)
 	}

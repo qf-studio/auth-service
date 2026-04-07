@@ -20,8 +20,10 @@ func TestScanSAMLIdP_ErrNoRows(t *testing.T) {
 func TestScanSAMLIdP_Success(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	id := uuid.New()
+	tenantID := uuid.New()
 	row := &fakeSAMLIdPRow{
 		id:          id,
+		tenantID:    tenantID,
 		entityID:    "https://idp.example.com/metadata",
 		metadataURL: "https://idp.example.com/metadata",
 		metadataXML: "<md:EntityDescriptor/>",
@@ -38,6 +40,7 @@ func TestScanSAMLIdP_Success(t *testing.T) {
 	idp, err := scanSAMLIdP(row)
 	require.NoError(t, err)
 	assert.Equal(t, id.String(), idp.ID)
+	assert.Equal(t, tenantID, idp.TenantID)
 	assert.Equal(t, "https://idp.example.com/metadata", idp.EntityID)
 	assert.Equal(t, "https://idp.example.com/metadata", idp.MetadataURL)
 	assert.Equal(t, "<md:EntityDescriptor/>", idp.MetadataXML)
@@ -54,8 +57,10 @@ func TestScanSAMLIdP_Success(t *testing.T) {
 func TestScanSAMLIdP_EmptyAttributes(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	id := uuid.New()
+	tenantID := uuid.New()
 	row := &fakeSAMLIdPRow{
 		id:          id,
+		tenantID:    tenantID,
 		entityID:    "https://idp.example.com",
 		ssoURL:      "https://idp.example.com/sso",
 		certificate: "MIIC...",
@@ -90,6 +95,7 @@ func (r *errSAMLIdPRow) Scan(_ ...interface{}) error {
 // fakeSAMLIdPRow implements pgx.Row, populating scan destinations with preset values.
 type fakeSAMLIdPRow struct {
 	id          uuid.UUID
+	tenantID    uuid.UUID
 	entityID    string
 	metadataURL string
 	metadataXML string
@@ -104,20 +110,21 @@ type fakeSAMLIdPRow struct {
 }
 
 func (r *fakeSAMLIdPRow) Scan(dest ...interface{}) error {
-	if len(dest) != 12 {
+	if len(dest) != 13 {
 		return pgx.ErrNoRows
 	}
 	*dest[0].(*uuid.UUID) = r.id
-	*dest[1].(*string) = r.entityID
-	*dest[2].(*string) = r.metadataURL
-	*dest[3].(*string) = r.metadataXML
-	*dest[4].(*string) = r.ssoURL
-	*dest[5].(*string) = r.sloURL
-	*dest[6].(*string) = r.certificate
-	*dest[7].(*string) = r.name
-	*dest[8].(*[]byte) = r.attrJSON
-	*dest[9].(*bool) = r.enabled
-	*dest[10].(*time.Time) = r.createdAt
-	*dest[11].(*time.Time) = r.updatedAt
+	*dest[1].(*uuid.UUID) = r.tenantID
+	*dest[2].(*string) = r.entityID
+	*dest[3].(*string) = r.metadataURL
+	*dest[4].(*string) = r.metadataXML
+	*dest[5].(*string) = r.ssoURL
+	*dest[6].(*string) = r.sloURL
+	*dest[7].(*string) = r.certificate
+	*dest[8].(*string) = r.name
+	*dest[9].(*[]byte) = r.attrJSON
+	*dest[10].(*bool) = r.enabled
+	*dest[11].(*time.Time) = r.createdAt
+	*dest[12].(*time.Time) = r.updatedAt
 	return nil
 }

@@ -20,10 +20,12 @@ func TestScanSAMLAccount_ErrNoRows(t *testing.T) {
 func TestScanSAMLAccount_Success(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	id := uuid.New()
+	tenantID := uuid.New()
 	userID := uuid.New()
 	idpID := uuid.New()
 	row := &fakeSAMLAccountRow{
 		id:           id,
+		tenantID:     tenantID,
 		userID:       userID,
 		idpID:        idpID,
 		nameID:       "user@example.com",
@@ -36,6 +38,7 @@ func TestScanSAMLAccount_Success(t *testing.T) {
 	acct, err := scanSAMLAccount(row)
 	require.NoError(t, err)
 	assert.Equal(t, id.String(), acct.ID)
+	assert.Equal(t, tenantID, acct.TenantID)
 	assert.Equal(t, userID.String(), acct.UserID)
 	assert.Equal(t, idpID.String(), acct.IdPID)
 	assert.Equal(t, "user@example.com", acct.NameID)
@@ -48,11 +51,12 @@ func TestScanSAMLAccount_Success(t *testing.T) {
 func TestScanSAMLAccount_EmptyAttributes(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	row := &fakeSAMLAccountRow{
-		id:       uuid.New(),
-		userID:   uuid.New(),
-		idpID:    uuid.New(),
-		nameID:   "user@example.com",
-		attrJSON: []byte(`{}`),
+		id:        uuid.New(),
+		tenantID:  uuid.New(),
+		userID:    uuid.New(),
+		idpID:     uuid.New(),
+		nameID:    "user@example.com",
+		attrJSON:  []byte(`{}`),
 		createdAt: now,
 		updatedAt: now,
 	}
@@ -81,6 +85,7 @@ func (r *errSAMLAccountRow) Scan(_ ...interface{}) error {
 // fakeSAMLAccountRow implements pgx.Row, populating scan destinations with preset values.
 type fakeSAMLAccountRow struct {
 	id           uuid.UUID
+	tenantID     uuid.UUID
 	userID       uuid.UUID
 	idpID        uuid.UUID
 	nameID       string
@@ -91,16 +96,17 @@ type fakeSAMLAccountRow struct {
 }
 
 func (r *fakeSAMLAccountRow) Scan(dest ...interface{}) error {
-	if len(dest) != 8 {
+	if len(dest) != 9 {
 		return pgx.ErrNoRows
 	}
 	*dest[0].(*uuid.UUID) = r.id
-	*dest[1].(*uuid.UUID) = r.userID
-	*dest[2].(*uuid.UUID) = r.idpID
-	*dest[3].(*string) = r.nameID
-	*dest[4].(*string) = r.sessionIndex
-	*dest[5].(*[]byte) = r.attrJSON
-	*dest[6].(*time.Time) = r.createdAt
-	*dest[7].(*time.Time) = r.updatedAt
+	*dest[1].(*uuid.UUID) = r.tenantID
+	*dest[2].(*uuid.UUID) = r.userID
+	*dest[3].(*uuid.UUID) = r.idpID
+	*dest[4].(*string) = r.nameID
+	*dest[5].(*string) = r.sessionIndex
+	*dest[6].(*[]byte) = r.attrJSON
+	*dest[7].(*time.Time) = r.createdAt
+	*dest[8].(*time.Time) = r.updatedAt
 	return nil
 }

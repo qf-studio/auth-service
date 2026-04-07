@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,21 +28,21 @@ type AdminUserRepository interface {
 	// List returns a paginated list of users, filtered by status.
 	// Valid status values: "" (all non-deleted), "active" (non-locked, non-deleted),
 	// "locked" (locked, non-deleted), "deleted" (soft-deleted only).
-	List(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error)
+	List(ctx context.Context, tenantID uuid.UUID, limit, offset int, status string) ([]*domain.User, int, error)
 	// SearchUsers returns a paginated list of users matching the given filters.
-	SearchUsers(ctx context.Context, limit, offset int, filter UserSearchFilter) ([]*domain.User, int, error)
-	FindByID(ctx context.Context, id string) (*domain.User, error)
+	SearchUsers(ctx context.Context, tenantID uuid.UUID, limit, offset int, filter UserSearchFilter) ([]*domain.User, int, error)
+	FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
 	Create(ctx context.Context, user *domain.User) (*domain.User, error)
 	Update(ctx context.Context, user *domain.User) (*domain.User, error)
-	SoftDelete(ctx context.Context, id string) error
-	Lock(ctx context.Context, id, reason string) (*domain.User, error)
-	Unlock(ctx context.Context, id string) (*domain.User, error)
+	SoftDelete(ctx context.Context, tenantID uuid.UUID, id string) error
+	Lock(ctx context.Context, tenantID uuid.UUID, id, reason string) (*domain.User, error)
+	Unlock(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
 	// BulkUpdateStatus applies a status change (lock, unlock, or suspend) to multiple users at once.
 	// Returns the number of affected rows.
-	BulkUpdateStatus(ctx context.Context, ids []string, action string, reason string) (int64, error)
+	BulkUpdateStatus(ctx context.Context, tenantID uuid.UUID, ids []string, action string, reason string) (int64, error)
 	// BulkAssignRole adds a role to all specified users (no-op if user already has it).
 	// Returns the number of affected rows.
-	BulkAssignRole(ctx context.Context, ids []string, role string) (int64, error)
+	BulkAssignRole(ctx context.Context, tenantID uuid.UUID, ids []string, role string) (int64, error)
 }
 
 // PostgresAdminUserRepository implements AdminUserRepository using PostgreSQL.
@@ -54,12 +55,12 @@ func NewPostgresAdminUserRepository(pool *pgxpool.Pool) *PostgresAdminUserReposi
 	return &PostgresAdminUserRepository{pool: pool}
 }
 
-const userColumns = `id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, last_login_at, created_at, updated_at, deleted_at`
+const userColumns = `id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason, email_verified, email_verify_token, email_verify_token_expires_at, last_login_at, created_at, updated_at, deleted_at`
 
 func scanUser(row pgx.Row) (*domain.User, error) {
 	u := &domain.User{}
 	err := row.Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Roles,
+		&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Name, &u.Roles,
 		&u.Locked, &u.LockedAt, &u.LockedReason,
 		&u.EmailVerified, &u.EmailVerifyToken, &u.EmailVerifyTokenExpiresAt,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
@@ -75,27 +76,27 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 
 // List returns a paginated list of users filtered by status.
 // Status values: "" (all non-deleted), "active", "locked", "deleted".
-func (r *PostgresAdminUserRepository) List(ctx context.Context, limit, offset int, status string) ([]*domain.User, int, error) {
+func (r *PostgresAdminUserRepository) List(ctx context.Context, tenantID uuid.UUID, limit, offset int, status string) ([]*domain.User, int, error) {
 	var whereClause string
 	switch status {
 	case "active":
-		whereClause = "WHERE deleted_at IS NULL AND locked = false"
+		whereClause = "WHERE tenant_id = $1 AND deleted_at IS NULL AND locked = false"
 	case "locked":
-		whereClause = "WHERE deleted_at IS NULL AND locked = true"
+		whereClause = "WHERE tenant_id = $1 AND deleted_at IS NULL AND locked = true"
 	case "deleted":
-		whereClause = "WHERE deleted_at IS NOT NULL"
+		whereClause = "WHERE tenant_id = $1 AND deleted_at IS NOT NULL"
 	default:
-		whereClause = "WHERE deleted_at IS NULL"
+		whereClause = "WHERE tenant_id = $1 AND deleted_at IS NULL"
 	}
 
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM users %s`, whereClause)
 	var total int
-	if err := r.pool.QueryRow(ctx, countQuery).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, countQuery, tenantID).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count users: %w", err)
 	}
 
-	query := fmt.Sprintf(`SELECT %s FROM users %s ORDER BY created_at DESC LIMIT $1 OFFSET $2`, userColumns, whereClause)
-	rows, err := r.pool.Query(ctx, query, limit, offset)
+	query := fmt.Sprintf(`SELECT %s FROM users %s ORDER BY created_at DESC LIMIT $2 OFFSET $3`, userColumns, whereClause)
+	rows, err := r.pool.Query(ctx, query, tenantID, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list users: %w", err)
 	}
@@ -105,7 +106,7 @@ func (r *PostgresAdminUserRepository) List(ctx context.Context, limit, offset in
 	for rows.Next() {
 		u := &domain.User{}
 		if err := rows.Scan(
-			&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Roles,
+			&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Name, &u.Roles,
 			&u.Locked, &u.LockedAt, &u.LockedReason,
 			&u.EmailVerified, &u.EmailVerifyToken, &u.EmailVerifyTokenExpiresAt,
 			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
@@ -122,10 +123,10 @@ func (r *PostgresAdminUserRepository) List(ctx context.Context, limit, offset in
 }
 
 // SearchUsers returns a paginated list of users matching the given filters.
-func (r *PostgresAdminUserRepository) SearchUsers(ctx context.Context, limit, offset int, filter UserSearchFilter) ([]*domain.User, int, error) {
-	conditions := []string{}
-	args := []interface{}{}
-	argIdx := 1
+func (r *PostgresAdminUserRepository) SearchUsers(ctx context.Context, tenantID uuid.UUID, limit, offset int, filter UserSearchFilter) ([]*domain.User, int, error) {
+	conditions := []string{"tenant_id = $1"}
+	args := []interface{}{tenantID}
+	argIdx := 2
 
 	// Status filter.
 	switch filter.Status {
@@ -193,7 +194,7 @@ func (r *PostgresAdminUserRepository) SearchUsers(ctx context.Context, limit, of
 	for rows.Next() {
 		u := &domain.User{}
 		if err := rows.Scan(
-			&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Roles,
+			&u.ID, &u.TenantID, &u.Email, &u.PasswordHash, &u.Name, &u.Roles,
 			&u.Locked, &u.LockedAt, &u.LockedReason,
 			&u.EmailVerified, &u.EmailVerifyToken, &u.EmailVerifyTokenExpiresAt,
 			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
@@ -211,7 +212,7 @@ func (r *PostgresAdminUserRepository) SearchUsers(ctx context.Context, limit, of
 
 // BulkUpdateStatus applies a status change to multiple users at once.
 // Supported actions: "lock", "unlock", "suspend".
-func (r *PostgresAdminUserRepository) BulkUpdateStatus(ctx context.Context, ids []string, action string, reason string) (int64, error) {
+func (r *PostgresAdminUserRepository) BulkUpdateStatus(ctx context.Context, tenantID uuid.UUID, ids []string, action string, reason string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -222,18 +223,18 @@ func (r *PostgresAdminUserRepository) BulkUpdateStatus(ctx context.Context, ids 
 	switch action {
 	case "lock":
 		query = `UPDATE users SET locked = true, locked_at = $1, locked_reason = $2, updated_at = $1
-			WHERE id = ANY($3) AND deleted_at IS NULL`
+			WHERE id = ANY($3) AND tenant_id = $4 AND deleted_at IS NULL`
 	case "unlock":
 		query = `UPDATE users SET locked = false, locked_at = NULL, locked_reason = '', updated_at = $1
-			WHERE id = ANY($3) AND deleted_at IS NULL`
+			WHERE id = ANY($3) AND tenant_id = $4 AND deleted_at IS NULL`
 	case "suspend":
 		query = `UPDATE users SET deleted_at = $1, updated_at = $1
-			WHERE id = ANY($3) AND deleted_at IS NULL`
+			WHERE id = ANY($3) AND tenant_id = $4 AND deleted_at IS NULL`
 	default:
 		return 0, fmt.Errorf("unsupported bulk action: %s", action)
 	}
 
-	tag, err := r.pool.Exec(ctx, query, now, reason, ids)
+	tag, err := r.pool.Exec(ctx, query, now, reason, ids, tenantID)
 	if err != nil {
 		return 0, fmt.Errorf("bulk %s users: %w", action, err)
 	}
@@ -241,16 +242,16 @@ func (r *PostgresAdminUserRepository) BulkUpdateStatus(ctx context.Context, ids 
 }
 
 // BulkAssignRole adds a role to all specified users who don't already have it.
-func (r *PostgresAdminUserRepository) BulkAssignRole(ctx context.Context, ids []string, role string) (int64, error) {
+func (r *PostgresAdminUserRepository) BulkAssignRole(ctx context.Context, tenantID uuid.UUID, ids []string, role string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 
 	now := time.Now().UTC()
 	query := `UPDATE users SET roles = array_append(roles, $1), updated_at = $2
-		WHERE id = ANY($3) AND deleted_at IS NULL AND NOT ($1 = ANY(roles))`
+		WHERE id = ANY($3) AND tenant_id = $4 AND deleted_at IS NULL AND NOT ($1 = ANY(roles))`
 
-	tag, err := r.pool.Exec(ctx, query, role, now, ids)
+	tag, err := r.pool.Exec(ctx, query, role, now, ids, tenantID)
 	if err != nil {
 		return 0, fmt.Errorf("bulk assign role: %w", err)
 	}
@@ -258,9 +259,9 @@ func (r *PostgresAdminUserRepository) BulkAssignRole(ctx context.Context, ids []
 }
 
 // FindByID retrieves a user by ID, including soft-deleted users.
-func (r *PostgresAdminUserRepository) FindByID(ctx context.Context, id string) (*domain.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM users WHERE id = $1`, userColumns)
-	u, err := scanUser(r.pool.QueryRow(ctx, query, id))
+func (r *PostgresAdminUserRepository) FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error) {
+	query := fmt.Sprintf(`SELECT %s FROM users WHERE id = $1 AND tenant_id = $2`, userColumns)
+	u, err := scanUser(r.pool.QueryRow(ctx, query, id, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("find user %s: %w", id, err)
 	}
@@ -270,12 +271,12 @@ func (r *PostgresAdminUserRepository) FindByID(ctx context.Context, id string) (
 // Create inserts a new user. Returns ErrDuplicateEmail on unique constraint violation.
 func (r *PostgresAdminUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
 	query := fmt.Sprintf(`
-		INSERT INTO users (id, email, password_hash, name, roles, locked, locked_at, locked_reason, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO users (id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING %s`, userColumns)
 
 	u, err := scanUser(r.pool.QueryRow(ctx, query,
-		user.ID, user.Email, user.PasswordHash, user.Name, user.Roles,
+		user.ID, user.TenantID, user.Email, user.PasswordHash, user.Name, user.Roles,
 		user.Locked, user.LockedAt, user.LockedReason,
 		user.CreatedAt, user.UpdatedAt,
 	))
@@ -293,11 +294,11 @@ func (r *PostgresAdminUserRepository) Create(ctx context.Context, user *domain.U
 func (r *PostgresAdminUserRepository) Update(ctx context.Context, user *domain.User) (*domain.User, error) {
 	query := fmt.Sprintf(`
 		UPDATE users SET email = $1, name = $2, roles = $3, updated_at = $4
-		WHERE id = $5 AND deleted_at IS NULL
+		WHERE id = $5 AND tenant_id = $6 AND deleted_at IS NULL
 		RETURNING %s`, userColumns)
 
 	u, err := scanUser(r.pool.QueryRow(ctx, query,
-		user.Email, user.Name, user.Roles, time.Now().UTC(), user.ID,
+		user.Email, user.Name, user.Roles, time.Now().UTC(), user.ID, user.TenantID,
 	))
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -313,18 +314,18 @@ func (r *PostgresAdminUserRepository) Update(ctx context.Context, user *domain.U
 }
 
 // SoftDelete sets deleted_at on the user record.
-func (r *PostgresAdminUserRepository) SoftDelete(ctx context.Context, id string) error {
-	query := `UPDATE users SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND deleted_at IS NULL`
+func (r *PostgresAdminUserRepository) SoftDelete(ctx context.Context, tenantID uuid.UUID, id string) error {
+	query := `UPDATE users SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND tenant_id = $3 AND deleted_at IS NULL`
 	now := time.Now().UTC()
 
-	tag, err := r.pool.Exec(ctx, query, now, id)
+	tag, err := r.pool.Exec(ctx, query, now, id, tenantID)
 	if err != nil {
 		return fmt.Errorf("soft delete user %s: %w", id, err)
 	}
 	if tag.RowsAffected() == 0 {
 		// Check if user exists but is already deleted.
 		var exists bool
-		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, id).Scan(&exists)
+		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2)`, id, tenantID).Scan(&exists)
 		if exists {
 			return fmt.Errorf("user %s already deleted: %w", id, ErrAlreadyDeleted)
 		}
@@ -334,14 +335,14 @@ func (r *PostgresAdminUserRepository) SoftDelete(ctx context.Context, id string)
 }
 
 // Lock sets the locked flag and reason on a user.
-func (r *PostgresAdminUserRepository) Lock(ctx context.Context, id, reason string) (*domain.User, error) {
+func (r *PostgresAdminUserRepository) Lock(ctx context.Context, tenantID uuid.UUID, id, reason string) (*domain.User, error) {
 	now := time.Now().UTC()
 	query := fmt.Sprintf(`
 		UPDATE users SET locked = true, locked_at = $1, locked_reason = $2, updated_at = $1
-		WHERE id = $3 AND deleted_at IS NULL
+		WHERE id = $3 AND tenant_id = $4 AND deleted_at IS NULL
 		RETURNING %s`, userColumns)
 
-	u, err := scanUser(r.pool.QueryRow(ctx, query, now, reason, id))
+	u, err := scanUser(r.pool.QueryRow(ctx, query, now, reason, id, tenantID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("user %s: %w", id, ErrNotFound)
@@ -352,14 +353,14 @@ func (r *PostgresAdminUserRepository) Lock(ctx context.Context, id, reason strin
 }
 
 // Unlock clears the locked flag and reason on a user.
-func (r *PostgresAdminUserRepository) Unlock(ctx context.Context, id string) (*domain.User, error) {
+func (r *PostgresAdminUserRepository) Unlock(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error) {
 	now := time.Now().UTC()
 	query := fmt.Sprintf(`
 		UPDATE users SET locked = false, locked_at = NULL, locked_reason = '', updated_at = $1
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND tenant_id = $3 AND deleted_at IS NULL
 		RETURNING %s`, userColumns)
 
-	u, err := scanUser(r.pool.QueryRow(ctx, query, now, id))
+	u, err := scanUser(r.pool.QueryRow(ctx, query, now, id, tenantID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("user %s: %w", id, ErrNotFound)
