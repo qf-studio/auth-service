@@ -38,6 +38,9 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		if mw.Metrics != nil {
 			r.Use(mw.Metrics)
 		}
+		if mw.Tenant != nil {
+			r.Use(mw.Tenant)
+		}
 	}
 
 	v := domain.NewValidator()

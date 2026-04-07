@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"time"
+
+	"github.com/qf-studio/auth-service/internal/domain"
 )
 
 // --- Admin response types ---
@@ -450,6 +452,50 @@ type AdminSAMLService interface {
 	GetAttributeMapping(ctx context.Context, idpID string) (map[string]string, error)
 }
 
+// --- Tenant admin types ---
+
+// AdminTenant represents a tenant in admin API responses.
+type AdminTenant struct {
+	ID        string              `json:"id"`
+	Name      string              `json:"name"`
+	Slug      string              `json:"slug"`
+	Config    domain.TenantConfig `json:"config"`
+	Status    string              `json:"status"`
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
+}
+
+// AdminTenantList is the paginated response for listing tenants.
+type AdminTenantList struct {
+	Tenants []AdminTenant `json:"tenants"`
+	Total   int           `json:"total"`
+	Page    int           `json:"page"`
+	PerPage int           `json:"per_page"`
+}
+
+// CreateTenantRequest is the request body for creating a tenant.
+type CreateTenantRequest struct {
+	Name   string              `json:"name"   validate:"required,min=1,max=255"`
+	Slug   string              `json:"slug"   validate:"required,min=1,max=63,alphanum"`
+	Config domain.TenantConfig `json:"config"`
+}
+
+// UpdateTenantRequest is the request body for updating a tenant.
+type UpdateTenantRequest struct {
+	Name   *string              `json:"name"   validate:"omitempty,min=1,max=255"`
+	Config *domain.TenantConfig `json:"config" validate:"omitempty"`
+	Status *string              `json:"status" validate:"omitempty,oneof=active suspended"`
+}
+
+// AdminTenantService defines admin operations for tenant management.
+type AdminTenantService interface {
+	ListTenants(ctx context.Context, page, perPage int, status string) (*AdminTenantList, error)
+	GetTenant(ctx context.Context, tenantID string) (*AdminTenant, error)
+	CreateTenant(ctx context.Context, req *CreateTenantRequest) (*AdminTenant, error)
+	UpdateTenant(ctx context.Context, tenantID string, req *UpdateTenantRequest) (*AdminTenant, error)
+	DeleteTenant(ctx context.Context, tenantID string) error
+}
+
 // AdminServices aggregates all admin service interfaces required by admin API handlers.
 type AdminServices struct {
 	Users          AdminUserService
@@ -462,4 +508,5 @@ type AdminServices struct {
 	Webhooks       AdminWebhookService
 	Brokers        AdminBrokerService
 	SAML           AdminSAMLService
+	Tenants        AdminTenantService
 }
