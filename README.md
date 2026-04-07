@@ -86,30 +86,17 @@ Full API specification: [`api/`](./api/)
 
 ## Architecture
 
-```
-┌─────────────┐     ┌─────────────┐
-│  Public :4000│     │  Admin :4001 │
-└──────┬──────┘     └──────┬──────┘
-       │                   │
-       └─────┬─────────────┘
-             │
-      ┌──────▼──────┐
-      │  Gin Router  │
-      │  + Middleware │
-      └──────┬──────┘
-             │
-   ┌─────────┼─────────┐
-   │         │         │
-┌──▼──┐  ┌──▼──┐  ┌──▼──┐
-│ Auth │  │Token│  │RBAC │
-└──┬──┘  └──┬──┘  └──┬──┘
-   │        │        │
-   └────────┼────────┘
-            │
-   ┌────────▼────────┐
-   │   Storage Layer  │
-   │ PostgreSQL Redis │
-   └─────────────────┘
+```mermaid
+flowchart TB
+    Public[Public API :4000] --> Router
+    Admin[Admin API :4001] --> Router
+    Router["Gin Router + Middleware<br/>auth · rate limit · CORS · TLS"] --> Auth[Auth]
+    Router --> Token[Token]
+    Router --> RBAC[RBAC]
+    Auth --> Storage
+    Token --> Storage
+    RBAC --> Storage
+    Storage[("PostgreSQL + Redis<br/>persistent storage · sessions · cache")]
 ```
 
 See [architecture diagrams](./.agent/system/architecture-diagrams.md) and [project architecture](./.agent/system/project-architecture.md) for details.
