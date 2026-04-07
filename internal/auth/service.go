@@ -16,6 +16,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	emailpkg "github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
@@ -49,16 +50,18 @@ type MFAChecker interface {
 // Service implements api.AuthService with Redis-backed password reset tokens
 // and PostgreSQL-backed user authentication.
 type Service struct {
-	redis    *redis.Client
-	logger   *zap.Logger
-	audit    audit.EventLogger
-	users    storage.UserRepository
-	tokens   storage.RefreshTokenRepository
-	issuer   TokenIssuer
-	hasher   password.Hasher
-	breaches hibp.BreachChecker
-	mfa      MFAChecker
-	policy   *password.PolicyValidator
+	redis        *redis.Client
+	logger       *zap.Logger
+	audit        audit.EventLogger
+	users        storage.UserRepository
+	tokens       storage.RefreshTokenRepository
+	issuer       TokenIssuer
+	hasher       password.Hasher
+	breaches     hibp.BreachChecker
+	mfa          MFAChecker
+	policy       *password.PolicyValidator
+	emailSender  emailpkg.EmailSender
+	baseURL      string
 }
 
 // NewService creates a new auth Service.
@@ -94,6 +97,18 @@ func (s *Service) SetPasswordPolicy(pv *password.PolicyValidator) {
 // circular dependency between auth.Service and mfa.Service.
 func (s *Service) SetMFAChecker(mfa MFAChecker) {
 	s.mfa = mfa
+}
+
+// SetEmailSender injects the email sender after construction.
+// When nil, password reset emails are logged but not delivered.
+func (s *Service) SetEmailSender(sender emailpkg.EmailSender) {
+	s.emailSender = sender
+}
+
+// SetBaseURL sets the public-facing base URL used to construct links in emails
+// (e.g. password reset URLs).
+func (s *Service) SetBaseURL(baseURL string) {
+	s.baseURL = baseURL
 }
 
 // Register creates a new user account with policy-aware password validation.
@@ -320,7 +335,20 @@ func (s *Service) ResetPassword(ctx context.Context, email string) error {
 		Metadata: map[string]string{"email": email},
 	})
 
-	// TODO(GH-XX): send email with reset link containing the token.
+	if s.emailSender != nil {
+		resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.baseURL, token)
+		msg := emailpkg.Message{
+			To:      email,
+			Subject: "Password Reset Request",
+			Body:    fmt.Sprintf("Click the link below to reset your password:\n\n%s\n\nThis link expires in %s.", resetURL, resetTokenTTL),
+		}
+		if sendErr := s.emailSender.Send(ctx, msg); sendErr != nil {
+			s.logger.Error("failed to send password reset email",
+				zap.String("email", email),
+				zap.Error(sendErr),
+			)
+		}
+	}
 
 	return nil
 }

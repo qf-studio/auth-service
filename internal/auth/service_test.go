@@ -15,6 +15,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	emailpkg "github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -913,4 +914,70 @@ func TestLogin_PasswordExpired(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.True(t, result.ForcePasswordChange)
+}
+
+// ── Email Sender Wiring Tests ──────────────────────────────────────────────
+
+type mockEmailSender struct {
+	sent []emailpkg.Message
+	err  error
+}
+
+func (m *mockEmailSender) Send(_ context.Context, msg emailpkg.Message) error {
+	m.sent = append(m.sent, msg)
+	return m.err
+}
+
+func TestSetEmailSender(t *testing.T) {
+	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	assert.Nil(t, svc.emailSender)
+
+	sender := &mockEmailSender{}
+	svc.SetEmailSender(sender)
+	assert.Equal(t, sender, svc.emailSender)
+}
+
+func TestSetBaseURL(t *testing.T) {
+	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	assert.Empty(t, svc.baseURL)
+
+	svc.SetBaseURL("https://auth.example.com")
+	assert.Equal(t, "https://auth.example.com", svc.baseURL)
+}
+
+func TestResetPassword_SendsEmail(t *testing.T) {
+	svc := newIntegrationService(t)
+	sender := &mockEmailSender{}
+	svc.SetEmailSender(sender)
+	svc.SetBaseURL("https://auth.example.com")
+
+	err := svc.ResetPassword(context.Background(), "alice@example.com")
+	require.NoError(t, err)
+
+	require.Len(t, sender.sent, 1)
+	msg := sender.sent[0]
+	assert.Equal(t, "alice@example.com", msg.To)
+	assert.Equal(t, "Password Reset Request", msg.Subject)
+	assert.Contains(t, msg.Body, "https://auth.example.com/reset-password?token=")
+}
+
+func TestResetPassword_NoEmailSender_DoesNotPanic(t *testing.T) {
+	svc := newIntegrationService(t)
+	// emailSender is nil by default — should not panic.
+	err := svc.ResetPassword(context.Background(), "bob@example.com")
+	require.NoError(t, err)
+}
+
+func TestResetPassword_EmailSendFailure_DoesNotBlockReset(t *testing.T) {
+	svc := newIntegrationService(t)
+	sender := &mockEmailSender{err: fmt.Errorf("SMTP connection refused")}
+	svc.SetEmailSender(sender)
+	svc.SetBaseURL("https://auth.example.com")
+
+	// Email failure is logged but does not return an error.
+	err := svc.ResetPassword(context.Background(), "carol@example.com")
+	require.NoError(t, err)
+
+	// Email was still attempted.
+	require.Len(t, sender.sent, 1)
 }

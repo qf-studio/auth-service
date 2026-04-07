@@ -21,6 +21,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
+	"github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/dpop"
 	grpcserver "github.com/qf-studio/auth-service/internal/grpc"
 	"github.com/qf-studio/auth-service/internal/webhook"
@@ -92,6 +93,18 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 	hibpClient := hibp.NewClient(http.DefaultClient)
 	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
+
+	// ── Email sender ─────────────────────────────────────────────────────
+	var emailSender email.EmailSender
+	if cfg.Email.ServiceURL != "" {
+		emailSender = email.NewHTTPSender(cfg.Email.ServiceURL, cfg.Email.APIKey, cfg.Email.SenderAddress, nil)
+		log.Info("email sender: HTTP", zap.String("service_url", cfg.Email.ServiceURL))
+	} else {
+		emailSender = email.NewConsoleSender(log)
+		log.Info("email sender: console (EMAIL_SERVICE_URL not set)")
+	}
+	authSvc.SetEmailSender(emailSender)
+	authSvc.SetBaseURL(cfg.App.BaseURL)
 
 	// ── Session ──────────────────────────────────────────────────────────
 	sessionStore := session.NewMemoryStore()

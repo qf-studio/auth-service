@@ -101,6 +101,7 @@ type AppConfig struct {
 	AdminPort  int
 	GRPCPort   int
 	LogLevel   string
+	BaseURL    string // BASE_URL: public-facing base URL for links in emails, e.g. "https://auth.quantflow.studio"
 }
 
 // PostgresConfig holds PostgreSQL connection parameters.
@@ -327,6 +328,7 @@ func Load() (*Config, error) {
 func loadApp(l *loader) (AppConfig, error) {
 	appEnv := l.requireStr("APP_ENV")
 	logLevel := l.optStr("LOG_LEVEL", "info")
+	baseURL := l.optStr("BASE_URL", "http://localhost:4000")
 
 	publicPort, err := l.optInt("PUBLIC_PORT", 4000)
 	if err != nil {
@@ -347,6 +349,7 @@ func loadApp(l *loader) (AppConfig, error) {
 		AdminPort:  adminPort,
 		GRPCPort:   grpcPort,
 		LogLevel:   logLevel,
+		BaseURL:    baseURL,
 	}, nil
 }
 
