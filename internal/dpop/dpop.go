@@ -431,11 +431,11 @@ func (v *Validator) validateNonce(ctx context.Context, nonce string) (bool, erro
 func matchHTU(htu, expected string) error {
 	htuParsed, err := url.Parse(htu)
 	if err != nil {
-		return fmt.Errorf("htu is not a valid URL: %v", err)
+		return fmt.Errorf("htu is not a valid URL: %w", err)
 	}
 	expParsed, err := url.Parse(expected)
 	if err != nil {
-		return fmt.Errorf("expected URL is not valid: %v", err)
+		return fmt.Errorf("expected URL is not valid: %w", err)
 	}
 
 	if !strings.EqualFold(htuParsed.Scheme, expParsed.Scheme) {
