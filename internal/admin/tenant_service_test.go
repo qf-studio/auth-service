@@ -171,16 +171,16 @@ func TestTenantService_CreateTenant_WithConfig(t *testing.T) {
 	req := &api.CreateTenantRequest{
 		Name: "Configured Tenant",
 		Slug: "configured",
-		Config: &api.AdminTenantConfig{
-			PasswordPolicy: &api.AdminTenantPasswordPolicy{
+		Config: &domain.TenantConfig{
+			PasswordPolicy: &domain.TenantPasswordPolicy{
 				MinLength: &minLen,
 			},
-			MFA: &api.AdminTenantMFAConfig{
+			MFA: &domain.TenantMFAConfig{
 				Required:       true,
 				AllowedMethods: []string{"totp"},
 			},
 			AllowedOAuthProviders: []string{"google", "github"},
-			TokenTTLs: &api.AdminTenantTokenTTLs{
+			TokenTTLs: &domain.TenantTokenTTLs{
 				AccessTokenTTL:  intPtr(900),
 				RefreshTokenTTL: intPtr(86400),
 			},
@@ -339,37 +339,37 @@ func TestTenantService_DeleteTenant_DefaultTenant(t *testing.T) {
 func TestValidatePasswordPolicy(t *testing.T) {
 	tests := []struct {
 		name    string
-		policy  *api.AdminTenantPasswordPolicy
+		policy  *domain.TenantPasswordPolicy
 		wantErr bool
 	}{
 		{
 			name:    "valid policy",
-			policy:  &api.AdminTenantPasswordPolicy{MinLength: intPtr(15), MaxLength: intPtr(64)},
+			policy:  &domain.TenantPasswordPolicy{MinLength: intPtr(15), MaxLength: intPtr(64)},
 			wantErr: false,
 		},
 		{
 			name:    "min_length too small",
-			policy:  &api.AdminTenantPasswordPolicy{MinLength: intPtr(4)},
+			policy:  &domain.TenantPasswordPolicy{MinLength: intPtr(4)},
 			wantErr: true,
 		},
 		{
 			name:    "max_length exceeds limit",
-			policy:  &api.AdminTenantPasswordPolicy{MaxLength: intPtr(200)},
+			policy:  &domain.TenantPasswordPolicy{MaxLength: intPtr(200)},
 			wantErr: true,
 		},
 		{
 			name:    "max_length less than min_length",
-			policy:  &api.AdminTenantPasswordPolicy{MinLength: intPtr(20), MaxLength: intPtr(10)},
+			policy:  &domain.TenantPasswordPolicy{MinLength: intPtr(20), MaxLength: intPtr(10)},
 			wantErr: true,
 		},
 		{
 			name:    "negative max_age_days",
-			policy:  &api.AdminTenantPasswordPolicy{MaxAgeDays: intPtr(-1)},
+			policy:  &domain.TenantPasswordPolicy{MaxAgeDays: intPtr(-1)},
 			wantErr: true,
 		},
 		{
 			name:    "negative history_count",
-			policy:  &api.AdminTenantPasswordPolicy{HistoryCount: intPtr(-1)},
+			policy:  &domain.TenantPasswordPolicy{HistoryCount: intPtr(-1)},
 			wantErr: true,
 		},
 	}
@@ -390,22 +390,22 @@ func TestValidatePasswordPolicy(t *testing.T) {
 func TestValidateMFAConfig(t *testing.T) {
 	tests := []struct {
 		name    string
-		mfa     *api.AdminTenantMFAConfig
+		mfa     *domain.TenantMFAConfig
 		wantErr bool
 	}{
 		{
 			name:    "valid config",
-			mfa:     &api.AdminTenantMFAConfig{Required: true, AllowedMethods: []string{"totp", "webauthn"}},
+			mfa:     &domain.TenantMFAConfig{Required: true, AllowedMethods: []string{"totp", "webauthn"}},
 			wantErr: false,
 		},
 		{
 			name:    "invalid method",
-			mfa:     &api.AdminTenantMFAConfig{AllowedMethods: []string{"sms"}},
+			mfa:     &domain.TenantMFAConfig{AllowedMethods: []string{"sms"}},
 			wantErr: true,
 		},
 		{
 			name:    "negative grace period",
-			mfa:     &api.AdminTenantMFAConfig{GracePeriodDays: -1},
+			mfa:     &domain.TenantMFAConfig{GracePeriodDays: -1},
 			wantErr: true,
 		},
 	}
@@ -431,27 +431,27 @@ func TestValidateOAuthProviders(t *testing.T) {
 func TestValidateTokenTTLs(t *testing.T) {
 	tests := []struct {
 		name    string
-		ttls    *api.AdminTenantTokenTTLs
+		ttls    *domain.TenantTokenTTLs
 		wantErr bool
 	}{
 		{
 			name:    "valid ttls",
-			ttls:    &api.AdminTenantTokenTTLs{AccessTokenTTL: intPtr(900), RefreshTokenTTL: intPtr(86400)},
+			ttls:    &domain.TenantTokenTTLs{AccessTokenTTL: intPtr(900), RefreshTokenTTL: intPtr(86400)},
 			wantErr: false,
 		},
 		{
 			name:    "access_token_ttl too low",
-			ttls:    &api.AdminTenantTokenTTLs{AccessTokenTTL: intPtr(10)},
+			ttls:    &domain.TenantTokenTTLs{AccessTokenTTL: intPtr(10)},
 			wantErr: true,
 		},
 		{
 			name:    "access_token_ttl too high",
-			ttls:    &api.AdminTenantTokenTTLs{AccessTokenTTL: intPtr(maxTokenTTL + 1)},
+			ttls:    &domain.TenantTokenTTLs{AccessTokenTTL: intPtr(maxTokenTTL + 1)},
 			wantErr: true,
 		},
 		{
 			name:    "refresh_token_ttl too low",
-			ttls:    &api.AdminTenantTokenTTLs{RefreshTokenTTL: intPtr(5)},
+			ttls:    &domain.TenantTokenTTLs{RefreshTokenTTL: intPtr(5)},
 			wantErr: true,
 		},
 	}
@@ -476,8 +476,8 @@ func TestTenantService_CreateTenant_InvalidConfig(t *testing.T) {
 	_, err := svc.CreateTenant(context.Background(), &api.CreateTenantRequest{
 		Name: "Bad Config",
 		Slug: "bad-config",
-		Config: &api.AdminTenantConfig{
-			PasswordPolicy: &api.AdminTenantPasswordPolicy{
+		Config: &domain.TenantConfig{
+			PasswordPolicy: &domain.TenantPasswordPolicy{
 				MinLength: intPtr(3),
 			},
 		},
@@ -496,8 +496,8 @@ func TestTenantService_UpdateTenant_InvalidConfig(t *testing.T) {
 	svc := newTestTenantService(repo)
 
 	_, err := svc.UpdateTenant(context.Background(), tenant.ID.String(), &api.UpdateTenantRequest{
-		Config: &api.AdminTenantConfig{
-			MFA: &api.AdminTenantMFAConfig{
+		Config: &domain.TenantConfig{
+			MFA: &domain.TenantMFAConfig{
 				AllowedMethods: []string{"sms"},
 			},
 		},
