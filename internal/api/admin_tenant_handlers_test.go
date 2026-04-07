@@ -125,16 +125,35 @@ func TestAdminListTenants_Pagination(t *testing.T) {
 }
 
 func TestAdminListTenants_StatusFilter(t *testing.T) {
-	svc := &mockAdminTenantService{
-		listTenantsFn: func(_ context.Context, page, perPage int, status string) (*api.AdminTenantList, error) {
-			assert.Equal(t, "active", status)
-			return &api.AdminTenantList{Tenants: []api.AdminTenant{}, Total: 0, Page: page, PerPage: perPage}, nil
-		},
+	tests := []struct {
+		name       string
+		query      string
+		wantStatus string
+	}{
+		{"filter active", "?status=active", "active"},
+		{"filter suspended", "?status=suspended", "suspended"},
+		{"filter deleted", "?status=deleted", "deleted"},
+		{"no filter", "", ""},
 	}
-	r := newAdminTenantRouter(svc)
-	w := doRequest(r, http.MethodGet, "/admin/tenants?status=active", nil)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &mockAdminTenantService{
+				listTenantsFn: func(_ context.Context, page, perPage int, status string) (*api.AdminTenantList, error) {
+					assert.Equal(t, tt.wantStatus, status)
+					return &api.AdminTenantList{Tenants: []api.AdminTenant{}, Total: 0, Page: page, PerPage: perPage}, nil
+				},
+			}
+			r := newAdminTenantRouter(svc)
+			w := doRequest(r, http.MethodGet, "/admin/tenants"+tt.query, nil)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			var resp api.AdminTenantList
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, 0, resp.Total)
+		})
+	}
 }
 
 func TestAdminListTenants_PerPageCapped(t *testing.T) {
