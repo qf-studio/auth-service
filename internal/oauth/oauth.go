@@ -95,7 +95,7 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state stri
 				zap.String("provider", provider),
 				zap.Error(err),
 			)
-			return nil, fmt.Errorf("%w: %v", api.ErrUnauthorized, domain.ErrOAuthStateMismatch)
+			return nil, fmt.Errorf("%w: %w", api.ErrUnauthorized, domain.ErrOAuthStateMismatch)
 		}
 		ctx = WithCodeVerifier(ctx, verifier)
 	}
@@ -106,7 +106,7 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state stri
 			zap.String("provider", provider),
 			zap.Error(err),
 		)
-		return nil, fmt.Errorf("%w: %v", api.ErrUnauthorized, domain.ErrOAuthCodeExchangeFailed)
+		return nil, fmt.Errorf("%w: %w", api.ErrUnauthorized, domain.ErrOAuthCodeExchangeFailed)
 	}
 
 	// Look up existing linked account.
