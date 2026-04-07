@@ -16,6 +16,7 @@ import (
 
 // UserSearchFilter defines advanced search criteria for listing users.
 type UserSearchFilter struct {
+	TenantID      uuid.UUID  // tenant scope (optional; overridden by explicit parameter when both are set)
 	Email         string     // partial match (ILIKE)
 	Role          string     // exact match against roles array
 	Status        string     // active, locked, suspended, deleted
