@@ -1,6 +1,6 @@
 # Auth Service
 
-[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![NIST SP 800-63-4](https://img.shields.io/badge/NIST-AAL2-blue)](https://pages.nist.gov/800-63-4/)
 
@@ -19,17 +19,17 @@ Authentication and authorization service for the QuantFlow Studio ecosystem. Ser
 - **Dual-Port Architecture** — Public (:4000) and Admin (:4001) with network-level isolation
 - **Rate Limiting** — Per-IP with progressive delay and account lockout
 - **DPoP Support** — Demonstrating Proof-of-Possession token binding
-- **MFA** — TOTP with backup codes (Phase 2)
-- **Social Login** — Google, GitHub, Apple OAuth providers (Phase 2)
-- **OIDC Provider** — OpenID Connect discovery and ID tokens (Phase 2)
-- **SAML SSO** — Service Provider integration (Phase 3)
-- **Multi-Tenancy** — Subdomain and header-based tenant resolution (Phase 3)
+- **MFA** — TOTP with backup codes
+- **Social Login** — Google, GitHub, Apple OAuth providers
+- **OIDC Provider** — OpenID Connect discovery and ID tokens
+- **SAML SSO** — Service Provider integration
+- **Multi-Tenancy** — Subdomain and header-based tenant resolution
 
 ## Quick Start
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.25+
 - PostgreSQL 15+
 - Redis 7+
 - Docker & Docker Compose (optional)
@@ -209,7 +209,7 @@ go build -o bin/auth-service cmd/server/main.go
 
 | Component | Technology |
 |-----------|-----------|
-| Language | Go 1.24+ |
+| Language | Go 1.25+ |
 | Framework | Gin |
 | Database | PostgreSQL 15+ (pgx/v5) |
 | Cache | Redis 7+ (go-redis/v9) |
@@ -220,15 +220,15 @@ go build -o bin/auth-service cmd/server/main.go
 
 ## Project Status
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| **Phase 1** — MVP | Scaffold, auth, tokens, RBAC, middleware, storage | In Progress |
-| **Phase 2** — Production | MFA, WebAuthn, social login, DPoP, gRPC, audit | Planned |
-| **Phase 3** — Enterprise | Multi-tenancy, SAML, webhooks, GDPR | Planned |
+**v0.67.0 — feature-complete.** All three phases shipped:
+
+- **Phase 1 — MVP**: Core auth, tokens, RBAC, middleware, storage
+- **Phase 2 — Production**: MFA, WebAuthn, DPoP, social login, gRPC, OIDC provider, audit logging
+- **Phase 3 — Enterprise**: Multi-tenancy, SAML SSO, webhooks, GDPR, agent credential broker
 
 ## Built with Pilot
 
-This project is developed with [Pilot](https://github.com/qf-studio/pilot) — an autonomous AI execution bot that implements GitHub issues, runs verification, and opens pull requests.
+This project is developed with [Pilot](https://github.com/alekspetrov/pilot) — an autonomous AI execution bot that implements GitHub issues, runs verification, and opens pull requests.
 
 ## Contributing
 
