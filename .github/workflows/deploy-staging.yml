@@ -1,12 +1,9 @@
 name: Deploy Staging
 
+# Disabled 2026-04-07: staging server not provisioned. Re-enable by restoring
+# the workflow_run trigger once DEPLOY_HOST/DEPLOY_USER/SSH key secrets are set.
 on:
-  workflow_run:
-    workflows: ["Release"]
-    types:
-      - completed
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
