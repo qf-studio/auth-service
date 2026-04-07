@@ -362,4 +362,5 @@ type MiddlewareStack struct {
 	Auth            gin.HandlerFunc
 	DPoP            gin.HandlerFunc
 	Metrics         gin.HandlerFunc
+	Tenant          gin.HandlerFunc
 }

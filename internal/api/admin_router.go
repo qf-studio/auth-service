@@ -135,6 +135,19 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
+	// Tenant management.
+	if svc.Tenants != nil {
+		tenantH := NewAdminTenantHandlers(svc.Tenants)
+		tenants := admin.Group("/tenants")
+		{
+			tenants.GET("", tenantH.List)
+			tenants.GET("/:id", tenantH.Get)
+			tenants.POST("", tenantH.Create)
+			tenants.PATCH("/:id", tenantH.Update)
+			tenants.DELETE("/:id", tenantH.Delete)
+		}
+	}
+
 	// SAML IdP management.
 	if svc.SAML != nil {
 		samlH := NewAdminSAMLHandlers(svc.SAML)
