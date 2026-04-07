@@ -50,7 +50,7 @@ func TestTenantService_ListTenants(t *testing.T) {
 	}
 	svc := newTestTenantService(repo)
 
-	result, err := svc.ListTenants(context.Background(), 1, 20)
+	result, err := svc.ListTenants(context.Background(), 1, 20, "")
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Total)
 	assert.Len(t, result.Tenants, 1)
@@ -65,7 +65,7 @@ func TestTenantService_ListTenants_Error(t *testing.T) {
 	}
 	svc := newTestTenantService(repo)
 
-	_, err := svc.ListTenants(context.Background(), 1, 20)
+	_, err := svc.ListTenants(context.Background(), 1, 20, "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrInternalError)
 }

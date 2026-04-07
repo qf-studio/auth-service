@@ -54,7 +54,7 @@ func NewTenantService(repo storage.TenantRepository, logger *zap.Logger, auditor
 }
 
 // ListTenants returns a paginated list of tenants.
-func (s *TenantService) ListTenants(ctx context.Context, page, perPage int) (*api.AdminTenantList, error) {
+func (s *TenantService) ListTenants(ctx context.Context, page, perPage int, _ string) (*api.AdminTenantList, error) {
 	offset := (page - 1) * perPage
 
 	tenants, total, err := s.repo.List(ctx, perPage, offset)

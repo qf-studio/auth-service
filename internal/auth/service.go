@@ -16,6 +16,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	emailpkg "github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
@@ -55,10 +56,12 @@ type Service struct {
 	users    storage.UserRepository
 	tokens   storage.RefreshTokenRepository
 	issuer   TokenIssuer
-	hasher   password.Hasher
-	breaches hibp.BreachChecker
-	mfa      MFAChecker
-	policy   *password.PolicyValidator
+	hasher      password.Hasher
+	breaches    hibp.BreachChecker
+	mfa         MFAChecker
+	emailSender emailpkg.EmailSender
+	baseURL     string
+	policy      *password.PolicyValidator
 }
 
 // NewService creates a new auth Service.
@@ -94,6 +97,16 @@ func (s *Service) SetPasswordPolicy(pv *password.PolicyValidator) {
 // circular dependency between auth.Service and mfa.Service.
 func (s *Service) SetMFAChecker(mfa MFAChecker) {
 	s.mfa = mfa
+}
+
+// SetEmailSender injects the email sender after construction.
+func (s *Service) SetEmailSender(sender emailpkg.EmailSender) {
+	s.emailSender = sender
+}
+
+// SetBaseURL sets the base URL used for constructing password reset links.
+func (s *Service) SetBaseURL(baseURL string) {
+	s.baseURL = baseURL
 }
 
 // Register creates a new user account with policy-aware password validation.
@@ -295,7 +308,7 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 }
 
 // ResetPassword initiates a password reset by generating a token, storing it in Redis,
-// and (in future) sending an email. Returns nil even if the email doesn't exist to
+// and sending a reset email. Returns nil even if the email doesn't exist to
 // prevent enumeration.
 func (s *Service) ResetPassword(ctx context.Context, email string) error {
 	token, err := generateResetToken()
@@ -320,7 +333,17 @@ func (s *Service) ResetPassword(ctx context.Context, email string) error {
 		Metadata: map[string]string{"email": email},
 	})
 
-	// TODO(GH-XX): send email with reset link containing the token.
+	if s.emailSender != nil {
+		resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.baseURL, token)
+		msg := emailpkg.Message{
+			To:      email,
+			Subject: "Password Reset Request",
+			Body:    fmt.Sprintf("Click the following link to reset your password:\n\n%s\n\nThis link expires in %d minutes.", resetURL, int(resetTokenTTL.Minutes())),
+		}
+		if sendErr := s.emailSender.Send(ctx, msg); sendErr != nil {
+			s.logger.Error("failed to send password reset email", zap.Error(sendErr))
+		}
+	}
 
 	return nil
 }
@@ -403,13 +426,18 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 }
 
 // GetMe returns the current user's profile.
-// Stub: full implementation depends on PostgreSQL user repository.
-func (s *Service) GetMe(_ context.Context, userID string) (*api.UserInfo, error) {
-	// TODO(GH-XX): wire PostgreSQL user repository.
+func (s *Service) GetMe(ctx context.Context, userID string) (*api.UserInfo, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	user, err := s.users.FindByID(ctx, tenantID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("find user: %w", err)
+	}
+
 	return &api.UserInfo{
-		ID:    userID,
-		Email: "stub@example.com",
-		Name:  "Stub User",
+		ID:    user.ID,
+		Email: user.Email,
+		Name:  user.Name,
 	}, nil
 }
 

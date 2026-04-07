@@ -15,6 +15,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	emailpkg "github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -177,6 +178,17 @@ func (m *mockHasher) NeedsUpgrade(hash string) bool {
 	return false
 }
 
+type mockEmailSender struct {
+	sendFn func(ctx context.Context, msg emailpkg.Message) error
+}
+
+func (m *mockEmailSender) Send(ctx context.Context, msg emailpkg.Message) error {
+	if m.sendFn != nil {
+		return m.sendFn(ctx, msg)
+	}
+	return nil
+}
+
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
 // newUnitService creates a Service with a nil Redis client for pure unit tests
@@ -184,7 +196,10 @@ func (m *mockHasher) NeedsUpgrade(hash string) bool {
 func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher) *Service {
 	t.Helper()
 	logger, _ := zap.NewDevelopment()
-	return NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{})
+	svc := NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{})
+	svc.SetEmailSender(&mockEmailSender{})
+	svc.SetBaseURL("https://auth.example.com")
+	return svc
 }
 
 // newRedisClient creates a Redis client for integration tests (password reset).
@@ -220,7 +235,10 @@ func newIntegrationService(t *testing.T) *Service {
 	t.Helper()
 	client := newRedisClient(t)
 	logger, _ := zap.NewDevelopment()
-	return NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
+	svc := NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
+	svc.SetEmailSender(&mockEmailSender{})
+	svc.SetBaseURL("https://auth.example.com")
+	return svc
 }
 
 // ── Login Tests ──────────────────────────────────────────────────────────────
@@ -714,6 +732,50 @@ func TestGenerateResetToken_Uniqueness(t *testing.T) {
 	}
 }
 
+// ── Email Sender Tests ──────────────────────────────────────────────────────
+
+func TestResetPassword_SendsEmail(t *testing.T) {
+	client := newRedisClient(t)
+	logger, _ := zap.NewDevelopment()
+
+	var sentMsg emailpkg.Message
+	emailMock := &mockEmailSender{
+		sendFn: func(_ context.Context, msg emailpkg.Message) error {
+			sentMsg = msg
+			return nil
+		},
+	}
+
+	svc := NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
+	svc.SetEmailSender(emailMock)
+	svc.SetBaseURL("https://auth.example.com")
+
+	err := svc.ResetPassword(context.Background(), "alice@example.com")
+	require.NoError(t, err)
+
+	assert.Equal(t, "alice@example.com", sentMsg.To)
+	assert.Equal(t, "Password Reset Request", sentMsg.Subject)
+	assert.Contains(t, sentMsg.Body, "https://auth.example.com/reset-password?token=")
+}
+
+func TestResetPassword_EmailFailureReturnsNil(t *testing.T) {
+	client := newRedisClient(t)
+	logger, _ := zap.NewDevelopment()
+
+	emailMock := &mockEmailSender{
+		sendFn: func(_ context.Context, _ emailpkg.Message) error {
+			return fmt.Errorf("SMTP connection refused")
+		},
+	}
+
+	svc := NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
+	svc.SetEmailSender(emailMock)
+	svc.SetBaseURL("https://auth.example.com")
+
+	err := svc.ResetPassword(context.Background(), "alice@example.com")
+	require.NoError(t, err, "email send failure must not leak to caller")
+}
+
 func TestRegister_ReturnsStub(t *testing.T) {
 	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
 	user, err := svc.Register(context.Background(), "test@example.com", "password123456789", "Test")
@@ -723,11 +785,34 @@ func TestRegister_ReturnsStub(t *testing.T) {
 	assert.NotEmpty(t, user.ID)
 }
 
-func TestGetMe_ReturnsStub(t *testing.T) {
-	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+func TestGetMe_ReturnsUserData(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, id string) (*domain.User, error) {
+			return &domain.User{
+				ID:    id,
+				Email: "alice@example.com",
+				Name:  "Alice",
+			}, nil
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
 	user, err := svc.GetMe(context.Background(), "user-42")
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", user.ID)
+	assert.Equal(t, "alice@example.com", user.Email)
+	assert.Equal(t, "Alice", user.Name)
+}
+
+func TestGetMe_UnknownUser(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+	_, err := svc.GetMe(context.Background(), "user-unknown")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
 
 // ── Register Tests ──────────────────────────────────────────────────────────
