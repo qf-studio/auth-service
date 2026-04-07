@@ -2,8 +2,11 @@ package session_test
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/session"
@@ -262,4 +265,278 @@ func TestService_DeleteAllSessions_StoreError(t *testing.T) {
 	err := svc.DeleteAllSessions(context.Background(), "u")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, sentinel))
+}
+
+// --- Table-driven tests ---
+
+func TestService_CreateSession_TableDriven(t *testing.T) {
+	tests := []struct {
+		name      string
+		userID    string
+		ipAddress string
+		userAgent string
+	}{
+		{
+			name:      "full metadata",
+			userID:    "user-full",
+			ipAddress: "192.168.1.1",
+			userAgent: "Mozilla/5.0",
+		},
+		{
+			name:      "empty optional fields",
+			userID:    "user-minimal",
+			ipAddress: "",
+			userAgent: "",
+		},
+		{
+			name:      "ipv6 address",
+			userID:    "user-ipv6",
+			ipAddress: "::1",
+			userAgent: "curl/7.88",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := session.NewMemoryStore()
+			svc := session.NewService(store)
+			ctx := context.Background()
+
+			before := time.Now().UTC().Add(-time.Second)
+			info, err := svc.CreateSession(ctx, tt.userID, tt.ipAddress, tt.userAgent)
+			after := time.Now().UTC().Add(time.Second)
+
+			require.NoError(t, err)
+			require.NotNil(t, info)
+
+			// Verify fields are set correctly.
+			assert.Equal(t, tt.userID, info.UserID)
+			assert.Equal(t, tt.ipAddress, info.IPAddress)
+			assert.Equal(t, tt.userAgent, info.UserAgent)
+
+			// Session ID must be 32 hex chars (16 bytes).
+			assert.Len(t, info.ID, 32)
+			_, err = hex.DecodeString(info.ID)
+			assert.NoError(t, err, "session ID must be valid hex")
+
+			// Timestamps must be within the test window.
+			assert.True(t, info.CreatedAt.After(before), "CreatedAt too early")
+			assert.True(t, info.CreatedAt.Before(after), "CreatedAt too late")
+			assert.Equal(t, info.CreatedAt, info.LastActivityAt, "CreatedAt and LastActivityAt should match at creation")
+		})
+	}
+}
+
+func TestMemoryStore_Delete_TableDriven(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       []api.SessionInfo // sessions to create
+		deleteUser  string
+		deleteID    string
+		wantErr     bool
+		wantErrIs   error
+		wantRemain  int // remaining sessions for deleteUser
+	}{
+		{
+			name: "delete first of two",
+			setup: []api.SessionInfo{
+				{ID: "s1", UserID: "u1"},
+				{ID: "s2", UserID: "u1"},
+			},
+			deleteUser: "u1",
+			deleteID:   "s1",
+			wantRemain: 1,
+		},
+		{
+			name: "delete last session",
+			setup: []api.SessionInfo{
+				{ID: "s1", UserID: "u1"},
+			},
+			deleteUser: "u1",
+			deleteID:   "s1",
+			wantRemain: 0,
+		},
+		{
+			name:       "delete nonexistent session",
+			setup:      []api.SessionInfo{},
+			deleteUser: "u1",
+			deleteID:   "ghost",
+			wantErr:    true,
+			wantErrIs:  api.ErrNotFound,
+		},
+		{
+			name: "delete wrong user's session",
+			setup: []api.SessionInfo{
+				{ID: "s1", UserID: "u1"},
+			},
+			deleteUser: "u2",
+			deleteID:   "s1",
+			wantErr:    true,
+			wantErrIs:  api.ErrNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := session.NewMemoryStore()
+			ctx := context.Background()
+
+			for i := range tt.setup {
+				require.NoError(t, store.Create(ctx, &tt.setup[i]))
+			}
+
+			err := store.Delete(ctx, tt.deleteUser, tt.deleteID)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantErrIs != nil {
+					assert.True(t, errors.Is(err, tt.wantErrIs))
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			remaining, err := store.ListByUser(ctx, tt.deleteUser)
+			require.NoError(t, err)
+			assert.Len(t, remaining, tt.wantRemain)
+		})
+	}
+}
+
+func TestMemoryStore_ListByUser_TableDriven(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     []api.SessionInfo
+		queryUser string
+		wantCount int
+	}{
+		{
+			name:      "no sessions exist",
+			setup:     nil,
+			queryUser: "u1",
+			wantCount: 0,
+		},
+		{
+			name: "one session",
+			setup: []api.SessionInfo{
+				{ID: "s1", UserID: "u1"},
+			},
+			queryUser: "u1",
+			wantCount: 1,
+		},
+		{
+			name: "multiple sessions same user",
+			setup: []api.SessionInfo{
+				{ID: "s1", UserID: "u1"},
+				{ID: "s2", UserID: "u1"},
+				{ID: "s3", UserID: "u1"},
+			},
+			queryUser: "u1",
+			wantCount: 3,
+		},
+		{
+			name: "sessions for different user not returned",
+			setup: []api.SessionInfo{
+				{ID: "s1", UserID: "u1"},
+				{ID: "s2", UserID: "u2"},
+			},
+			queryUser: "u1",
+			wantCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := session.NewMemoryStore()
+			ctx := context.Background()
+
+			for i := range tt.setup {
+				require.NoError(t, store.Create(ctx, &tt.setup[i]))
+			}
+
+			sessions, err := store.ListByUser(ctx, tt.queryUser)
+			require.NoError(t, err)
+			assert.Len(t, sessions, tt.wantCount)
+		})
+	}
+}
+
+// --- Concurrent access safety ---
+
+func TestMemoryStore_ConcurrentAccess(t *testing.T) {
+	store := session.NewMemoryStore()
+	ctx := context.Background()
+	const goroutines = 50
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	// Concurrent creates across multiple users.
+	for i := 0; i < goroutines; i++ {
+		go func(n int) {
+			defer wg.Done()
+			userID := "user-1"
+			if n%2 == 0 {
+				userID = "user-2"
+			}
+			s := &api.SessionInfo{
+				ID:     "sess-" + string(rune('A'+n)),
+				UserID: userID,
+			}
+			_ = store.Create(ctx, s)
+		}(i)
+	}
+	wg.Wait()
+
+	// Verify no data loss — total sessions should equal goroutines.
+	s1, err := store.ListByUser(ctx, "user-1")
+	require.NoError(t, err)
+	s2, err := store.ListByUser(ctx, "user-2")
+	require.NoError(t, err)
+	assert.Equal(t, goroutines, len(s1)+len(s2))
+
+	// Concurrent reads + deletes.
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(n int) {
+			defer wg.Done()
+			switch n % 3 {
+			case 0:
+				_, _ = store.ListByUser(ctx, "user-1")
+			case 1:
+				_, _ = store.ListByUser(ctx, "user-2")
+			case 2:
+				_ = store.DeleteAllForUser(ctx, "user-2")
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestService_ConcurrentCreateAndList(t *testing.T) {
+	store := session.NewMemoryStore()
+	svc := session.NewService(store)
+	ctx := context.Background()
+	const goroutines = 30
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	// Half create, half list — simultaneously.
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = svc.CreateSession(ctx, "user-race", "1.2.3.4", "Agent")
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = svc.ListSessions(ctx, "user-race")
+		}()
+	}
+	wg.Wait()
+
+	// All creates should have persisted.
+	sessions, err := svc.ListSessions(ctx, "user-race")
+	require.NoError(t, err)
+	assert.Len(t, sessions, goroutines)
 }
