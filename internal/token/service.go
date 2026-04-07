@@ -479,7 +479,7 @@ func parsePrivateKey(data []byte, algorithm string) (crypto.Signer, crypto.Publi
 		// Try EC-specific parse as fallback.
 		ecKey, ecErr := x509.ParseECPrivateKey(block.Bytes)
 		if ecErr != nil {
-			return nil, nil, nil, fmt.Errorf("parse private key (PKCS8: %v, EC: %v)", err, ecErr)
+			return nil, nil, nil, fmt.Errorf("parse private key (PKCS8: %w, EC: %w)", err, ecErr)
 		}
 		key = ecKey
 	}
