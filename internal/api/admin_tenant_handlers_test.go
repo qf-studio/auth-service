@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/health"
 )
 
@@ -31,7 +32,7 @@ func (m *mockAdminTenantService) ListTenants(ctx context.Context, page, perPage 
 		return m.listTenantsFn(ctx, page, perPage, status)
 	}
 	return &api.AdminTenantList{
-		Tenants: []api.AdminTenant{{ID: "t1", Name: "default", Slug: "default", Status: "active", Config: api.AdminTenantConfig{}, CreatedAt: time.Now(), UpdatedAt: time.Now()}},
+		Tenants: []api.AdminTenant{{ID: "t1", Name: "default", Slug: "default", Status: "active", Config: domain.TenantConfig{}, CreatedAt: time.Now(), UpdatedAt: time.Now()}},
 		Total:   1,
 		Page:    page,
 		PerPage: perPage,
@@ -42,14 +43,14 @@ func (m *mockAdminTenantService) GetTenant(ctx context.Context, tenantID string)
 	if m.getTenantFn != nil {
 		return m.getTenantFn(ctx, tenantID)
 	}
-	return &api.AdminTenant{ID: tenantID, Name: "default", Slug: "default", Status: "active", Config: api.AdminTenantConfig{}, CreatedAt: time.Now(), UpdatedAt: time.Now()}, nil
+	return &api.AdminTenant{ID: tenantID, Name: "default", Slug: "default", Status: "active", Config: domain.TenantConfig{}, CreatedAt: time.Now(), UpdatedAt: time.Now()}, nil
 }
 
 func (m *mockAdminTenantService) CreateTenant(ctx context.Context, req *api.CreateTenantRequest) (*api.AdminTenant, error) {
 	if m.createTenantFn != nil {
 		return m.createTenantFn(ctx, req)
 	}
-	cfg := api.AdminTenantConfig{}
+	cfg := domain.TenantConfig{}
 	if req.Config != nil {
 		cfg = *req.Config
 	}
@@ -72,7 +73,7 @@ func (m *mockAdminTenantService) UpdateTenant(ctx context.Context, tenantID stri
 	if req.Name != nil {
 		name = *req.Name
 	}
-	return &api.AdminTenant{ID: tenantID, Name: name, Slug: "default", Status: "active", Config: api.AdminTenantConfig{}, CreatedAt: time.Now(), UpdatedAt: time.Now()}, nil
+	return &api.AdminTenant{ID: tenantID, Name: name, Slug: "default", Status: "active", Config: domain.TenantConfig{}, CreatedAt: time.Now(), UpdatedAt: time.Now()}, nil
 }
 
 func (m *mockAdminTenantService) DeleteTenant(ctx context.Context, tenantID string) error {

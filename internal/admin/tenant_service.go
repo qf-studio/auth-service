@@ -104,7 +104,7 @@ func (s *TenantService) CreateTenant(ctx context.Context, req *api.CreateTenantR
 		if err := validateTenantConfig(req.Config); err != nil {
 			return nil, err
 		}
-		cfg = adminConfigToDomain(req.Config)
+		cfg = *req.Config
 	}
 
 	now := time.Now().UTC()
@@ -167,7 +167,7 @@ func (s *TenantService) UpdateTenant(ctx context.Context, tenantID string, req *
 		if err := validateTenantConfig(req.Config); err != nil {
 			return nil, err
 		}
-		existing.Config = adminConfigToDomain(req.Config)
+		existing.Config = *req.Config
 	}
 
 	updated, err := s.repo.Update(ctx, existing)
@@ -217,7 +217,7 @@ func (s *TenantService) DeleteTenant(ctx context.Context, tenantID string) error
 }
 
 // validateTenantConfig validates the tenant configuration fields.
-func validateTenantConfig(cfg *api.AdminTenantConfig) error {
+func validateTenantConfig(cfg *domain.TenantConfig) error {
 	if cfg.PasswordPolicy != nil {
 		if err := validatePasswordPolicy(cfg.PasswordPolicy); err != nil {
 			return err
@@ -241,7 +241,7 @@ func validateTenantConfig(cfg *api.AdminTenantConfig) error {
 	return nil
 }
 
-func validatePasswordPolicy(pp *api.AdminTenantPasswordPolicy) error {
+func validatePasswordPolicy(pp *domain.TenantPasswordPolicy) error {
 	if pp.MinLength != nil {
 		if *pp.MinLength < minPasswordLength {
 			return fmt.Errorf("password min_length must be at least %d: %w", minPasswordLength, api.ErrConflict)
@@ -266,7 +266,7 @@ func validatePasswordPolicy(pp *api.AdminTenantPasswordPolicy) error {
 	return nil
 }
 
-func validateMFAConfig(mfa *api.AdminTenantMFAConfig) error {
+func validateMFAConfig(mfa *domain.TenantMFAConfig) error {
 	for _, method := range mfa.AllowedMethods {
 		if !validMFAMethods[method] {
 			return fmt.Errorf("invalid MFA method %q: %w", method, api.ErrConflict)
@@ -287,7 +287,7 @@ func validateOAuthProviders(providers []string) error {
 	return nil
 }
 
-func validateTokenTTLs(ttls *api.AdminTenantTokenTTLs) error {
+func validateTokenTTLs(ttls *domain.TenantTokenTTLs) error {
 	if ttls.AccessTokenTTL != nil {
 		if *ttls.AccessTokenTTL < minTokenTTL || *ttls.AccessTokenTTL > maxTokenTTL {
 			return fmt.Errorf("access_token_ttl must be between %d and %d seconds: %w", minTokenTTL, maxTokenTTL, api.ErrConflict)
@@ -307,65 +307,9 @@ func domainTenantToAdmin(t *domain.Tenant) api.AdminTenant {
 		ID:        t.ID.String(),
 		Name:      t.Name,
 		Slug:      t.Slug,
-		Config:    domainConfigToAdmin(t.Config),
+		Config:    t.Config,
 		Status:    string(t.Status),
 		CreatedAt: t.CreatedAt,
 		UpdatedAt: t.UpdatedAt,
 	}
-}
-
-func domainConfigToAdmin(cfg domain.TenantConfig) api.AdminTenantConfig {
-	out := api.AdminTenantConfig{
-		AllowedOAuthProviders: cfg.AllowedOAuthProviders,
-	}
-	if cfg.PasswordPolicy != nil {
-		out.PasswordPolicy = &api.AdminTenantPasswordPolicy{
-			MinLength:    cfg.PasswordPolicy.MinLength,
-			MaxLength:    cfg.PasswordPolicy.MaxLength,
-			MaxAgeDays:   cfg.PasswordPolicy.MaxAgeDays,
-			HistoryCount: cfg.PasswordPolicy.HistoryCount,
-		}
-	}
-	if cfg.MFA != nil {
-		out.MFA = &api.AdminTenantMFAConfig{
-			Required:        cfg.MFA.Required,
-			AllowedMethods:  cfg.MFA.AllowedMethods,
-			GracePeriodDays: cfg.MFA.GracePeriodDays,
-		}
-	}
-	if cfg.TokenTTLs != nil {
-		out.TokenTTLs = &api.AdminTenantTokenTTLs{
-			AccessTokenTTL:  cfg.TokenTTLs.AccessTokenTTL,
-			RefreshTokenTTL: cfg.TokenTTLs.RefreshTokenTTL,
-		}
-	}
-	return out
-}
-
-func adminConfigToDomain(cfg *api.AdminTenantConfig) domain.TenantConfig {
-	out := domain.TenantConfig{
-		AllowedOAuthProviders: cfg.AllowedOAuthProviders,
-	}
-	if cfg.PasswordPolicy != nil {
-		out.PasswordPolicy = &domain.TenantPasswordPolicy{
-			MinLength:    cfg.PasswordPolicy.MinLength,
-			MaxLength:    cfg.PasswordPolicy.MaxLength,
-			MaxAgeDays:   cfg.PasswordPolicy.MaxAgeDays,
-			HistoryCount: cfg.PasswordPolicy.HistoryCount,
-		}
-	}
-	if cfg.MFA != nil {
-		out.MFA = &domain.TenantMFAConfig{
-			Required:        cfg.MFA.Required,
-			AllowedMethods:  cfg.MFA.AllowedMethods,
-			GracePeriodDays: cfg.MFA.GracePeriodDays,
-		}
-	}
-	if cfg.TokenTTLs != nil {
-		out.TokenTTLs = &domain.TenantTokenTTLs{
-			AccessTokenTTL:  cfg.TokenTTLs.AccessTokenTTL,
-			RefreshTokenTTL: cfg.TokenTTLs.RefreshTokenTTL,
-		}
-	}
-	return out
 }
