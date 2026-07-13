@@ -16,10 +16,12 @@ func WithTenantID(ctx context.Context, id uuid.UUID) context.Context {
 }
 
 // TenantIDFromContext extracts the tenant ID from the context.
-// Returns uuid.Nil if no tenant ID is set.
+// Falls back to DefaultTenantID when no tenant ID is set on the context,
+// so single-tenant deployments (TenantMiddleware unwired) resolve to the
+// seeded Default tenant instead of the zero UUID.
 func TenantIDFromContext(ctx context.Context) uuid.UUID {
 	if v, ok := ctx.Value(tenantIDKey).(uuid.UUID); ok {
 		return v
 	}
-	return uuid.Nil
+	return DefaultTenantID
 }
