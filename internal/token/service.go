@@ -69,6 +69,7 @@ type Service struct {
 	publicKey     crypto.PublicKey
 	signingMethod jwt.SigningMethod
 	users         UserLookup
+	kid           string
 }
 
 // NewService creates a new token Service, loading the private key from the
@@ -84,6 +85,11 @@ func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Log
 		return nil, fmt.Errorf("parse private key: %w", err)
 	}
 
+	kid, err := jwkThumbprint(pub)
+	if err != nil {
+		return nil, fmt.Errorf("compute key thumbprint: %w", err)
+	}
+
 	return &Service{
 		logger:        logger,
 		audit:         auditor,
@@ -92,6 +98,7 @@ func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Log
 		privateKey:    signer,
 		publicKey:     pub,
 		signingMethod: method,
+		kid:           kid,
 	}, nil
 }
 
@@ -104,6 +111,11 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 		return nil, err
 	}
 
+	kid, err := jwkThumbprint(pub)
+	if err != nil {
+		return nil, fmt.Errorf("compute key thumbprint: %w", err)
+	}
+
 	return &Service{
 		logger:        logger,
 		audit:         auditor,
@@ -112,6 +124,7 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 		privateKey:    privateKey,
 		publicKey:     pub,
 		signingMethod: method,
+		kid:           kid,
 	}, nil
 }
 
@@ -269,7 +282,7 @@ func (s *Service) Revoke(ctx context.Context, rawToken string) error {
 
 // JWKS returns the JSON Web Key Set containing the public key for token verification.
 func (s *Service) JWKS(_ context.Context) (*api.JWKSResponse, error) {
-	jwk, err := publicKeyToJWK(s.publicKey, s.cfg.Algorithm)
+	jwk, err := publicKeyToJWK(s.publicKey, s.cfg.Algorithm, s.kid)
 	if err != nil {
 		return nil, fmt.Errorf("build JWK: %w", err)
 	}
@@ -344,6 +357,7 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 	}
 
 	token := jwt.NewWithClaims(s.signingMethod, claims)
+	token.Header["kid"] = s.kid
 	signed, err := token.SignedString(s.privateKey)
 	if err != nil {
 		return "", fmt.Errorf("sign access token: %w", err)
@@ -556,7 +570,7 @@ func signingMethodForKey(key crypto.Signer, algorithm string) (jwt.SigningMethod
 // ── Internal: JWKS ───────────────────────────────────────────────────────────
 
 // publicKeyToJWK converts a public key to a JWK map (RFC 7517).
-func publicKeyToJWK(pub crypto.PublicKey, algorithm string) (map[string]interface{}, error) {
+func publicKeyToJWK(pub crypto.PublicKey, algorithm, kid string) (map[string]interface{}, error) {
 	switch k := pub.(type) {
 	case *ecdsa.PublicKey:
 		if k.Curve != elliptic.P256() {
@@ -577,6 +591,7 @@ func publicKeyToJWK(pub crypto.PublicKey, algorithm string) (map[string]interfac
 			"crv": "P-256",
 			"alg": algorithm,
 			"use": "sig",
+			"kid": kid,
 			"x":   base64.RawURLEncoding.EncodeToString(xPadded),
 			"y":   base64.RawURLEncoding.EncodeToString(yPadded),
 		}, nil
@@ -587,12 +602,56 @@ func publicKeyToJWK(pub crypto.PublicKey, algorithm string) (map[string]interfac
 			"crv": "Ed25519",
 			"alg": algorithm,
 			"use": "sig",
+			"kid": kid,
 			"x":   base64.RawURLEncoding.EncodeToString([]byte(k)),
 		}, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported public key type: %T", pub)
 	}
+}
+
+// jwkThumbprint computes the RFC 7638 JWK thumbprint of a public key, used as
+// the stable `kid` for both the JWKS entry and the JOSE header of tokens
+// signed with the corresponding private key. Being a deterministic hash of
+// the key material, it is stable across restarts without requiring any
+// additional state, and changes automatically if the key is rotated.
+func jwkThumbprint(pub crypto.PublicKey) (string, error) {
+	// RFC 7638 §3.2: the JSON object must contain only the required members
+	// for the key type, with member names in lexicographic order and no
+	// whitespace, so the hash input is unambiguous.
+	var canonical string
+
+	switch k := pub.(type) {
+	case *ecdsa.PublicKey:
+		if k.Curve != elliptic.P256() {
+			return "", fmt.Errorf("unsupported ECDSA curve")
+		}
+		byteLen := (k.Curve.Params().BitSize + 7) / 8
+		xBytes := k.X.Bytes()
+		yBytes := k.Y.Bytes()
+
+		xPadded := make([]byte, byteLen)
+		yPadded := make([]byte, byteLen)
+		copy(xPadded[byteLen-len(xBytes):], xBytes)
+		copy(yPadded[byteLen-len(yBytes):], yBytes)
+
+		canonical = fmt.Sprintf(`{"crv":"P-256","kty":"EC","x":%q,"y":%q}`,
+			base64.RawURLEncoding.EncodeToString(xPadded),
+			base64.RawURLEncoding.EncodeToString(yPadded),
+		)
+
+	case ed25519.PublicKey:
+		canonical = fmt.Sprintf(`{"crv":"Ed25519","kty":"OKP","x":%q}`,
+			base64.RawURLEncoding.EncodeToString([]byte(k)),
+		)
+
+	default:
+		return "", fmt.Errorf("unsupported public key type: %T", pub)
+	}
+
+	sum := sha256.Sum256([]byte(canonical))
+	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
 // ── Internal: Crypto Helpers ─────────────────────────────────────────────────

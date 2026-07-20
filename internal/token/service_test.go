@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	jwtv5 "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -583,6 +584,111 @@ func TestJWKS_EdDSA(t *testing.T) {
 	assert.Equal(t, "EdDSA", keyMap["alg"])
 	assert.Equal(t, "sig", keyMap["use"])
 	assert.NotEmpty(t, keyMap["x"])
+}
+
+// ── kid: JWKS + token header agreement ───────────────────────────────────────
+
+func TestJWKS_ES256_HasStableKID(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	jwks1, err := svc.JWKS(ctx)
+	require.NoError(t, err)
+	require.Len(t, jwks1.Keys, 1)
+	keyMap1, ok := jwks1.Keys[0].(map[string]interface{})
+	require.True(t, ok)
+
+	kid1, ok := keyMap1["kid"].(string)
+	require.True(t, ok, "JWKS entry must carry a kid")
+	assert.NotEmpty(t, kid1)
+
+	// Calling JWKS again must yield the same kid (deterministic, survives
+	// "restarts" in the sense of repeated derivation from the same key).
+	jwks2, err := svc.JWKS(ctx)
+	require.NoError(t, err)
+	keyMap2, ok := jwks2.Keys[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, kid1, keyMap2["kid"])
+}
+
+func TestJWKS_EdDSA_HasStableKID(t *testing.T) {
+	svc, _ := newEdDSAService(t)
+	ctx := context.Background()
+
+	jwks, err := svc.JWKS(ctx)
+	require.NoError(t, err)
+	require.Len(t, jwks.Keys, 1)
+	keyMap, ok := jwks.Keys[0].(map[string]interface{})
+	require.True(t, ok)
+
+	kid, ok := keyMap["kid"].(string)
+	require.True(t, ok, "JWKS entry must carry a kid")
+	assert.NotEmpty(t, kid)
+}
+
+func TestIssueAccessToken_HeaderKIDMatchesJWKS_ES256(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueTokenPair(ctx, "user-123", []string{"admin"}, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	parser := jwtv5.NewParser()
+	parsed, _, err := parser.ParseUnverified(rawJWT, jwtv5.MapClaims{})
+	require.NoError(t, err)
+
+	headerKID, ok := parsed.Header["kid"].(string)
+	require.True(t, ok, "access token header must carry a kid")
+	assert.NotEmpty(t, headerKID)
+
+	jwks, err := svc.JWKS(ctx)
+	require.NoError(t, err)
+	require.Len(t, jwks.Keys, 1)
+	keyMap, ok := jwks.Keys[0].(map[string]interface{})
+	require.True(t, ok)
+
+	assert.Equal(t, keyMap["kid"], headerKID, "token header kid must match the active JWKS key's kid")
+}
+
+func TestIssueAccessToken_HeaderKIDMatchesJWKS_EdDSA(t *testing.T) {
+	svc, _ := newEdDSAService(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueTokenPair(ctx, "svc-456", []string{"service"}, nil, domain.ClientTypeService)
+	require.NoError(t, err)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	parser := jwtv5.NewParser()
+	parsed, _, err := parser.ParseUnverified(rawJWT, jwtv5.MapClaims{})
+	require.NoError(t, err)
+
+	headerKID, ok := parsed.Header["kid"].(string)
+	require.True(t, ok, "access token header must carry a kid")
+	assert.NotEmpty(t, headerKID)
+
+	jwks, err := svc.JWKS(ctx)
+	require.NoError(t, err)
+	keyMap, ok := jwks.Keys[0].(map[string]interface{})
+	require.True(t, ok)
+
+	assert.Equal(t, keyMap["kid"], headerKID, "token header kid must match the active JWKS key's kid")
+}
+
+func TestJWKS_DifferentKeysHaveDifferentKID(t *testing.T) {
+	svc1, _ := newES256Service(t)
+	svc2, _ := newES256Service(t)
+	ctx := context.Background()
+
+	jwks1, err := svc1.JWKS(ctx)
+	require.NoError(t, err)
+	jwks2, err := svc2.JWKS(ctx)
+	require.NoError(t, err)
+
+	keyMap1 := jwks1.Keys[0].(map[string]interface{})
+	keyMap2 := jwks2.Keys[0].(map[string]interface{})
+
+	assert.NotEqual(t, keyMap1["kid"], keyMap2["kid"], "distinct keys must produce distinct kids")
 }
 
 // ── ClientCredentials (stub) ─────────────────────────────────────────────────
