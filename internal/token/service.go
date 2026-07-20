@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
@@ -52,6 +53,12 @@ const (
 	issuer = "https://auth.qf.studio"
 )
 
+// UserLookup abstracts user retrieval for refresh-token role enrichment.
+// This is a narrow interface satisfied by storage.UserRepository.
+type UserLookup interface {
+	FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
+}
+
 // Service implements api.TokenService and middleware.TokenValidator.
 type Service struct {
 	logger        *zap.Logger
@@ -61,6 +68,7 @@ type Service struct {
 	privateKey    crypto.Signer
 	publicKey     crypto.PublicKey
 	signingMethod jwt.SigningMethod
+	users         UserLookup
 }
 
 // NewService creates a new token Service, loading the private key from the
@@ -105,6 +113,15 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 		publicKey:     pub,
 		signingMethod: method,
 	}, nil
+}
+
+// SetUserLookup injects the user repository used to enrich refresh-minted
+// access tokens with the user's current roles (GH-432). Optional: if unset,
+// refreshed access tokens carry no roles claim. Injected post-construction
+// so callers that don't need role enrichment (e.g. tests) can skip it,
+// mirroring auth.Service.SetMFAChecker.
+func (s *Service) SetUserLookup(users UserLookup) {
+	s.users = users
 }
 
 // IssueTokenPair generates an access/refresh token pair for the given subject.
@@ -161,9 +178,23 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 	// Revoke the old refresh token (rotate).
 	s.deleteRefreshToken(ctx, rawRefreshToken)
 
-	// Issue new pair — refresh tokens carry no roles/scopes, so we issue with empty.
-	// The caller (auth service) should enrich with user's current roles/scopes.
-	result, err := s.issueTokenPair(ctx, subject, nil, nil, domain.ClientTypeUser, jktThumbprint)
+	// Refresh tokens carry no roles/scopes of their own, so look up the user's
+	// current roles (as of refresh time) and mirror what the login path does,
+	// otherwise refresh-minted access tokens would silently drop the roles
+	// claim and demote the user until they re-login (GH-432).
+	var roles []string
+	if s.users != nil {
+		tenantID := domain.TenantIDFromContext(ctx)
+		user, lookupErr := s.users.FindByID(ctx, tenantID, subject)
+		if lookupErr != nil {
+			s.logger.Error("failed to look up user for refresh role enrichment",
+				zap.String("subject", subject), zap.Error(lookupErr))
+		} else {
+			roles = user.Roles
+		}
+	}
+
+	result, err := s.issueTokenPair(ctx, subject, roles, nil, domain.ClientTypeUser, jktThumbprint)
 	if err != nil {
 		return nil, err
 	}

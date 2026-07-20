@@ -90,6 +90,8 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
+	// Enrich refresh-minted access tokens with the user's current roles (GH-432).
+	tokenSvc.SetUserLookup(userRepo)
 	hibpClient := hibp.NewClient(http.DefaultClient)
 	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
 
