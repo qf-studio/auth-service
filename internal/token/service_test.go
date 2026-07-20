@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	jwtv5 "github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,6 +26,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/storage/mocks"
 	"github.com/qf-studio/auth-service/internal/token"
 )
 
@@ -453,6 +456,95 @@ func TestRefresh_SecretRotation(t *testing.T) {
 	newResult, err := newSvc.Refresh(ctx, result.RefreshToken)
 	require.NoError(t, err)
 	require.NotNil(t, newResult)
+}
+
+// ── Refresh Role Enrichment (GH-432) ────────────────────────────────────────
+
+// TestRefresh_EnrichesRolesFromUserLookup simulates the full acceptance flow:
+// register (user starts with role "user") -> assign roles via admin API
+// (roles become ["user","admin"]) -> login (mints an access token carrying
+// the roles at login time) -> refresh (must mint an access token carrying
+// the user's *current* roles, not the stale login-time roles). Regression
+// test for GH-432: the refresh grant previously dropped the roles claim
+// entirely.
+func TestRefresh_EnrichesRolesFromUserLookup(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	userID := "usr_gh432"
+	currentRoles := []string{"user"} // roles at "registration" time
+
+	userLookup := &mocks.MockUserRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
+			require.Equal(t, userID, id)
+			return &domain.User{ID: userID, Roles: currentRoles}, nil
+		},
+	}
+	svc.SetUserLookup(userLookup)
+
+	// "login": mints an access token carrying roles as they were at login time.
+	loginResult, err := svc.IssueTokenPair(ctx, userID, currentRoles, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	loginClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(loginResult.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"user"}, loginClaims.Roles)
+
+	// "assign roles via admin API": promote the user to admin after login.
+	currentRoles = []string{"user", "admin"}
+
+	// "refresh": must reflect the user's *current* roles, looked up at refresh time.
+	refreshResult, err := svc.Refresh(ctx, loginResult.RefreshToken)
+	require.NoError(t, err)
+
+	refreshClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(refreshResult.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	require.NotNil(t, refreshClaims)
+	assert.Equal(t, []string{"user", "admin"}, refreshClaims.Roles, "refreshed access token must carry the user's current roles")
+}
+
+// TestRefresh_NoRolesClaimWhenUserLookupUnset preserves the pre-GH-432
+// behavior when no UserLookup is wired (e.g. tests, or services that opt out
+// of role enrichment): refresh must still succeed, just without roles.
+func TestRefresh_NoRolesClaimWhenUserLookupUnset(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueTokenPair(ctx, "user-123", []string{"admin"}, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	refreshResult, err := svc.Refresh(ctx, result.RefreshToken)
+	require.NoError(t, err)
+
+	refreshClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(refreshResult.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	assert.Empty(t, refreshClaims.Roles)
+}
+
+// TestRefresh_UserLookupErrorFailsOpenWithNoRoles verifies that a transient
+// user-lookup failure during refresh doesn't fail the whole refresh (fail-open
+// for availability, matching this codebase's convention elsewhere), it just
+// results in an access token without the roles claim.
+func TestRefresh_UserLookupErrorFailsOpenWithNoRoles(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	userLookup := &mocks.MockUserRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
+			return nil, errors.New("db unavailable")
+		},
+	}
+	svc.SetUserLookup(userLookup)
+
+	result, err := svc.IssueTokenPair(ctx, "user-123", []string{"admin"}, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	refreshResult, err := svc.Refresh(ctx, result.RefreshToken)
+	require.NoError(t, err)
+
+	refreshClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(refreshResult.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	assert.Empty(t, refreshClaims.Roles)
 }
 
 // ── JWKS ─────────────────────────────────────────────────────────────────────
