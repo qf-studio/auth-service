@@ -403,13 +403,21 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 }
 
 // GetMe returns the current user's profile.
-// Stub: full implementation depends on PostgreSQL user repository.
-func (s *Service) GetMe(_ context.Context, userID string) (*api.UserInfo, error) {
-	// TODO(GH-XX): wire PostgreSQL user repository.
+func (s *Service) GetMe(ctx context.Context, userID string) (*api.UserInfo, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	user, err := s.users.FindByID(ctx, tenantID, userID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("user not found: %w", api.ErrNotFound)
+		}
+		return nil, fmt.Errorf("find user: %w", err)
+	}
+
 	return &api.UserInfo{
-		ID:    userID,
-		Email: "stub@example.com",
-		Name:  "Stub User",
+		ID:    user.ID,
+		Email: user.Email,
+		Name:  user.Name,
 	}, nil
 }
 

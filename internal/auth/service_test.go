@@ -723,11 +723,61 @@ func TestRegister_ReturnsStub(t *testing.T) {
 	assert.NotEmpty(t, user.ID)
 }
 
-func TestGetMe_ReturnsStub(t *testing.T) {
-	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+func TestGetMe_ReturnsUserProfile(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, id string) (*domain.User, error) {
+			assert.Equal(t, "user-42", id)
+			return &domain.User{
+				ID:    "user-42",
+				Email: "aleks@example.com",
+				Name:  "Aleks Petrov",
+			}, nil
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
 	user, err := svc.GetMe(context.Background(), "user-42")
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", user.ID)
+	assert.Equal(t, "aleks@example.com", user.Email)
+	assert.Equal(t, "Aleks Petrov", user.Name)
+}
+
+func TestGetMe_DifferentUsersGetDifferentProfiles(t *testing.T) {
+	profiles := map[string]*domain.User{
+		"user-1": {ID: "user-1", Email: "one@example.com", Name: "User One"},
+		"user-2": {ID: "user-2", Email: "two@example.com", Name: "User Two"},
+	}
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, id string) (*domain.User, error) {
+			return profiles[id], nil
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	user1, err := svc.GetMe(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, "one@example.com", user1.Email)
+	assert.Equal(t, "User One", user1.Name)
+
+	user2, err := svc.GetMe(context.Background(), "user-2")
+	require.NoError(t, err)
+	assert.Equal(t, "two@example.com", user2.Email)
+	assert.Equal(t, "User Two", user2.Name)
+}
+
+func TestGetMe_UserNotFound(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	user, err := svc.GetMe(context.Background(), "user-missing")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrNotFound)
+	assert.Nil(t, user)
 }
 
 // ── Register Tests ──────────────────────────────────────────────────────────
