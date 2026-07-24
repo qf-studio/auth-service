@@ -5,7 +5,7 @@ ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMPTZ;
 -- Password history for reuse detection.
 CREATE TABLE IF NOT EXISTS password_history (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     password_hash TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

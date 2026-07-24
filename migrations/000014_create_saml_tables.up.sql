@@ -15,7 +15,7 @@ CREATE TABLE saml_idp_configs (
 
 CREATE TABLE saml_accounts (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id             UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    user_id             TEXT        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     idp_id              UUID        NOT NULL REFERENCES saml_idp_configs (id) ON DELETE CASCADE,
     name_id             TEXT        NOT NULL,
     session_index       TEXT        NOT NULL DEFAULT '',
