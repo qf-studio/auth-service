@@ -14,7 +14,12 @@ on:
       image_tag:
         description: Image tag to deploy (must exist on ghcr.io/qf-studio/auth-service)
         required: true
-        default: v0.68.0
+        default: v0.68.1
+        type: string
+      force_version:
+        description: 'Recovery only: run "migrate force <N>" before up (clears a dirty schema_migrations state)'
+        required: false
+        default: ''
         type: string
 
 permissions:
@@ -38,8 +43,12 @@ jobs:
           echo 'Not confirmed - type "deploy" in the confirm input to proceed.'
           exit 1
 
-      - name: Checkout (for migrations/)
+      # Migrations must come from the release being deployed, not main HEAD,
+      # so schema and binary always match.
+      - name: Checkout release tag (for migrations/)
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.image_tag }}
 
       - name: Mirror image GHCR -> ECR
         run: |
@@ -78,9 +87,17 @@ jobs:
           DB_USER=$(printf '%s' "$SECRET" | sed -E 's/.*"username": ?"([^"]+)".*/\1/')
           DB_PASS=$(printf '%s' "$SECRET" | sed -E 's/.*"password": ?"([^"]+)".*/\1/')
 
+          DB_URL="postgres://$DB_USER:$DB_PASS@$DB_HOST:$DB_PORT/auth?sslmode=require"
+
+          if [ -n "${{ inputs.force_version }}" ]; then
+            echo "Forcing schema_migrations to version ${{ inputs.force_version }} (dirty-state recovery)"
+            docker run --rm -v "$PWD/migrations:/migrations:ro" migrate/migrate:v4.17.1 \
+              -path=/migrations -database "$DB_URL" force "${{ inputs.force_version }}"
+          fi
+
           docker run --rm -v "$PWD/migrations:/migrations:ro" migrate/migrate:v4.17.1 \
             -path=/migrations \
-            -database "postgres://$DB_USER:$DB_PASS@$DB_HOST:$DB_PORT/auth?sslmode=require" \
+            -database "$DB_URL" \
             up
           echo "Migrations applied"
 
