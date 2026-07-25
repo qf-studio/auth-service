@@ -219,7 +219,11 @@ paths:
               $ref: "#/components/schemas/CreateClientRequest"
       responses:
         "201":
-          description: Client created (includes plaintext secret — shown only once)
+          description: >
+            Client created. For service/agent clients, includes the plaintext
+            secret (shown only once) as AdminClientResponseWithSecret. Public
+            clients cannot hold a secret, so the response is a plain
+            AdminClientResponse instead — no client_secret field is present.
           content:
             application/json:
               schema:
@@ -297,7 +301,9 @@ paths:
       summary: Rotate a client secret
       description: >
         Generates a new secret for the client and invalidates the old one.
-        The new plaintext secret is returned only once.
+        The new plaintext secret is returned only once. Rejected with 409 for
+        public clients (and any client with no stored secret), since they
+        never have a secret to rotate.
       tags: [Clients]
       responses:
         "200":
@@ -308,6 +314,12 @@ paths:
                 $ref: "#/components/schemas/AdminClientResponseWithSecret"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: Client is a public client (or has no stored secret) and has no secret to rotate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -607,12 +619,22 @@ components:
           description: Human-readable client name
         client_type:
           type: string
-          enum: [service, agent]
+          enum: [service, agent, public]
         scopes:
           type: array
           items:
             type: string
           description: Allowed OAuth2 scopes
+        redirect_uris:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: >
+            Registered redirect URIs used to authenticate the client instead
+            of a client secret. Required (non-empty) when client_type is
+            "public"; optional for service/agent clients. Each URI must be
+            absolute (http or https) with no fragment component.
         owner:
           type: string
           description: Owning entity or team
@@ -640,6 +662,14 @@ components:
           type: array
           items:
             type: string
+        redirect_uris:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: >
+            Replaces the client's registered redirect URIs. Each URI must be
+            absolute (http or https) with no fragment component.
         owner:
           type: string
         token_endpoint_auth_method:
@@ -663,11 +693,19 @@ components:
           type: string
         client_type:
           type: string
-          enum: [service, agent]
+          enum: [service, agent, public]
         scopes:
           type: array
           items:
             type: string
+        redirect_uris:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: >
+            Registered redirect URIs. Empty for service/agent clients unless
+            explicitly set; always present for public clients.
         roles:
           type: array
           items:
