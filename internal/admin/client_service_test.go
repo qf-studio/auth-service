@@ -193,6 +193,41 @@ func TestClientService_CreateClient(t *testing.T) {
 	assert.Contains(t, result.ClientSecret, clientSecretPrefix)
 }
 
+func TestClientService_CreateClient_Public(t *testing.T) {
+	svc := newTestClientService(&mockClientRepo{})
+
+	req := &api.CreateClientRequest{
+		Name:         "spa-client",
+		ClientType:   "public",
+		RedirectURIs: []string{"https://app.example.com/callback"},
+	}
+	result, err := svc.CreateClient(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, "public", result.ClientType)
+	assert.Empty(t, result.ClientSecret)
+	assert.Equal(t, []string{"https://app.example.com/callback"}, result.RedirectURIs)
+}
+
+func TestClientService_CreateClient_Public_NoSecretHashStored(t *testing.T) {
+	var created *domain.Client
+	repo := &mockClientRepo{
+		createFn: func(_ context.Context, client *domain.Client) (*domain.Client, error) {
+			created = client
+			return client, nil
+		},
+	}
+	svc := newTestClientService(repo)
+
+	_, err := svc.CreateClient(context.Background(), &api.CreateClientRequest{
+		Name:         "spa-client",
+		ClientType:   "public",
+		RedirectURIs: []string{"https://app.example.com/callback"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	assert.Empty(t, created.SecretHash)
+}
+
 func TestClientService_CreateClient_Conflict(t *testing.T) {
 	repo := &mockClientRepo{
 		createFn: func(_ context.Context, _ *domain.Client) (*domain.Client, error) {
@@ -226,6 +261,23 @@ func TestClientService_UpdateClient(t *testing.T) {
 	client, err := svc.UpdateClient(context.Background(), clientID.String(), &api.UpdateClientRequest{Name: &name})
 	require.NoError(t, err)
 	assert.Equal(t, "updated-name", client.Name)
+}
+
+func TestClientService_UpdateClient_RedirectURIs(t *testing.T) {
+	clientID := uuid.New()
+	repo := &mockClientRepo{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
+			c := testClient()
+			c.ID = id
+			return c, nil
+		},
+	}
+	svc := newTestClientService(repo)
+
+	uris := []string{"https://app.example.com/callback"}
+	client, err := svc.UpdateClient(context.Background(), clientID.String(), &api.UpdateClientRequest{RedirectURIs: uris})
+	require.NoError(t, err)
+	assert.Equal(t, uris, client.RedirectURIs)
 }
 
 func TestClientService_UpdateClient_NotFound(t *testing.T) {
@@ -289,6 +341,41 @@ func TestClientService_RotateSecret(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result.ClientSecret, clientSecretPrefix)
 	assert.NotNil(t, result.GracePeriodEnds)
+}
+
+func TestClientService_RotateSecret_PublicClient(t *testing.T) {
+	clientID := uuid.New()
+	repo := &mockClientRepo{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
+			c := testClient()
+			c.ID = id
+			c.ClientType = domain.ClientTypePublic
+			c.SecretHash = ""
+			return c, nil
+		},
+	}
+	svc := newTestClientService(repo)
+
+	_, err := svc.RotateSecret(context.Background(), clientID.String())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrConflict)
+}
+
+func TestClientService_RotateSecret_EmptySecretHash(t *testing.T) {
+	clientID := uuid.New()
+	repo := &mockClientRepo{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
+			c := testClient()
+			c.ID = id
+			c.SecretHash = ""
+			return c, nil
+		},
+	}
+	svc := newTestClientService(repo)
+
+	_, err := svc.RotateSecret(context.Background(), clientID.String())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrConflict)
 }
 
 func TestClientService_RotateSecret_NotFound(t *testing.T) {

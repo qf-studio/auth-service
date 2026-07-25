@@ -49,7 +49,9 @@ func (h *AdminClientHandlers) Get(c *gin.Context) {
 }
 
 // Create handles POST /admin/clients.
-// Returns the client with the generated secret (only time secret is visible).
+// Returns the client with the generated secret (only time secret is
+// visible) for service/agent clients. Public clients never have a secret,
+// so only the AdminClient (no secret field) is returned for them.
 func (h *AdminClientHandlers) Create(c *gin.Context) {
 	var req CreateClientRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -65,6 +67,11 @@ func (h *AdminClientHandlers) Create(c *gin.Context) {
 	client, err := h.clients.CreateClient(c.Request.Context(), &req)
 	if err != nil {
 		handleServiceError(c, err)
+		return
+	}
+
+	if client.ClientType == string(domain.ClientTypePublic) {
+		c.JSON(http.StatusCreated, client.AdminClient)
 		return
 	}
 

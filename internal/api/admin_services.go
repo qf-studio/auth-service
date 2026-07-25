@@ -160,18 +160,21 @@ type UserActivityTimeline struct {
 }
 
 // CreateClientRequest is the request body for creating an OAuth2 client.
+// RedirectURIs is required (and must be non-empty) for public clients, since
+// they authenticate via redirect URI validation rather than a secret; it is
+// optional for service/agent clients.
 type CreateClientRequest struct {
 	Name         string   `json:"name"          validate:"required,min=1,max=255"`
-	ClientType   string   `json:"client_type"   validate:"required,oneof=service agent"`
+	ClientType   string   `json:"client_type"   validate:"required,oneof=service agent public"`
 	Scopes       []string `json:"scopes"        validate:"omitempty"`
-	RedirectURIs []string `json:"redirect_uris" validate:"omitempty"`
+	RedirectURIs []string `json:"redirect_uris" validate:"required_if=ClientType public,omitempty,dive,http_url_no_fragment"`
 }
 
 // UpdateClientRequest is the request body for updating an OAuth2 client.
 type UpdateClientRequest struct {
 	Name         *string  `json:"name"          validate:"omitempty,min=1,max=255"`
 	Scopes       []string `json:"scopes"        validate:"omitempty"`
-	RedirectURIs []string `json:"redirect_uris" validate:"omitempty"`
+	RedirectURIs []string `json:"redirect_uris" validate:"omitempty,dive,http_url_no_fragment"`
 }
 
 // IntrospectRequest is the request body for RFC 7662 token introspection.
