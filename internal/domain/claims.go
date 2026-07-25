@@ -49,4 +49,10 @@ type TokenClaims struct {
 	// AuthorizationDetails holds RFC 9396 Rich Authorization Request entries.
 	// Non-nil when the token was issued with authorization_details; nil otherwise.
 	AuthorizationDetails []AuthorizationDetail
+
+	// Audience is the JWT aud claim, listing the intended recipients of the
+	// token. Empty when JWT_AUDIENCE is unset (GH-449). Not validated by
+	// ValidateToken to avoid breaking tokens issued before an audience was
+	// configured.
+	Audience []string
 }

@@ -301,6 +301,82 @@ func TestValidateToken_WrongSigningKey(t *testing.T) {
 	require.Error(t, err)
 }
 
+// ── Audience (GH-449) ────────────────────────────────────────────────────────
+
+func TestIssueAccessToken_Audience(t *testing.T) {
+	tests := []struct {
+		name     string
+		audience []string
+		wantAud  []string
+	}{
+		{name: "configured audience is set on issued token", audience: []string{"https://api.qf.studio"}, wantAud: []string{"https://api.qf.studio"}},
+		{name: "multiple audiences are all set", audience: []string{"qf-api", "qf-billing"}, wantAud: []string{"qf-api", "qf-billing"}},
+		{name: "unset audience produces no aud claim", audience: nil, wantAud: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := generateES256Key(t)
+			_, rc := newTestRedis(t)
+			cfg := defaultCfg()
+			cfg.Audience = tt.audience
+
+			svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+			require.NoError(t, err)
+
+			ctx := context.Background()
+			result, err := svc.IssueTokenPair(ctx, "user-123", nil, nil, domain.ClientTypeUser)
+			require.NoError(t, err)
+
+			rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+
+			// Verify via the parsed domain claims.
+			claims, err := svc.ValidateToken(ctx, rawJWT)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAud, claims.Audience)
+
+			// Verify directly against the raw JWT payload so we assert on the
+			// wire format, not just the domain mapping.
+			parser := jwtv5.NewParser()
+			jwtClaims := jwtv5.MapClaims{}
+			_, _, err = parser.ParseUnverified(rawJWT, jwtClaims)
+			require.NoError(t, err)
+			if len(tt.wantAud) == 0 {
+				assert.NotContains(t, jwtClaims, "aud")
+			} else {
+				assert.Contains(t, jwtClaims, "aud")
+			}
+		})
+	}
+}
+
+func TestValidateToken_AcceptsAudiencelessTokenWhenAudienceConfigured(t *testing.T) {
+	// A token issued before JWT_AUDIENCE was configured (or by another
+	// service instance without it set) carries no aud claim. ValidateToken
+	// must still accept it: audience validation is deliberately not enforced
+	// here to avoid an in-flight rotation hazard (GH-449).
+	key := generateES256Key(t)
+	_, rc := newTestRedis(t)
+
+	issuerCfg := defaultCfg() // no Audience set
+	issuerSvc, err := token.NewServiceFromKey(issuerCfg, key, rc, testLogger(), audit.NopLogger{})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	result, err := issuerSvc.IssueTokenPair(ctx, "user-123", nil, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+
+	validatorCfg := defaultCfg()
+	validatorCfg.Audience = []string{"https://api.qf.studio"}
+	validatorSvc, err := token.NewServiceFromKey(validatorCfg, key, rc, testLogger(), audit.NopLogger{})
+	require.NoError(t, err)
+
+	claims, err := validatorSvc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+	assert.Empty(t, claims.Audience)
+}
+
 // ── Revoke & IsRevoked ───────────────────────────────────────────────────────
 
 func TestRevoke_AccessToken(t *testing.T) {
