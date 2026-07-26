@@ -80,11 +80,10 @@ type User struct {
 type Client struct {
     ID                    uuid.UUID
     Name                  string     // human-readable identifier
-    ClientType            string     // "service" | "agent" | "public"
+    ClientType            string     // "service" | "agent"
     TokenEndpointAuthMethod string   // "client_secret_basic" | "client_secret_post" | "private_key_jwt" | "none"
-    SecretHash            string     // Argon2id hashed; empty for public clients
+    SecretHash            string     // Argon2id hashed
     Scopes                []string   // allowed scopes
-    RedirectURIs          []string   // required (non-empty) for public clients; authenticates in place of a secret
     Roles                 []string   // ["service", "agent"]
     Owner                 string     // owning entity/team
     SkipConsent           bool       // true for first-party
@@ -95,12 +94,6 @@ type Client struct {
     LastUsedAt            *time.Time
 }
 ```
-
-> **Public clients** (e.g. SPAs, mobile apps) are `ClientType: "public"`. They
-> cannot securely hold a client secret, so `CreateClient` skips secret
-> generation for them (`SecretHash` stored empty) and they authenticate via
-> their registered `RedirectURIs` instead. `RotateSecret` rejects rotation
-> attempts on public clients (409 — no secret to rotate).
 
 ---
 

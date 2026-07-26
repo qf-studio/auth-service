@@ -51,6 +51,8 @@ type OIDCConfig struct {
 	IssuerURL       string        // OIDC_ISSUER_URL: the issuer identifier (e.g. https://auth.example.com)
 	IDTokenTTL      time.Duration // OIDC_ID_TOKEN_TTL: lifetime of ID tokens
 	SupportedScopes []string      // OIDC_SUPPORTED_SCOPES: comma-separated OIDC scopes
+	LoginUIURL      string        // OIDC_LOGIN_UI_URL: base URL of the external login UI (login_challenge is appended as a query param)
+	ConsentUIURL    string        // OIDC_CONSENT_UI_URL: base URL of the external consent UI; defaults to LoginUIURL when unset
 }
 
 // OAuthProviderConfig holds credentials and settings for a single OAuth provider.
@@ -696,10 +698,15 @@ func loadOIDC(l *loader) (OIDCConfig, error) {
 	scopesRaw := l.optStr("OIDC_SUPPORTED_SCOPES", "openid,profile,email,offline_access")
 	scopes := splitCSV(scopesRaw)
 
+	loginUIURL := l.optStr("OIDC_LOGIN_UI_URL", "")
+	consentUIURL := l.optStr("OIDC_CONSENT_UI_URL", loginUIURL)
+
 	return OIDCConfig{
 		IssuerURL:       issuerURL,
 		IDTokenTTL:      idTokenTTL,
 		SupportedScopes: scopes,
+		LoginUIURL:      loginUIURL,
+		ConsentUIURL:    consentUIURL,
 	}, nil
 }
 

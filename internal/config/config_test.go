@@ -103,6 +103,8 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.Equal(t, "https://auth.qf.studio", cfg.OIDC.IssuerURL)
 	assert.Equal(t, 1*time.Hour, cfg.OIDC.IDTokenTTL)
 	assert.Equal(t, []string{"openid", "profile", "email", "offline_access"}, cfg.OIDC.SupportedScopes)
+	assert.Empty(t, cfg.OIDC.LoginUIURL)
+	assert.Empty(t, cfg.OIDC.ConsentUIURL)
 
 	// SAML defaults (disabled)
 	assert.False(t, cfg.SAML.Enabled)
@@ -122,6 +124,31 @@ func TestLoad_OIDCConfig(t *testing.T) {
 	assert.Equal(t, "https://auth.example.com", cfg.OIDC.IssuerURL)
 	assert.Equal(t, 30*time.Minute, cfg.OIDC.IDTokenTTL)
 	assert.Equal(t, []string{"openid", "profile", "email", "groups"}, cfg.OIDC.SupportedScopes)
+}
+
+func TestLoad_OIDCUIURLs(t *testing.T) {
+	env := requiredEnv()
+	env["OIDC_LOGIN_UI_URL"] = "https://login.example.com/login"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://login.example.com/login", cfg.OIDC.LoginUIURL)
+	assert.Equal(t, "https://login.example.com/login", cfg.OIDC.ConsentUIURL, "consent UI URL should default to login UI URL when unset")
+}
+
+func TestLoad_OIDCUIURLs_ConsentOverride(t *testing.T) {
+	env := requiredEnv()
+	env["OIDC_LOGIN_UI_URL"] = "https://login.example.com/login"
+	env["OIDC_CONSENT_UI_URL"] = "https://login.example.com/consent"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://login.example.com/login", cfg.OIDC.LoginUIURL)
+	assert.Equal(t, "https://login.example.com/consent", cfg.OIDC.ConsentUIURL)
 }
 
 func TestLoad_EmailConfig(t *testing.T) {
