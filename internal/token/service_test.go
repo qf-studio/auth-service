@@ -82,12 +82,22 @@ func defaultCfg() config.JWTConfig {
 	}
 }
 
+// defaultOIDCCfg mirrors config.loadOIDC's defaults (GH-468: OIDC_ISSUER_URL
+// default is "https://auth.qf.studio", matching the value this constant used
+// to be hardcoded to in service.go before iss became config-driven).
+func defaultOIDCCfg() config.OIDCConfig {
+	return config.OIDCConfig{
+		IssuerURL:  "https://auth.qf.studio",
+		IDTokenTTL: 1 * time.Hour,
+	}
+}
+
 func newES256Service(t *testing.T) (*token.Service, *miniredis.Miniredis) {
 	t.Helper()
 	key := generateES256Key(t)
 	mr, rc := newTestRedis(t)
 	cfg := defaultCfg()
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	return svc, mr
 }
@@ -98,7 +108,7 @@ func newEdDSAService(t *testing.T) (*token.Service, *miniredis.Miniredis) {
 	mr, rc := newTestRedis(t)
 	cfg := defaultCfg()
 	cfg.Algorithm = "EdDSA"
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	return svc, mr
 }
@@ -114,7 +124,7 @@ func TestNewService_ES256FromFile(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.PrivateKeyPath = keyPath
 
-	svc, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewService(cfg, defaultOIDCCfg(), rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 }
@@ -129,7 +139,7 @@ func TestNewService_EdDSAFromFile(t *testing.T) {
 	cfg.Algorithm = "EdDSA"
 	cfg.PrivateKeyPath = keyPath
 
-	svc, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewService(cfg, defaultOIDCCfg(), rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 }
@@ -139,7 +149,7 @@ func TestNewService_InvalidKeyPath(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.PrivateKeyPath = "/nonexistent/key.pem"
 
-	_, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
+	_, err := token.NewService(cfg, defaultOIDCCfg(), rc, testLogger(), audit.NopLogger{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read private key")
 }
@@ -154,7 +164,7 @@ func TestNewService_AlgorithmMismatch(t *testing.T) {
 	cfg.PrivateKeyPath = keyPath
 	cfg.Algorithm = "EdDSA" // ECDSA key with EdDSA algorithm
 
-	_, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
+	_, err := token.NewService(cfg, defaultOIDCCfg(), rc, testLogger(), audit.NopLogger{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse private key")
 }
@@ -262,7 +272,7 @@ func TestValidateToken_ExpiredToken(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.AccessTokenTTL = 1 * time.Millisecond // Very short TTL
 
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -321,7 +331,7 @@ func TestIssueAccessToken_Audience(t *testing.T) {
 			cfg := defaultCfg()
 			cfg.Audience = tt.audience
 
-			svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+			svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 			require.NoError(t, err)
 
 			ctx := context.Background()
@@ -359,7 +369,7 @@ func TestValidateToken_AcceptsAudiencelessTokenWhenAudienceConfigured(t *testing
 	_, rc := newTestRedis(t)
 
 	issuerCfg := defaultCfg() // no Audience set
-	issuerSvc, err := token.NewServiceFromKey(issuerCfg, key, rc, testLogger(), audit.NopLogger{})
+	issuerSvc, err := token.NewServiceFromKey(issuerCfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -369,12 +379,174 @@ func TestValidateToken_AcceptsAudiencelessTokenWhenAudienceConfigured(t *testing
 
 	validatorCfg := defaultCfg()
 	validatorCfg.Audience = []string{"https://api.qf.studio"}
-	validatorSvc, err := token.NewServiceFromKey(validatorCfg, key, rc, testLogger(), audit.NopLogger{})
+	validatorSvc, err := token.NewServiceFromKey(validatorCfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	claims, err := validatorSvc.ValidateToken(ctx, rawJWT)
 	require.NoError(t, err)
 	assert.Empty(t, claims.Audience)
+}
+
+// ── Issuer (GH-468) ──────────────────────────────────────────────────────────
+
+// TestIssueAccessToken_IssuerFromOIDCConfig verifies the `iss` claim on
+// issued access tokens tracks config.OIDCConfig.IssuerURL. Before GH-468,
+// `iss` was a hardcoded package constant, so overriding OIDC_ISSUER_URL had
+// no effect on issued tokens at all; this asserts that override now works.
+func TestIssueAccessToken_IssuerFromOIDCConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		issuerURL string
+	}{
+		{name: "default issuer", issuerURL: "https://auth.qf.studio"},
+		{name: "overridden issuer", issuerURL: "https://issuer.override.example"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := generateES256Key(t)
+			_, rc := newTestRedis(t)
+			cfg := defaultCfg()
+			oidcCfg := config.OIDCConfig{IssuerURL: tt.issuerURL, IDTokenTTL: time.Hour}
+
+			svc, err := token.NewServiceFromKey(cfg, oidcCfg, key, rc, testLogger(), audit.NopLogger{})
+			require.NoError(t, err)
+
+			ctx := context.Background()
+			result, err := svc.IssueTokenPair(ctx, "user-123", nil, nil, domain.ClientTypeUser)
+			require.NoError(t, err)
+
+			rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+			parser := jwtv5.NewParser()
+			jwtClaims := jwtv5.MapClaims{}
+			_, _, err = parser.ParseUnverified(rawJWT, jwtClaims)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.issuerURL, jwtClaims["iss"])
+		})
+	}
+}
+
+// ── IssueIDToken (GH-468) ────────────────────────────────────────────────────
+
+// idTokenTestClaims mirrors the (unexported) claims shape IssueIDToken
+// produces. auth_time and nonce aren't surfaced through domain.TokenClaims
+// (that type models access-token claims), so tests decode the raw JWT with
+// this local struct instead of reaching into the token package's internals.
+type idTokenTestClaims struct {
+	jwtv5.RegisteredClaims
+	AuthTime int64  `json:"auth_time,omitempty"`
+	Nonce    string `json:"nonce,omitempty"`
+}
+
+func TestIssueIDToken_ClaimsAndSignature(t *testing.T) {
+	key := generateES256Key(t)
+	_, rc := newTestRedis(t)
+	cfg := defaultCfg()
+	oidcCfg := config.OIDCConfig{IssuerURL: "https://auth.qf.studio", IDTokenTTL: 45 * time.Minute}
+
+	svc, err := token.NewServiceFromKey(cfg, oidcCfg, key, rc, testLogger(), audit.NopLogger{})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	authTime := time.Now().Add(-90 * time.Second).Truncate(time.Second)
+	idToken, err := svc.IssueIDToken(ctx, "user-123", "client-abc", "nonce-xyz", authTime)
+	require.NoError(t, err)
+	require.NotEmpty(t, idToken)
+
+	// Signature/alg verification: the ID token must be signed by the same
+	// key as access tokens. customClaims is a structural superset of the ID
+	// token's claims (both embed jwt.RegisteredClaims), so ValidateToken can
+	// cryptographically verify it directly.
+	claims, err := svc.ValidateToken(ctx, idToken)
+	require.NoError(t, err)
+	assert.Equal(t, "user-123", claims.Subject)
+	assert.Equal(t, []string{"client-abc"}, claims.Audience)
+
+	parser := jwtv5.NewParser()
+	tc := &idTokenTestClaims{}
+	parsedToken, _, err := parser.ParseUnverified(idToken, tc)
+	require.NoError(t, err)
+
+	assert.Equal(t, "ES256", parsedToken.Method.Alg())
+
+	kid, ok := parsedToken.Header["kid"].(string)
+	require.True(t, ok, "id token header must carry a kid")
+	jwks, err := svc.JWKS(ctx)
+	require.NoError(t, err)
+	keyMap, ok := jwks.Keys[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, keyMap["kid"], kid, "id token header kid must match the active JWKS key's kid")
+
+	assert.Equal(t, "https://auth.qf.studio", tc.Issuer)
+	assert.Equal(t, "user-123", tc.Subject)
+	assert.Equal(t, jwtv5.ClaimStrings{"client-abc"}, tc.Audience)
+	assert.Equal(t, "nonce-xyz", tc.Nonce)
+	assert.Equal(t, authTime.Unix(), tc.AuthTime)
+	require.NotNil(t, tc.IssuedAt)
+	require.NotNil(t, tc.ExpiresAt)
+	assert.InDelta(t, 45*time.Minute, tc.ExpiresAt.Sub(tc.IssuedAt.Time), float64(2*time.Second),
+		"id token TTL must come from OIDCConfig.IDTokenTTL")
+}
+
+func TestIssueIDToken_EdDSA(t *testing.T) {
+	key := generateEdDSAKey(t)
+	_, rc := newTestRedis(t)
+	cfg := defaultCfg()
+	cfg.Algorithm = "EdDSA"
+	oidcCfg := config.OIDCConfig{IssuerURL: "https://auth.qf.studio", IDTokenTTL: time.Hour}
+
+	svc, err := token.NewServiceFromKey(cfg, oidcCfg, key, rc, testLogger(), audit.NopLogger{})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	idToken, err := svc.IssueIDToken(ctx, "svc-456", "client-def", "", time.Now())
+	require.NoError(t, err)
+
+	claims, err := svc.ValidateToken(ctx, idToken)
+	require.NoError(t, err)
+	assert.Equal(t, "svc-456", claims.Subject)
+
+	parser := jwtv5.NewParser()
+	tc := &idTokenTestClaims{}
+	parsedToken, _, err := parser.ParseUnverified(idToken, tc)
+	require.NoError(t, err)
+	assert.Equal(t, "EdDSA", parsedToken.Method.Alg())
+}
+
+func TestIssueIDToken_NoNonceOmitsClaim(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	idToken, err := svc.IssueIDToken(ctx, "user-123", "client-abc", "", time.Now())
+	require.NoError(t, err)
+
+	parser := jwtv5.NewParser()
+	jwtClaims := jwtv5.MapClaims{}
+	_, _, err = parser.ParseUnverified(idToken, jwtClaims)
+	require.NoError(t, err)
+	assert.NotContains(t, jwtClaims, "nonce")
+}
+
+func TestIssueIDToken_UniqueJTIPerToken(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	first, err := svc.IssueIDToken(ctx, "user-123", "client-abc", "n1", time.Now())
+	require.NoError(t, err)
+	second, err := svc.IssueIDToken(ctx, "user-123", "client-abc", "n2", time.Now())
+	require.NoError(t, err)
+
+	parser := jwtv5.NewParser()
+	c1, c2 := &idTokenTestClaims{}, &idTokenTestClaims{}
+	_, _, err = parser.ParseUnverified(first, c1)
+	require.NoError(t, err)
+	_, _, err = parser.ParseUnverified(second, c2)
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, c1.ID)
+	assert.NotEmpty(t, c2.ID)
+	assert.NotEqual(t, c1.ID, c2.ID)
 }
 
 // ── Revoke & IsRevoked ───────────────────────────────────────────────────────
@@ -430,7 +602,7 @@ func TestRevoke_ExpiredTokenNoBlocklist(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.AccessTokenTTL = 1 * time.Millisecond
 
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -490,7 +662,7 @@ func TestRefresh_ExpiredRefreshToken(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.RefreshTokenTTL = 1 * time.Second
 
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -514,7 +686,7 @@ func TestRefresh_SecretRotation(t *testing.T) {
 	oldCfg := defaultCfg()
 	oldCfg.SystemSecrets = []string{"old-secret"}
 
-	oldSvc, err := token.NewServiceFromKey(oldCfg, key, rc, testLogger(), audit.NopLogger{})
+	oldSvc, err := token.NewServiceFromKey(oldCfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -525,7 +697,7 @@ func TestRefresh_SecretRotation(t *testing.T) {
 	newCfg := defaultCfg()
 	newCfg.SystemSecrets = []string{"new-secret", "old-secret"}
 
-	newSvc, err := token.NewServiceFromKey(newCfg, key, rc, testLogger(), audit.NopLogger{})
+	newSvc, err := token.NewServiceFromKey(newCfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	// Old refresh token should still validate with the new service.
@@ -786,7 +958,7 @@ func TestNewServiceFromKey_AlgorithmMismatch(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.Algorithm = "EdDSA"
 
-	_, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+	_, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ECDSA")
 }
@@ -812,7 +984,7 @@ func TestNewService_ECKeyFile(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.PrivateKeyPath = path
 
-	svc, err := token.NewService(cfg, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewService(cfg, defaultOIDCCfg(), rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 }
@@ -878,7 +1050,7 @@ func newBenchES256Service(b *testing.B) *token.Service {
 		RefreshTokenTTL: 7 * 24 * time.Hour,
 		SystemSecrets:   []string{"bench-secret"},
 	}
-	svc, err := token.NewServiceFromKey(cfg, key, rc, zap.NewNop(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, zap.NewNop(), audit.NopLogger{})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -993,7 +1165,7 @@ func TestIssueTokenPair_NoSystemSecretsError(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.SystemSecrets = nil
 
-	svc, err := token.NewServiceFromKey(cfg, key, rc, testLogger(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
 	require.NoError(t, err)
 
 	ctx := context.Background()

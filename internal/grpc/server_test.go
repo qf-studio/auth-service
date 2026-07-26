@@ -56,7 +56,7 @@ func newTokenService(t *testing.T, rc *redis.Client) *token.Service {
 		RefreshTokenTTL: 7 * 24 * time.Hour,
 		SystemSecrets:   []string{"test-secret"},
 	}
-	svc, err := token.NewServiceFromKey(cfg, key, rc, zap.NewNop(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, config.OIDCConfig{}, key, rc, zap.NewNop(), audit.NopLogger{})
 	require.NoError(t, err)
 	return svc
 }
