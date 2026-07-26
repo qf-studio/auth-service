@@ -63,10 +63,41 @@ func TestDatabaseURLFromEnv(t *testing.T) {
 	})
 }
 
-func TestRunUnknownCommand(t *testing.T) {
-	// We can't create a real *migrate.Migrate without a DB, but we can verify
-	// that an unknown command returns the expected error.
-	err := run(nil, "bogus")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown command")
+func TestRunArgumentParsing(t *testing.T) {
+	// We can't create a real *migrate.Migrate without a DB, so these cases
+	// only cover argument validation paths that return before touching m.
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "no arguments",
+			args:    []string{},
+			wantErr: "no command given",
+		},
+		{
+			name:    "unknown command",
+			args:    []string{"bogus"},
+			wantErr: "unknown command",
+		},
+		{
+			name:    "force missing version argument",
+			args:    []string{"force"},
+			wantErr: "force requires a version argument",
+		},
+		{
+			name:    "force non-numeric version argument",
+			args:    []string{"force", "abc"},
+			wantErr: "invalid version",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := run(nil, tt.args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
