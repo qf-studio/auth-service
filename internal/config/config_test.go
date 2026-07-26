@@ -65,6 +65,7 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.Equal(t, 15*time.Minute, cfg.JWT.AccessTokenTTL)
 	assert.Equal(t, 7*24*time.Hour, cfg.JWT.RefreshTokenTTL)
 	assert.Equal(t, []string{"secret1", "secret2"}, cfg.JWT.SystemSecrets)
+	assert.Empty(t, cfg.JWT.Audience)
 
 	// Argon2 defaults
 	assert.Equal(t, uint32(19456), cfg.Argon2.Memory)
@@ -332,6 +333,32 @@ func TestLoad_SystemSecretsTrimsWhitespace(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"secret1", "secret2", "secret3"}, cfg.JWT.SystemSecrets)
+}
+
+func TestLoad_JWTAudience(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want []string
+	}{
+		{name: "unset", env: "", want: nil},
+		{name: "single", env: "https://api.qf.studio", want: []string{"https://api.qf.studio"}},
+		{name: "multiple with whitespace", env: " qf-api , qf-billing ", want: []string{"qf-api", "qf-billing"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := requiredEnv()
+			if tt.env != "" {
+				env["JWT_AUDIENCE"] = tt.env
+			}
+			setEnv(t, env)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.JWT.Audience)
+		})
+	}
 }
 
 func TestLoad_CORSMultipleOrigins(t *testing.T) {

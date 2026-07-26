@@ -352,6 +352,10 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 		ClientType: string(clientType),
 	}
 
+	if len(s.cfg.Audience) > 0 {
+		claims.Audience = jwt.ClaimStrings(s.cfg.Audience)
+	}
+
 	if jktThumbprint != "" {
 		claims.Confirmation = &Confirmation{JKT: jktThumbprint}
 	}
@@ -411,6 +415,7 @@ func claimsToDomain(c *customClaims) (*domain.TokenClaims, error) {
 		Scopes:     c.Scopes,
 		ClientType: domain.ClientType(c.ClientType),
 		TokenID:    c.ID,
+		Audience:   c.Audience,
 	}
 
 	if c.ExpiresAt != nil {
