@@ -5,6 +5,18 @@ info:
   description: >
     Authentication and authorization endpoints for the QuantFlow Studio ecosystem.
     Serves Users (humans) and Systems (services + AI agents).
+
+
+    OIDC provider config: the OIDC authorization-code flow (`/oauth/authorize`,
+    `/oauth/token`, `/userinfo`, `/.well-known/openid-configuration`) requires
+    `OIDC_LOGIN_UI_URL` to be set — `/oauth/authorize` returns an internal
+    error otherwise, since it has nowhere to redirect the end user to
+    authenticate. `OIDC_CONSENT_UI_URL` is optional and defaults to
+    `OIDC_LOGIN_UI_URL` when unset. `OIDC_ISSUER_URL` sets both the `issuer`
+    field of the discovery document and the `iss` claim on issued access and
+    ID tokens (GH-468) — prior to that fix, `iss` was hardcoded and
+    `OIDC_ISSUER_URL` had no effect on issued tokens; deployments that already
+    set a non-default `OIDC_ISSUER_URL` will see `iss` change to match it.
   contact:
     name: QuantFlow Studio
     url: https://quantflow.studio

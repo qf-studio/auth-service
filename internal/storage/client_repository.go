@@ -26,6 +26,10 @@ type ClientRepository interface {
 	UpdateSecretHash(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, secretHash string) error
 	RotateSecret(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
 	SoftDelete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
+	// Activate marks a suspended client (e.g. a third-party client pending
+	// approval) as active. No-op-safe on already-active clients; rejected
+	// (ErrNotFound) on revoked ones.
+	Activate(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
 }
 
 // PostgresClientRepository implements ClientRepository using PostgreSQL.
@@ -206,6 +210,21 @@ func (r *PostgresClientRepository) RotateSecret(ctx context.Context, tenantID uu
 	tag, err := r.pool.Exec(ctx, query, gracePeriodEnds, newSecretHash, now, id, tenantID)
 	if err != nil {
 		return fmt.Errorf("rotate secret: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("client %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// Activate marks a suspended client as active.
+func (r *PostgresClientRepository) Activate(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
+	query := `UPDATE clients SET status = 'active', updated_at = $1 WHERE id = $2 AND tenant_id = $3 AND status != 'revoked'`
+	now := time.Now().UTC()
+
+	tag, err := r.pool.Exec(ctx, query, now, id, tenantID)
+	if err != nil {
+		return fmt.Errorf("activate client %s: %w", id, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("client %s: %w", id, ErrNotFound)

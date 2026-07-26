@@ -67,6 +67,11 @@ const (
 	EventAdminSAMLIdPDelete   = "admin_saml_idp_delete"
 	EventAdminSAMLIdPMetadata = "admin_saml_idp_metadata_import"
 	EventAdminSAMLAttrMap     = "admin_saml_attribute_mapping"
+
+	// OIDC provider events.
+	EventOIDCCodeExchange   = "oidc_code_exchange"
+	EventOIDCConsentGrant   = "oidc_consent_grant"
+	EventAdminClientApprove = "admin_client_approve"
 )
 
 // Event represents a single audit log entry.

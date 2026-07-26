@@ -6,6 +6,12 @@ info:
     Administrative endpoints for the QuantFlow Studio auth service.
     Accessible only on the admin port (4001) via network-level isolation.
     No bearer-token auth required — access is controlled at the network layer.
+
+
+    The admin-side OIDC login/consent decision API and third-party client
+    approval workflow (GH-467–GH-470) share the same `OIDC_LOGIN_UI_URL` /
+    `OIDC_CONSENT_UI_URL` config as the public API's authorization endpoint —
+    see the Public API spec's description for details.
   contact:
     name: QuantFlow Studio
     url: https://quantflow.studio

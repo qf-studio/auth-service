@@ -19,6 +19,7 @@ type MockClientRepository struct {
 	UpdateSecretHashFn func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, secretHash string) error
 	RotateSecretFn     func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
 	SoftDeleteFn       func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
+	ActivateFn         func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
 }
 
 // List delegates to ListFn.
@@ -59,4 +60,9 @@ func (m *MockClientRepository) RotateSecret(ctx context.Context, tenantID uuid.U
 // SoftDelete delegates to SoftDeleteFn.
 func (m *MockClientRepository) SoftDelete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
 	return m.SoftDeleteFn(ctx, tenantID, id)
+}
+
+// Activate delegates to ActivateFn.
+func (m *MockClientRepository) Activate(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
+	return m.ActivateFn(ctx, tenantID, id)
 }

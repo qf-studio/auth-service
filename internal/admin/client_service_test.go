@@ -28,6 +28,7 @@ type mockClientRepo struct {
 	updateSecretHashFn func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, secretHash string) error
 	rotateSecretFn     func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, newSecretHash string, gracePeriodEnds time.Time) error
 	softDeleteFn       func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
+	activateFn         func(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error
 }
 
 func (m *mockClientRepo) List(ctx context.Context, tenantID uuid.UUID, limit, offset int, clientType string, includeRevoked bool) ([]*domain.Client, int, error) {
@@ -86,6 +87,13 @@ func (m *mockClientRepo) RotateSecret(ctx context.Context, tenantID uuid.UUID, i
 func (m *mockClientRepo) SoftDelete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
 	if m.softDeleteFn != nil {
 		return m.softDeleteFn(ctx, tenantID, id)
+	}
+	return nil
+}
+
+func (m *mockClientRepo) Activate(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
+	if m.activateFn != nil {
+		return m.activateFn(ctx, tenantID, id)
 	}
 	return nil
 }
