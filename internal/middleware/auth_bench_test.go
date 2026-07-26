@@ -51,7 +51,7 @@ func benchNewES256Service(b *testing.B) (*token.Service, *miniredis.Miniredis) {
 		RefreshTokenTTL: 7 * 24 * time.Hour,
 		SystemSecrets:   []string{"bench-secret"},
 	}
-	svc, err := token.NewServiceFromKey(cfg, key, rc, zap.NewNop(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, config.OIDCConfig{}, key, rc, zap.NewNop(), audit.NopLogger{})
 	require.NoError(b, err)
 	return svc, mr
 }
@@ -71,7 +71,7 @@ func benchNewEdDSAService(b *testing.B) (*token.Service, *miniredis.Miniredis) {
 		RefreshTokenTTL: 7 * 24 * time.Hour,
 		SystemSecrets:   []string{"bench-secret"},
 	}
-	svc, err := token.NewServiceFromKey(cfg, priv, rc, zap.NewNop(), audit.NopLogger{})
+	svc, err := token.NewServiceFromKey(cfg, config.OIDCConfig{}, priv, rc, zap.NewNop(), audit.NopLogger{})
 	require.NoError(b, err)
 	return svc, mr
 }
@@ -208,7 +208,7 @@ func BenchmarkAuthMiddlewareChain_InvalidToken(b *testing.B) {
 	mr2 := miniredis.RunT(b)
 	rc2 := redis.NewClient(&redis.Options{Addr: mr2.Addr()})
 	b.Cleanup(func() { _ = rc2.Close() })
-	otherSvc, err := token.NewServiceFromKey(otherCfg, otherKey, rc2, zap.NewNop(), audit.NopLogger{})
+	otherSvc, err := token.NewServiceFromKey(otherCfg, config.OIDCConfig{}, otherKey, rc2, zap.NewNop(), audit.NopLogger{})
 	require.NoError(b, err)
 	wrongToken := issueToken(b, otherSvc) // signed with different key
 
