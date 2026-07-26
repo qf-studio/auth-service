@@ -53,7 +53,9 @@ jobs:
           file: docker/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -62,6 +64,9 @@ jobs:
     name: Migration Dry-Run Check
     runs-on: ubuntu-latest
     needs: release
+    env:
+      IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      DATABASE_URL: postgres://auth:auth@localhost:5432/auth_test?sslmode=disable
     services:
       postgres:
         image: postgres:16-alpine
@@ -80,21 +85,58 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          go-version-file: go.mod
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run migration dry-run
-        env:
-          DATABASE_URL: postgres://auth:auth@localhost:5432/auth_test?sslmode=disable
+      - name: Pull release image
+        # Pulls the exact image the "release" job just built and pushed
+        # (tagged with the commit sha), so this job proves the shipped
+        # /auth-migrate binary works — not a locally rebuilt copy.
+        run: docker pull "$IMAGE"
+
+      - name: Migrate up
+        # Runs the in-image migrate tool against the job's Postgres
+        # service to prove the shipped binary actually applies migrations.
         run: |
-          # Build the binary
-          go build -o bin/auth-service ./cmd/server
+          docker run --rm --network host --entrypoint /auth-migrate \
+            -e DATABASE_URL \
+            "$IMAGE" up
 
-          # Verify migrations directory exists and contains SQL files
-          if [ -d "migrations" ] && ls migrations/*.sql 1>/dev/null 2>&1; then
-            echo "Migration files found — dry-run validation passed."
-          else
-            echo "No migration files found — skipping dry-run."
+      - name: Migrate version (expect clean state)
+        id: version
+        run: |
+          OUTPUT=$(docker run --rm --network host --entrypoint /auth-migrate \
+            -e DATABASE_URL \
+            "$IMAGE" version)
+          echo "$OUTPUT"
+          if [[ "$OUTPUT" == *dirty* ]]; then
+            echo "schema reported dirty immediately after a clean 'up'" >&2
+            exit 1
+          fi
+          echo "version=$OUTPUT" >> "$GITHUB_OUTPUT"
+
+      - name: Migrate force (exercise dirty-state recovery path)
+        # Decision: force the schema to its own current version. This
+        # doesn't need a real failure to inject — it proves the shipped
+        # binary can clear a dirty flag and re-pin schema_migrations
+        # in-image, which is the exact recovery path operators need
+        # after a failed migration (2026-07-24 Pointer incident).
+        run: |
+          docker run --rm --network host --entrypoint /auth-migrate \
+            -e DATABASE_URL \
+            "$IMAGE" force "${{ steps.version.outputs.version }}"
+
+      - name: Migrate version (confirm force cleared dirty state)
+        run: |
+          OUTPUT=$(docker run --rm --network host --entrypoint /auth-migrate \
+            -e DATABASE_URL \
+            "$IMAGE" version)
+          echo "$OUTPUT"
+          if [[ "$OUTPUT" == *dirty* ]]; then
+            echo "schema still dirty after force recovery" >&2
+            exit 1
           fi
