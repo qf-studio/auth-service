@@ -619,6 +619,7 @@ Full list of configuration variables. See `.env.staging.example` and `.env.produ
 | `ACCESS_TOKEN_TTL` | Access token lifetime | `15m` | `15m` |
 | `REFRESH_TOKEN_TTL` | Refresh token lifetime | `24h` | `7d` |
 | `SYSTEM_SECRETS` | Client credential secrets (comma-separated) | *(required)* | *(required)* |
+| `JWT_AUDIENCE` | Comma-separated list of `aud` values to set on issued access tokens. Empty/unset (default) means no `aud` claim is added and audience validation is disabled — `ValidateToken` accepts audience-less tokens regardless of this setting, to avoid a rotation hazard when the value is first configured. | *(empty)* | *(empty)* |
 
 ### Security
 
