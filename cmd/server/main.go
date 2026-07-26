@@ -23,8 +23,6 @@ import (
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/dpop"
 	grpcserver "github.com/qf-studio/auth-service/internal/grpc"
-	"github.com/qf-studio/auth-service/internal/webhook"
-	"github.com/qf-studio/auth-service/internal/rbac"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/httpserver"
@@ -33,10 +31,13 @@ import (
 	"github.com/qf-studio/auth-service/internal/mfa"
 	"github.com/qf-studio/auth-service/internal/middleware"
 	"github.com/qf-studio/auth-service/internal/oauth"
+	"github.com/qf-studio/auth-service/internal/oidc"
 	"github.com/qf-studio/auth-service/internal/password"
+	"github.com/qf-studio/auth-service/internal/rbac"
 	"github.com/qf-studio/auth-service/internal/session"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
+	"github.com/qf-studio/auth-service/internal/webhook"
 )
 
 func main() {
@@ -80,6 +81,8 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Repositories ─────────────────────────────────────────────────────
 	userRepo := storage.NewPostgresUserRepository(pgPool)
 	refreshTokenRepo := storage.NewPostgresRefreshTokenRepository(pgPool)
+	clientRepo := storage.NewPostgresClientRepository(pgPool)
+	consentGrantRepo := storage.NewPostgresConsentGrantRepository(pgPool)
 
 	// ── Audit ─────────────────────────────────────────────────────────────
 	auditSvc := audit.NewService(log, 1024)
@@ -147,10 +150,8 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	oauthSvc := oauth.NewService(cfg.OAuth, nil, tokenSvc, log, stateMgr, oauthProviders...)
 
 	// ── OIDC Provider ─────────────────────────────────────────────────────
-	// The OIDC provider service implementation is registered in a subsequent
-	// issue. The handlers and routes are wired now so that plugging in the
-	// service is the only remaining step.
-	var oidcSvc api.OIDCProviderService
+	oidcStore := oidc.NewRedisStore(redisClient)
+	oidcSvc := oidc.NewProviderService(cfg.OIDC, cfg.JWT.Algorithm, oidcStore, clientRepo, userRepo, tokenSvc, hasher, log, auditSvc)
 	log.Info("OIDC provider configuration loaded",
 		zap.String("issuer", cfg.OIDC.IssuerURL),
 		zap.Duration("id_token_ttl", cfg.OIDC.IDTokenTTL),
@@ -188,7 +189,6 @@ func run(log *zap.Logger, cfg *config.Config) error {
 
 	// ── Repositories (admin) ─────────────────────────────────────────────
 	adminUserRepo := storage.NewPostgresAdminUserRepository(pgPool)
-	clientRepo := storage.NewPostgresClientRepository(pgPool)
 	apiKeyRepo := storage.NewPostgresAPIKeyRepository(pgPool)
 
 	// ── Webhook repositories ─────────────────────────────────────────────
@@ -225,9 +225,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Metrics:         metricsCollector.Middleware(),
 	}
 
-	// Consent and client approval services are registered in subsequent issues.
-	var consentSvc api.ConsentService
-	var clientApprovalSvc api.AdminClientApprovalService
+	// ── Consent and client approval ──────────────────────────────────────
+	consentSvc := oidc.NewConsentService(cfg.OIDC, oidcStore, clientRepo, consentGrantRepo, log, auditSvc)
+	clientApprovalSvc := oidc.NewApprovalService(clientRepo, hasher, log, auditSvc)
 
 	// Broker credential admin service is registered in a subsequent issue.
 	// Depends on the credential vault database schema and AES-256-GCM encryption layer.
