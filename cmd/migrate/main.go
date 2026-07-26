@@ -15,7 +15,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: migrate <up|down|version>")
+		fmt.Fprintln(os.Stderr, "usage: migrate <up|down|version|force <N>>")
 		os.Exit(1)
 	}
 
@@ -31,7 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(m, os.Args[1]); err != nil {
+	if err := run(m, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -88,8 +88,14 @@ func newMigrate(dsn string) (*migrate.Migrate, error) {
 	return m, nil
 }
 
-// run executes the given subcommand against the migrate instance.
-func run(m *migrate.Migrate, cmd string) error {
+// run executes the given subcommand (and any trailing arguments) against the
+// migrate instance.
+func run(m *migrate.Migrate, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("no command given (use up, down, version, or force)")
+	}
+
+	cmd := args[0]
 	switch cmd {
 	case "up":
 		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
@@ -117,7 +123,25 @@ func run(m *migrate.Migrate, cmd string) error {
 		fmt.Println(strconv.FormatUint(uint64(version), 10) + dirtyStr)
 		return nil
 
+	case "force":
+		// Decision: force takes an explicit target version so operators can
+		// recover from a dirty schema_migrations row (e.g. after a failed
+		// migration) without hand-editing the database, per the 2026-07-24
+		// Pointer incident.
+		if len(args) < 2 {
+			return fmt.Errorf("force requires a version argument, e.g. force 3")
+		}
+		version, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("invalid version %q for force: %w", args[1], err)
+		}
+		if err := m.Force(version); err != nil {
+			return fmt.Errorf("migrate force: %w", err)
+		}
+		fmt.Printf("forced schema_migrations version to %d\n", version)
+		return nil
+
 	default:
-		return fmt.Errorf("unknown command %q (use up, down, or version)", cmd)
+		return fmt.Errorf("unknown command %q (use up, down, version, or force)", cmd)
 	}
 }
