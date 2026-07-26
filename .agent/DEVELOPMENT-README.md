@@ -53,19 +53,24 @@
 
 ## Current Focus
 
-### Status (2026-07)
-The original 3-phase plan (41 issues) is **fully delivered** — all phase-1/2/3 issues closed. The service is at **v0.68.x**, deployed and consumed by Pointer (auth.getpointer.app, first deploy 2026-07-24). Work is now issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
+### Status (2026-07-26)
+The original 3-phase plan (41 issues) is **fully delivered** — all phase-1/2/3 issues closed. The service is at **v0.69.0**, deployed and consumed by Pointer (auth.getpointer.app). Work is issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
 
-**Recently landed**:
-- GH-444: fresh-install migration fix (UUID/TEXT FK mismatch) — v0.68.1
-- GH-436: public/PKCE client type (`client_type=public`, `redirect_uris`, migrations 000016/000017) + `aud` claim via `JWT_AUDIENCE` (PRs #451-#453, on main, untagged)
+**Recently landed** (v0.69.0, 2026-07-26):
+- GH-436: public/PKCE client type (`client_type=public`, `redirect_uris`, migrations 000016/000017) + `aud` claim via `JWT_AUDIENCE`
+- GH-435: migrate tool shipped in the image (`/auth-migrate`: up|down|version|force), `TARGETARCH` fix (arm64 images were shipping amd64 binaries), release dry-run gate now actually runs migrations from the shipped image (was a file-existence check before)
+- GH-444 (v0.68.1): fresh-install migration fix (UUID/TEXT FK mismatch)
 
 **Open issues**:
 | # | Title | Notes |
 |---|---|---|
-| #431 | OIDC provider unimplemented (authorize/token/discovery/userinfo) | Largest gap; blocks PKCE enforcement; needed for Pointer SPA login |
-| #435 | Migrations not shipped in the Docker image | Consumers vendor SQL as workaround; from-scratch breakage half already fixed (#445) |
-| #447 | Move Pointer AWS deploy workflow to private infra repo | Security: self-hosted runner on public repo |
+| #431 | OIDC provider implementation | Specced (`tasks/gh-431.md`), in Pilot queue. Scaffolding exists since GH-274 (`08ead94`) — handlers/DTOs/routes complete, services are nil placeholders in main.go. Implement to the existing contract; Hydra-style external login/consent UI |
+| #447 | Move Pointer AWS deploy workflow to private infra repo | Security: self-hosted runner on public repo; needs infra-repo + org-admin access |
+| #465 | Pointer consumer actions for v0.69.0 | On Pointer's side: deploy, enable aud validation, re-register SPA as public client, drop vendored migrations. NOT pilot-labeled |
+
+**Pilot operational notes** (two bookkeeping bugs observed 2026-07-25/26):
+1. Post-PR state loss: worker can die after opening a PR without closing the child issue → repick loop → `pilot-blocked` with all work actually done in open PRs. Check `gh pr list` before re-arming.
+2. False completion: a merged PR whose *title* mentions "GH-NN" (e.g. a specs/docs PR) can get an unrelated open issue labeled `pilot-done`. Verify branches/PRs exist before trusting `pilot-done`.
 
 ### Deployment
 - **Own strategy** (issue #40): Docker Compose on VPS, Caddy auto-TLS, `scripts/deploy.sh` / `rollback.sh`, manual `deploy-production.yml` (SSH). Staging disabled until infra exists (GH-416).
@@ -80,7 +85,9 @@ The original 3-phase plan (41 issues) is **fully delivered** — all phase-1/2/3
 | Task | Description | Status |
 |---|---|---|
 | [TASK-00](./tasks/TASK-00-research-and-plan.md) | Research & architecture plan (Hydra, NIST, agent auth) | ✅ Complete |
-| [gh-436](./tasks/gh-436.md) | Public/PKCE client type + `aud` claim | ✅ Complete |
+| [gh-436](./tasks/gh-436.md) | Public/PKCE client type + `aud` claim | ✅ Complete (v0.69.0) |
+| [gh-435](./tasks/gh-435.md) | Migrate tool in image + multi-arch fix + real CI gate | ✅ Complete (v0.69.0) |
+| [gh-431](./tasks/gh-431.md) | OIDC provider services implementation | 🚀 Dispatched to Pilot |
 | `tasks/gh-NN.md` | Per-issue specs; active ones match open `pilot`-labeled issues | Various |
 
 ---
@@ -143,5 +150,5 @@ auth-service/
 
 ---
 
-**Last Updated**: 2026-07-26
+**Last Updated**: 2026-07-26 (v0.69.0)
 **Powered By**: Navigator 6.2.1
