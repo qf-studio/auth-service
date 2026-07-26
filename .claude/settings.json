@@ -6,7 +6,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/tmp/pilot-hooks-1157477663/pilot-bash-guard.sh"
+            "command": "/var/folders/_8/nnsxrdhn46x08pb886hrggv00000gn/T/pilot-hooks-1451057675/pilot-bash-guard.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/var/folders/_8/nnsxrdhn46x08pb886hrggv00000gn/T/pilot-hooks-1451057675/pilot-stop-gate.sh"
           }
         ]
       }

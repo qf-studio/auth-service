@@ -19,8 +19,10 @@ type ConsentGrantRepository interface {
 	// FindActive returns the non-revoked consent grant for the given
 	// tenant+user+client, or ErrNotFound if none exists.
 	FindActive(ctx context.Context, tenantID uuid.UUID, userID string, clientID uuid.UUID) (*domain.ConsentGrant, error)
-	// Create inserts a new active consent grant. Re-granting after a
-	// revocation inserts a new row rather than reactivating the old one.
+	// Create inserts a new active consent grant, or updates the scopes and
+	// grant time of the existing active grant for the same
+	// tenant+user+client. Re-granting after a revocation inserts a new row
+	// rather than reactivating the old one.
 	Create(ctx context.Context, grant *domain.ConsentGrant) (*domain.ConsentGrant, error)
 }
 
@@ -58,11 +60,17 @@ func (r *PostgresConsentGrantRepository) FindActive(ctx context.Context, tenantI
 	return g, nil
 }
 
-// Create inserts a new active consent grant.
+// Create inserts a new active consent grant. If an active grant already
+// exists for the same tenant+user+client (idx_consent_grants_tenant_user_client_active
+// permits only one), it is updated in place with the new scopes and grant
+// time — re-consenting (e.g. approving a broader scope set) must not fail on
+// the unique index.
 func (r *PostgresConsentGrantRepository) Create(ctx context.Context, grant *domain.ConsentGrant) (*domain.ConsentGrant, error) {
 	query := fmt.Sprintf(`
 		INSERT INTO consent_grants (id, tenant_id, user_id, client_id, scopes, granted_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (tenant_id, user_id, client_id) WHERE revoked_at IS NULL
+		DO UPDATE SET scopes = EXCLUDED.scopes, granted_at = EXCLUDED.granted_at
 		RETURNING %s`, consentGrantColumns)
 
 	granted := grant.GrantedAt
