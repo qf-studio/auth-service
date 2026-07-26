@@ -65,7 +65,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: release
     env:
-      IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      # env context is unavailable in job-level env; build the ref from the
+      # github context instead (REGISTRY/IMAGE_NAME must stay in sync above).
+      IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
       DATABASE_URL: postgres://auth:auth@localhost:5432/auth_test?sslmode=disable
     services:
       postgres:
