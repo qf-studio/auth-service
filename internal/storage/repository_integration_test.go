@@ -98,7 +98,7 @@ func createTables(t *testing.T, pool *pgxpool.Pool) {
 		);
 
 		DO $$ BEGIN
-			CREATE TYPE client_type AS ENUM ('service', 'agent');
+			CREATE TYPE client_type AS ENUM ('service', 'agent', 'public');
 		EXCEPTION
 			WHEN duplicate_object THEN NULL;
 		END $$;
@@ -117,7 +117,8 @@ func createTables(t *testing.T, pool *pgxpool.Pool) {
 			status                      TEXT        NOT NULL DEFAULT 'active',
 			created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			last_used_at                TIMESTAMPTZ
+			last_used_at                TIMESTAMPTZ,
+			redirect_uris               TEXT[]      NOT NULL DEFAULT '{}'
 		);
 
 		CREATE TABLE IF NOT EXISTS mfa_secrets (
@@ -739,6 +740,7 @@ func newTestClient() *domain.Client {
 		ClientType:     domain.ClientTypeService,
 		SecretHash:     "$argon2id$v=19$m=19456,t=2,p=1$salt$hash",
 		Scopes:         []string{"read:users"},
+		RedirectURIs:   []string{},
 		Owner:          "admin",
 		AccessTokenTTL: 900,
 		Status:         domain.ClientStatusActive,

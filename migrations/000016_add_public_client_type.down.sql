@@ -1,0 +1,6 @@
+-- 000016_add_public_client_type.down.sql
+-- No-op: PostgreSQL does not support removing a value from an enum type
+-- without recreating the type (and rewriting every dependent column), so
+-- rolling back this migration is intentionally a no-op. Any "public" rows
+-- created after upgrading would need to be migrated or removed manually
+-- before attempting a destructive downgrade.

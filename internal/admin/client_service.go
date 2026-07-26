@@ -91,19 +91,29 @@ func (s *ClientService) GetClient(ctx context.Context, clientID string) (*api.Ad
 	return &admin, nil
 }
 
-// CreateClient creates a new OAuth2 client with a generated secret.
+// CreateClient creates a new OAuth2 client. Public clients (SPAs, mobile
+// apps) cannot securely hold a secret, so no secret is generated for them
+// and secret_hash is stored empty; they authenticate via redirect URIs
+// instead.
 func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientRequest) (*api.AdminClientWithSecret, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
-	secret, err := generateClientSecret()
-	if err != nil {
-		s.logger.Error("generate client secret failed", zap.Error(err))
-		return nil, fmt.Errorf("create client: %w", api.ErrInternalError)
-	}
+	clientType := domain.ClientType(req.ClientType)
+	isPublic := clientType == domain.ClientTypePublic
 
-	hash, err := s.hasher.Hash(secret)
-	if err != nil {
-		s.logger.Error("hash client secret failed", zap.Error(err))
-		return nil, fmt.Errorf("create client: %w", api.ErrInternalError)
+	var secret, hash string
+	if !isPublic {
+		var err error
+		secret, err = generateClientSecret()
+		if err != nil {
+			s.logger.Error("generate client secret failed", zap.Error(err))
+			return nil, fmt.Errorf("create client: %w", api.ErrInternalError)
+		}
+
+		hash, err = s.hasher.Hash(secret)
+		if err != nil {
+			s.logger.Error("hash client secret failed", zap.Error(err))
+			return nil, fmt.Errorf("create client: %w", api.ErrInternalError)
+		}
 	}
 
 	now := time.Now().UTC()
@@ -111,14 +121,19 @@ func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientR
 	if scopes == nil {
 		scopes = []string{}
 	}
+	redirectURIs := req.RedirectURIs
+	if redirectURIs == nil {
+		redirectURIs = []string{}
+	}
 
 	client := &domain.Client{
 		ID:             uuid.New(),
 		TenantID:       tenantID,
 		Name:           req.Name,
-		ClientType:     domain.ClientType(req.ClientType),
+		ClientType:     clientType,
 		SecretHash:     hash,
 		Scopes:         scopes,
+		RedirectURIs:   redirectURIs,
 		Owner:          "admin",
 		AccessTokenTTL: 900,
 		Status:         domain.ClientStatusActive,
@@ -170,6 +185,9 @@ func (s *ClientService) UpdateClient(ctx context.Context, clientID string, req *
 	if req.Scopes != nil {
 		existing.Scopes = req.Scopes
 	}
+	if req.RedirectURIs != nil {
+		existing.RedirectURIs = req.RedirectURIs
+	}
 
 	updated, err := s.repo.Update(ctx, existing)
 	if err != nil {
@@ -219,11 +237,25 @@ func (s *ClientService) DeleteClient(ctx context.Context, clientID string) error
 }
 
 // RotateSecret generates a new secret for the client with a grace period.
+// Public clients (and any client with no stored secret) cannot rotate a
+// secret they never had; this is rejected with a conflict error.
 func (s *ClientService) RotateSecret(ctx context.Context, clientID string) (*api.AdminClientWithSecret, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
 	id, err := uuid.Parse(clientID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client ID: %w", api.ErrNotFound)
+	}
+
+	existing, err := s.repo.FindByID(ctx, tenantID, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("client %s: %w", clientID, api.ErrNotFound)
+		}
+		s.logger.Error("find client for rotate secret failed", zap.String("client_id", clientID), zap.Error(err))
+		return nil, fmt.Errorf("rotate secret: %w", api.ErrInternalError)
+	}
+	if existing.ClientType == domain.ClientTypePublic || existing.SecretHash == "" {
+		return nil, fmt.Errorf("client %s is a public client and has no secret to rotate: %w", clientID, api.ErrConflict)
 	}
 
 	secret, err := generateClientSecret()
@@ -278,11 +310,12 @@ func generateClientSecret() (string, error) {
 // domainClientToAdmin converts a domain.Client to an api.AdminClient response DTO.
 func domainClientToAdmin(c *domain.Client) api.AdminClient {
 	return api.AdminClient{
-		ID:         c.ID.String(),
-		Name:       c.Name,
-		ClientType: string(c.ClientType),
-		Scopes:     c.Scopes,
-		CreatedAt:  c.CreatedAt,
-		UpdatedAt:  c.UpdatedAt,
+		ID:           c.ID.String(),
+		Name:         c.Name,
+		ClientType:   string(c.ClientType),
+		Scopes:       c.Scopes,
+		RedirectURIs: c.RedirectURIs,
+		CreatedAt:    c.CreatedAt,
+		UpdatedAt:    c.UpdatedAt,
 	}
 }

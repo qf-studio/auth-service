@@ -13,6 +13,10 @@ const (
 	ClientTypeUser    ClientType = "user"
 	ClientTypeService ClientType = "service"
 	ClientTypeAgent   ClientType = "agent"
+	// ClientTypePublic identifies an OAuth2 public client (e.g. SPA or mobile
+	// app) that cannot securely hold a client secret and instead authenticates
+	// via registered redirect URIs.
+	ClientTypePublic ClientType = "public"
 )
 
 // IsValid returns true if the ClientType is a recognised value.
@@ -38,6 +42,7 @@ type Client struct {
 	PreviousSecretHash      string     `json:"-"                           db:"previous_secret_hash"`
 	PreviousSecretExpiresAt *time.Time `json:"-"                           db:"previous_secret_expires_at"`
 	Scopes                  []string   `json:"scopes"                      db:"scopes"`
+	RedirectURIs            []string   `json:"redirect_uris"               db:"redirect_uris"`
 	Owner                   string     `json:"owner"                       db:"owner"`
 	AccessTokenTTL          int        `json:"access_token_ttl"            db:"access_token_ttl"` // seconds
 	Status                  string     `json:"status"                      db:"status"`

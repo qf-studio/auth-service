@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -14,7 +15,33 @@ import (
 )
 
 // adminValidator is the shared validator instance for admin request structs.
-var adminValidator = validator.New()
+var adminValidator = newAdminValidator()
+
+// newAdminValidator builds the validator.Validate instance used for admin
+// request structs, registering custom validation tags on top of the
+// built-ins.
+func newAdminValidator() *validator.Validate {
+	v := validator.New()
+	_ = v.RegisterValidation("http_url_no_fragment", validateHTTPURLNoFragment)
+	return v
+}
+
+// validateHTTPURLNoFragment ensures the field is an absolute http(s) URI
+// with no fragment component, as required for OAuth2 client redirect URIs.
+func validateHTTPURLNoFragment(fl validator.FieldLevel) bool {
+	raw := fl.Field().String()
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Fragment != "" {
+		return false
+	}
+	return true
+}
 
 // AdminDeps holds infrastructure dependencies for the admin router.
 type AdminDeps struct {

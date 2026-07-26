@@ -37,17 +37,19 @@ func (r *ListUsersRequest) DefaultLimit() int {
 
 // CreateClientRequest is the validated request body for admin client creation.
 type CreateClientRequest struct {
-	Name       string   `json:"name"        validate:"required,min=1,max=255"`
-	ClientType string   `json:"client_type" validate:"required,client_type"`
-	Scopes     []string `json:"scopes"      validate:"required,min=1,dive,valid_scope"`
-	OwnerID    string   `json:"owner_id"    validate:"omitempty"`
+	Name         string   `json:"name"          validate:"required,min=1,max=255"`
+	ClientType   string   `json:"client_type"   validate:"required,client_type"`
+	Scopes       []string `json:"scopes"        validate:"required,min=1,dive,valid_scope"`
+	OwnerID      string   `json:"owner_id"      validate:"omitempty"`
+	RedirectURIs []string `json:"redirect_uris" validate:"omitempty"`
 }
 
 // UpdateClientRequest is the validated request body for admin client updates.
 type UpdateClientRequest struct {
-	Name   *string  `json:"name"   validate:"omitempty,min=1,max=255"`
-	Scopes []string `json:"scopes" validate:"omitempty,min=1,dive,valid_scope"`
-	Active *bool    `json:"active"`
+	Name         *string  `json:"name"          validate:"omitempty,min=1,max=255"`
+	Scopes       []string `json:"scopes"        validate:"omitempty,min=1,dive,valid_scope"`
+	Active       *bool    `json:"active"`
+	RedirectURIs []string `json:"redirect_uris" validate:"omitempty"`
 }
 
 // ListClientsRequest holds pagination parameters for listing clients.
@@ -87,15 +89,16 @@ type AdminUserResponse struct {
 
 // AdminClientResponse is the admin view of an OAuth2 client.
 type AdminClientResponse struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	ClientID   string    `json:"client_id"`
-	ClientType string    `json:"client_type"`
-	Scopes     []string  `json:"scopes"`
-	OwnerID    string    `json:"owner_id,omitempty"`
-	Active     bool      `json:"active"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	ClientID     string    `json:"client_id"`
+	ClientType   string    `json:"client_type"`
+	Scopes       []string  `json:"scopes"`
+	OwnerID      string    `json:"owner_id,omitempty"`
+	Active       bool      `json:"active"`
+	RedirectURIs []string  `json:"redirect_uris,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // IntrospectionResponse follows RFC 7662 token introspection response format.
@@ -123,6 +126,7 @@ type PaginatedResponse struct {
 var ValidClientTypes = map[string]bool{
 	string(ClientTypeService): true,
 	string(ClientTypeAgent):   true,
+	string(ClientTypePublic):  true,
 }
 
 // ValidScopes are the allowed OAuth2 scope values for system clients.

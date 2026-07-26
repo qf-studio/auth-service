@@ -219,6 +219,61 @@ func TestAdminCreateClient_MissingName(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
+func TestAdminCreateClient_PublicType_Success(t *testing.T) {
+	svc := &mockAdminClientService{
+		createClientFn: func(_ context.Context, req *api.CreateClientRequest) (*api.AdminClientWithSecret, error) {
+			return &api.AdminClientWithSecret{
+				AdminClient: api.AdminClient{
+					ID:           "spa-client",
+					Name:         req.Name,
+					ClientType:   req.ClientType,
+					RedirectURIs: req.RedirectURIs,
+					CreatedAt:    time.Now(),
+					UpdatedAt:    time.Now(),
+				},
+			}, nil
+		},
+	}
+	r := newAdminClientRouter(svc)
+	body := map[string]interface{}{
+		"name":          "spa-client",
+		"client_type":   "public",
+		"redirect_uris": []string{"https://app.example.com/callback"},
+	}
+	w := doRequest(r, http.MethodPost, "/admin/clients", body)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	_, hasSecret := resp["client_secret"]
+	assert.False(t, hasSecret, "public client response must not include client_secret")
+	assert.Equal(t, []interface{}{"https://app.example.com/callback"}, resp["redirect_uris"])
+}
+
+func TestAdminCreateClient_PublicType_MissingRedirectURIs(t *testing.T) {
+	r := newAdminClientRouter(&mockAdminClientService{})
+	body := map[string]interface{}{
+		"name":        "spa-client",
+		"client_type": "public",
+	}
+	w := doRequest(r, http.MethodPost, "/admin/clients", body)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
+
+func TestAdminCreateClient_PublicType_InvalidRedirectURI(t *testing.T) {
+	r := newAdminClientRouter(&mockAdminClientService{})
+	body := map[string]interface{}{
+		"name":          "spa-client",
+		"client_type":   "public",
+		"redirect_uris": []string{"not-a-valid-uri"},
+	}
+	w := doRequest(r, http.MethodPost, "/admin/clients", body)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
+
 func TestAdminCreateClient_Conflict(t *testing.T) {
 	svc := &mockAdminClientService{
 		createClientFn: func(_ context.Context, _ *api.CreateClientRequest) (*api.AdminClientWithSecret, error) {
@@ -296,6 +351,19 @@ func TestAdminRotateSecret_Success(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.NotEmpty(t, resp.ClientSecret, "new secret must be returned on rotation")
 	assert.NotNil(t, resp.GracePeriodEnds, "grace period must be set on rotation")
+}
+
+func TestAdminRotateSecret_PublicClient_Rejected(t *testing.T) {
+	svc := &mockAdminClientService{
+		rotateSecretFn: func(_ context.Context, clientID string) (*api.AdminClientWithSecret, error) {
+			return nil, fmt.Errorf("client %s is a public client and has no secret to rotate: %w", clientID, api.ErrConflict)
+		},
+	}
+	r := newAdminClientRouter(svc)
+	w := doRequest(r, http.MethodPost, "/admin/clients/spa-client/rotate-secret", nil)
+
+	assert.GreaterOrEqual(t, w.Code, 400)
+	assert.Less(t, w.Code, 500)
 }
 
 func TestAdminRotateSecret_NotFound(t *testing.T) {

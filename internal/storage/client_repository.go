@@ -38,7 +38,7 @@ func NewPostgresClientRepository(pool *pgxpool.Pool) *PostgresClientRepository {
 	return &PostgresClientRepository{pool: pool}
 }
 
-const clientColumns = `id, tenant_id, name, client_type, secret_hash, previous_secret_hash, previous_secret_expires_at, scopes, owner, access_token_ttl, status, created_at, updated_at, last_used_at`
+const clientColumns = `id, tenant_id, name, client_type, secret_hash, previous_secret_hash, previous_secret_expires_at, scopes, owner, access_token_ttl, status, created_at, updated_at, last_used_at, redirect_uris`
 
 func scanClient(row pgx.Row) (*domain.Client, error) {
 	c := &domain.Client{}
@@ -46,7 +46,7 @@ func scanClient(row pgx.Row) (*domain.Client, error) {
 		&c.ID, &c.TenantID, &c.Name, &c.ClientType, &c.SecretHash,
 		&c.PreviousSecretHash, &c.PreviousSecretExpiresAt,
 		&c.Scopes, &c.Owner, &c.AccessTokenTTL, &c.Status,
-		&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt,
+		&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt, &c.RedirectURIs,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -100,7 +100,7 @@ func (r *PostgresClientRepository) List(ctx context.Context, tenantID uuid.UUID,
 			&c.ID, &c.TenantID, &c.Name, &c.ClientType, &c.SecretHash,
 			&c.PreviousSecretHash, &c.PreviousSecretExpiresAt,
 			&c.Scopes, &c.Owner, &c.AccessTokenTTL, &c.Status,
-			&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt,
+			&c.CreatedAt, &c.UpdatedAt, &c.LastUsedAt, &c.RedirectURIs,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan client: %w", err)
 		}
@@ -136,14 +136,14 @@ func (r *PostgresClientRepository) FindByName(ctx context.Context, tenantID uuid
 // Create inserts a new client. Returns ErrDuplicateClient on name conflict.
 func (r *PostgresClientRepository) Create(ctx context.Context, client *domain.Client) (*domain.Client, error) {
 	query := fmt.Sprintf(`
-		INSERT INTO clients (id, tenant_id, name, client_type, secret_hash, scopes, owner, access_token_ttl, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO clients (id, tenant_id, name, client_type, secret_hash, scopes, owner, access_token_ttl, status, created_at, updated_at, redirect_uris)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING %s`, clientColumns)
 
 	c, err := scanClient(r.pool.QueryRow(ctx, query,
 		client.ID, client.TenantID, client.Name, client.ClientType, client.SecretHash,
 		client.Scopes, client.Owner, client.AccessTokenTTL, client.Status,
-		client.CreatedAt, client.UpdatedAt,
+		client.CreatedAt, client.UpdatedAt, client.RedirectURIs,
 	))
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -158,12 +158,12 @@ func (r *PostgresClientRepository) Create(ctx context.Context, client *domain.Cl
 // Update modifies mutable fields of a client (name, scopes).
 func (r *PostgresClientRepository) Update(ctx context.Context, client *domain.Client) (*domain.Client, error) {
 	query := fmt.Sprintf(`
-		UPDATE clients SET name = $1, scopes = $2, updated_at = $3
-		WHERE id = $4 AND tenant_id = $5 AND status != 'revoked'
+		UPDATE clients SET name = $1, scopes = $2, redirect_uris = $3, updated_at = $4
+		WHERE id = $5 AND tenant_id = $6 AND status != 'revoked'
 		RETURNING %s`, clientColumns)
 
 	c, err := scanClient(r.pool.QueryRow(ctx, query,
-		client.Name, client.Scopes, time.Now().UTC(), client.ID, client.TenantID,
+		client.Name, client.Scopes, client.RedirectURIs, time.Now().UTC(), client.ID, client.TenantID,
 	))
 	if err != nil {
 		var pgErr *pgconn.PgError

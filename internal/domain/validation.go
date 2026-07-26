@@ -95,7 +95,7 @@ func NewValidator() *validator.Validate {
 	return v
 }
 
-// validateClientType ensures the value is one of "service" or "agent".
+// validateClientType ensures the value is one of "service", "agent", or "public".
 func validateClientType(fl validator.FieldLevel) bool {
 	return ValidClientTypes[fl.Field().String()]
 }
@@ -173,7 +173,7 @@ func validationMessage(fe validator.FieldError) string {
 	case "required_if":
 		return fmt.Sprintf("%s is required for this grant type", strings.ToLower(fe.Field()))
 	case "client_type":
-		return "must be one of: service, agent"
+		return "must be one of: service, agent, public"
 	case "valid_scope":
 		return "invalid scope"
 	default:
