@@ -685,7 +685,7 @@ func loadOAuthProvider(l *loader, provider string) (OAuthProviderConfig, error) 
 }
 
 func loadOIDC(l *loader) (OIDCConfig, error) {
-	issuerURL := l.optStr("OIDC_ISSUER_URL", "http://localhost:4000")
+	issuerURL := l.optStr("OIDC_ISSUER_URL", "https://auth.qf.studio")
 
 	idTokenTTLStr := l.optStr("OIDC_ID_TOKEN_TTL", "1h")
 	idTokenTTL, err := parseDuration(idTokenTTLStr)

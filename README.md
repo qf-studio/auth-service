@@ -164,7 +164,7 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `MFA_DIGITS` | `6` | TOTP digits (6 or 8) |
 | `MFA_PERIOD` | `30` | TOTP period in seconds |
 | `MFA_BACKUP_CODE_COUNT` | `10` | Number of backup codes |
-| `OIDC_ISSUER_URL` | `http://localhost:4000` | OIDC issuer URL |
+| `OIDC_ISSUER_URL` | `https://auth.qf.studio` | OIDC issuer URL (also sets the `iss` claim on JWTs) |
 | `OIDC_ID_TOKEN_TTL` | `1h` | ID token lifetime |
 | `OIDC_SUPPORTED_SCOPES` | `openid,profile,email,offline_access` | Supported OIDC scopes |
 | `SAML_ENABLED` | `false` | Enable SAML SSO |

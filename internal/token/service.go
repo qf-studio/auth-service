@@ -48,9 +48,6 @@ const (
 
 	// refreshKeyBytes is the number of random bytes for the refresh token key part.
 	refreshKeyBytes = 32
-
-	// issuer is the JWT issuer claim value.
-	issuer = "https://auth.qf.studio"
 )
 
 // UserLookup abstracts user retrieval for refresh-token role enrichment.
@@ -65,6 +62,7 @@ type Service struct {
 	audit         audit.EventLogger
 	redis         *redis.Client
 	cfg           config.JWTConfig
+	oidc          config.OIDCConfig
 	privateKey    crypto.Signer
 	publicKey     crypto.PublicKey
 	signingMethod jwt.SigningMethod
@@ -73,8 +71,10 @@ type Service struct {
 }
 
 // NewService creates a new token Service, loading the private key from the
-// path specified in cfg.PrivateKeyPath.
-func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Logger, auditor audit.EventLogger) (*Service, error) {
+// path specified in cfg.PrivateKeyPath. oidcCfg.IssuerURL is used as the JWT
+// `iss` claim for both access tokens and ID tokens; oidcCfg.IDTokenTTL is the
+// lifetime of tokens minted by IssueIDToken.
+func NewService(cfg config.JWTConfig, oidcCfg config.OIDCConfig, redisClient *redis.Client, logger *zap.Logger, auditor audit.EventLogger) (*Service, error) {
 	keyData, err := os.ReadFile(cfg.PrivateKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("read private key: %w", err)
@@ -95,6 +95,7 @@ func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Log
 		audit:         auditor,
 		redis:         redisClient,
 		cfg:           cfg,
+		oidc:          oidcCfg,
 		privateKey:    signer,
 		publicKey:     pub,
 		signingMethod: method,
@@ -104,7 +105,7 @@ func NewService(cfg config.JWTConfig, redisClient *redis.Client, logger *zap.Log
 
 // NewServiceFromKey creates a token Service from an already-parsed private key.
 // Useful for testing without filesystem access.
-func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClient *redis.Client, logger *zap.Logger, auditor audit.EventLogger) (*Service, error) {
+func NewServiceFromKey(cfg config.JWTConfig, oidcCfg config.OIDCConfig, privateKey crypto.Signer, redisClient *redis.Client, logger *zap.Logger, auditor audit.EventLogger) (*Service, error) {
 	pub := privateKey.Public()
 	method, err := signingMethodForKey(privateKey, cfg.Algorithm)
 	if err != nil {
@@ -121,6 +122,7 @@ func NewServiceFromKey(cfg config.JWTConfig, privateKey crypto.Signer, redisClie
 		audit:         auditor,
 		redis:         redisClient,
 		cfg:           cfg,
+		oidc:          oidcCfg,
 		privateKey:    privateKey,
 		publicKey:     pub,
 		signingMethod: method,
@@ -342,7 +344,7 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 	claims := &customClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   subject,
-			Issuer:    issuer,
+			Issuer:    s.oidc.IssuerURL,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.cfg.AccessTokenTTL)),
 			ID:        jti,
@@ -368,6 +370,56 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 	}
 
 	return accessTokenPrefix + signed, nil
+}
+
+// ── Internal: ID Token (OIDC) ────────────────────────────────────────────────
+
+// idTokenClaims represents an OpenID Connect ID Token (OIDC Core 1.0 §2).
+// Unlike access tokens, ID tokens carry no roles/scopes/client_type: they
+// identify the authenticated end-user to the relying party (the OIDC client),
+// not authorize resource access.
+type idTokenClaims struct {
+	jwt.RegisteredClaims
+	AuthTime int64  `json:"auth_time,omitempty"`
+	Nonce    string `json:"nonce,omitempty"`
+}
+
+// IssueIDToken mints an OpenID Connect ID Token (OIDC Core 1.0 §2) for the
+// given subject, identifying the relying party as the sole audience via
+// clientID (§2: "aud... MUST contain the OAuth 2.0 client_id of the Relying
+// Party"). nonce is echoed back verbatim if the authorization request
+// included one (§3.1.3.6, mitigates replay attacks); pass "" if absent.
+// authTime records when the end-user authenticated (§2, auth_time claim).
+// The token is signed with the same key/kid as access tokens and expires
+// after cfg.OIDC.IDTokenTTL (OIDC_ID_TOKEN_TTL).
+func (s *Service) IssueIDToken(_ context.Context, subject, clientID, nonce string, authTime time.Time) (string, error) {
+	jti, err := generateRandomID(jtiBytes)
+	if err != nil {
+		return "", fmt.Errorf("generate jti: %w", err)
+	}
+
+	now := time.Now()
+	claims := &idTokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   subject,
+			Issuer:    s.oidc.IssuerURL,
+			Audience:  jwt.ClaimStrings{clientID},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(s.oidc.IDTokenTTL)),
+			ID:        jti,
+		},
+		AuthTime: authTime.Unix(),
+		Nonce:    nonce,
+	}
+
+	token := jwt.NewWithClaims(s.signingMethod, claims)
+	token.Header["kid"] = s.kid
+	signed, err := token.SignedString(s.privateKey)
+	if err != nil {
+		return "", fmt.Errorf("sign id token: %w", err)
+	}
+
+	return signed, nil
 }
 
 func (s *Service) parseAndVerifyJWT(rawToken string) (*customClaims, error) {

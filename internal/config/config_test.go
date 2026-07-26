@@ -100,7 +100,7 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.False(t, cfg.OAuth.Apple.Enabled)
 
 	// OIDC defaults
-	assert.Equal(t, "http://localhost:4000", cfg.OIDC.IssuerURL)
+	assert.Equal(t, "https://auth.qf.studio", cfg.OIDC.IssuerURL)
 	assert.Equal(t, 1*time.Hour, cfg.OIDC.IDTokenTTL)
 	assert.Equal(t, []string{"openid", "profile", "email", "offline_access"}, cfg.OIDC.SupportedScopes)
 

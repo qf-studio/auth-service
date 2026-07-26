@@ -86,7 +86,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 
 	// ── Services ─────────────────────────────────────────────────────────
 	hasher := password.New([]byte(cfg.Argon2.Pepper))
-	tokenSvc, err := token.NewService(cfg.JWT, redisClient, log, auditSvc)
+	tokenSvc, err := token.NewService(cfg.JWT, cfg.OIDC, redisClient, log, auditSvc)
 	if err != nil {
 		return fmt.Errorf("token service init failed: %w", err)
 	}
