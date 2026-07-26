@@ -5,6 +5,9 @@
 # ---------- builder ----------
 FROM golang:1.25-alpine AS builder
 
+ARG TARGETOS
+ARG TARGETARCH
+
 RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /src
@@ -15,8 +18,10 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -ldflags="-s -w" -o /bin/auth-service ./cmd/server
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -ldflags="-s -w" -o /bin/auth-migrate ./cmd/migrate
 
 # ---------- runtime ----------
 FROM alpine:3.21
@@ -26,6 +31,7 @@ RUN apk add --no-cache ca-certificates tzdata \
     && adduser -u 1000 -G appuser -D -h /home/appuser appuser
 
 COPY --from=builder /bin/auth-service /auth-service
+COPY --from=builder --chown=appuser:appuser /bin/auth-migrate /auth-migrate
 
 # Public API + Admin API
 EXPOSE 4000 4001
