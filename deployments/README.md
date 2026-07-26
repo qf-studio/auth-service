@@ -13,6 +13,7 @@ Covers staging and production environments, secrets management, monitoring, roll
 - [Deployment Guide](#deployment-guide)
   - [Staging](#staging-deployment)
   - [Production](#production-deployment)
+- [Running Migrations from the Image](#running-migrations-from-the-image)
 - [Monitoring](#monitoring)
 - [Rollback Procedures](#rollback-procedures)
 - [Troubleshooting](#troubleshooting)
@@ -266,6 +267,62 @@ cp .env.production.example .env.production
 - **Security headers** — HSTS (2 years + preload), X-Content-Type-Options, X-Frame-Options: DENY, restrictive CSP
 - **TLS 1.3** — Caddy auto-provisions certificates via Let's Encrypt
 - **PostgreSQL SSL** — `POSTGRES_SSLMODE=require` enforces encrypted DB connections
+
+---
+
+## Running Migrations from the Image
+
+The published image is self-contained: it ships a second binary, `/auth-migrate`, alongside `/auth-service`. `/auth-migrate` embeds the full migration SQL set at compile time, so any consumer can migrate a database using only the image and environment variables — no checkout of this repo, no vendored `migrations/*.sql`, no separate `migrate/migrate` container.
+
+### Invocation
+
+Override the image's default entrypoint (`/auth-service`) to run `/auth-migrate` instead:
+
+```bash
+docker run --rm --entrypoint /auth-migrate \
+  -e DATABASE_URL=postgres://user:pass@host:5432/dbname?sslmode=require \
+  ghcr.io/qf-studio/auth-service:<tag> up
+```
+
+### Required Environment
+
+Provide database connectivity via either:
+
+- `DATABASE_URL` — a full `postgres://` connection string, **or**
+- The individual `POSTGRES_*` variables: `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` (optionally `POSTGRES_PORT`, default `5432`, and `POSTGRES_SSLMODE`, default `disable`)
+
+If `DATABASE_URL` is set, it takes precedence over the individual `POSTGRES_*` variables.
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|--------------|
+| `up` | Applies all pending migrations. |
+| `down` | Rolls back the most recently applied migration. |
+| `version` | Prints the current schema version, and whether the schema is left `dirty` from a failed migration. |
+| `force <N>` | Forces `schema_migrations` to version `N` without running any SQL. Used to clear a dirty state after manual recovery — see below. |
+
+### Dirty-State Recovery Example
+
+If a migration fails partway through, `golang-migrate` marks `schema_migrations` as `dirty` and refuses further `up`/`down` calls until the dirty flag is cleared:
+
+```bash
+# 1. Confirm the dirty version
+docker run --rm --entrypoint /auth-migrate -e DATABASE_URL="$DATABASE_URL" \
+  ghcr.io/qf-studio/auth-service:<tag> version
+# e.g. "5 (dirty)"
+
+# 2. Inspect migration 000005's SQL and the actual table state, and
+#    manually finish or revert the partial change directly in Postgres.
+
+# 3. Clear the dirty flag by forcing the version (does not re-run SQL)
+docker run --rm --entrypoint /auth-migrate -e DATABASE_URL="$DATABASE_URL" \
+  ghcr.io/qf-studio/auth-service:<tag> force 5
+
+# 4. Resume normal migrations
+docker run --rm --entrypoint /auth-migrate -e DATABASE_URL="$DATABASE_URL" \
+  ghcr.io/qf-studio/auth-service:<tag> up
+```
 
 ---
 
