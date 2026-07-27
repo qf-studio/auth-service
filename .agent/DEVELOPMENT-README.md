@@ -54,7 +54,7 @@
 ## Current Focus
 
 ### Status (2026-07-27)
-The original 3-phase plan (41 issues) is **fully delivered**. The service is at **v0.69.0** (deployed by Pointer, auth.getpointer.app) with the **full OIDC provider now on main, unreleased** — v0.70.0 tag pending a decision on #473. Work is issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
+The original 3-phase plan (41 issues) is **fully delivered**. The service is at **v0.70.0** (tag `84e758a`, release green incl. in-image migration dry-run): full OIDC provider (GH-431) + token-type hardening (GH-473). Pointer still runs pre-v0.69.0 — told to skip straight to v0.70.0 (see #465 comment). Work is issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
 
 **Recently landed** (on main, 2026-07-27, post-v0.69.0):
 - GH-431 (OIDC provider) complete via children GH-467→470, PRs #471/#472/#474/#475:
@@ -66,9 +66,8 @@ The original 3-phase plan (41 issues) is **fully delivered**. The service is at 
 **Open issues**:
 | # | Title | Notes |
 |---|---|---|
-| #473 | Token-type separation hardening | gRPC validation accepts ID tokens as access tokens (`TrimPrefix` vs middleware's `HasPrefix`). Filed during GH-469 review; recommended to land before v0.70.0 ships the OIDC flow. Unlabeled — needs decision on mitigation + whether to arm for Pilot |
 | #447 | Move Pointer AWS deploy workflow to private infra repo | Security: self-hosted runner on public repo; needs infra-repo + org-admin access |
-| #465 | Pointer consumer actions for v0.69.0 | On Pointer's side: deploy, enable aud validation, re-register SPA as public client, drop vendored migrations. NOT pilot-labeled |
+| #465 | Pointer consumer actions (now targets v0.70.0) | Consolidated checklist in comments: deploy v0.70.0 directly (skip v0.69.0), aud two-step, SPA as public client, OIDC_LOGIN_UI_URL, iss warning. No Pointer response yet as of 2026-07-27; live instance predates v0.69.0 |
 
 **Pilot operational notes** (bookkeeping bugs observed 2026-07-25/27):
 1. Post-PR state loss: worker can die after opening a PR without closing the child issue → repick loop → `pilot-blocked` with all work actually done in open PRs. Check `gh pr list` before re-arming.
@@ -90,7 +89,8 @@ The original 3-phase plan (41 issues) is **fully delivered**. The service is at 
 | [TASK-00](./tasks/TASK-00-research-and-plan.md) | Research & architecture plan (Hydra, NIST, agent auth) | ✅ Complete |
 | [gh-436](./tasks/gh-436.md) | Public/PKCE client type + `aud` claim | ✅ Complete (v0.69.0) |
 | [gh-435](./tasks/gh-435.md) | Migrate tool in image + multi-arch fix + real CI gate | ✅ Complete (v0.69.0) |
-| [gh-431](./tasks/gh-431.md) | OIDC provider services implementation (children gh-467→470) | ✅ Complete (on main, 2026-07-27) |
+| [gh-431](./tasks/gh-431.md) | OIDC provider services implementation (children gh-467→470) | ✅ Complete (v0.70.0) |
+| [gh-473](./tasks/gh-473.md) | Token-type hardening: gRPC qf_at_ gate + client_type claim gate | ✅ Complete (v0.70.0, PR #476) |
 | `tasks/gh-NN.md` | Per-issue specs; active ones match open `pilot`-labeled issues | Various |
 
 ---
@@ -155,5 +155,5 @@ auth-service/
 
 ---
 
-**Last Updated**: 2026-07-27 (OIDC provider on main; v0.70.0 pending #473)
+**Last Updated**: 2026-07-27 (v0.70.0 released: OIDC provider + token-type hardening)
 **Powered By**: Navigator 6.2.1
