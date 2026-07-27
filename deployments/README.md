@@ -678,6 +678,16 @@ Full list of configuration variables. See `.env.staging.example` and `.env.produ
 | `SYSTEM_SECRETS` | Client credential secrets (comma-separated) | *(required)* | *(required)* |
 | `JWT_AUDIENCE` | Comma-separated list of `aud` values to set on issued access tokens. Empty/unset (default) means no `aud` claim is added and audience validation is disabled — `ValidateToken` accepts audience-less tokens regardless of this setting, to avoid a rotation hazard when the value is first configured. | *(empty)* | *(empty)* |
 
+### OIDC Provider
+
+| Variable | Description | Staging Default | Production Default |
+|----------|-------------|-----------------|-------------------|
+| `OIDC_ISSUER_URL` | Sets the discovery document's `issuer` field and the `iss` claim on issued access/ID tokens. **Behavior change (GH-468):** prior to this fix, `iss` was hardcoded to `https://auth.qf.studio` and this variable had no effect on issued tokens — only on the discovery document. Deployments that already set a non-default `OIDC_ISSUER_URL` will see `iss` on newly issued tokens change to match it. | `https://auth.qf.studio` | `https://auth.qf.studio` |
+| `OIDC_ID_TOKEN_TTL` | ID token lifetime | `1h` | `1h` |
+| `OIDC_SUPPORTED_SCOPES` | Comma-separated list of supported OIDC scopes | `openid,profile,email,offline_access` | `openid,profile,email,offline_access` |
+| `OIDC_LOGIN_UI_URL` | Base URL of the external login UI; `login_challenge` is appended as a query param. **Required** for the OIDC authorization code flow — `GET /oauth/authorize` returns an internal error if unset. | *(required)* | *(required)* |
+| `OIDC_CONSENT_UI_URL` | Base URL of the external consent UI; `consent_challenge` is appended as a query param. Defaults to `OIDC_LOGIN_UI_URL` when unset. | *(defaults to `OIDC_LOGIN_UI_URL`)* | *(defaults to `OIDC_LOGIN_UI_URL`)* |
+
 ### Security
 
 | Variable | Description | Staging Default | Production Default |
