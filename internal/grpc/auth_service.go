@@ -51,7 +51,10 @@ func (s *AuthServiceServer) ValidateToken(ctx context.Context, req *authv1.Valid
 		return nil, status.Error(codes.InvalidArgument, "access_token is required")
 	}
 
-	raw := strings.TrimPrefix(req.GetAccessToken(), accessTokenPrefix)
+	raw, ok := strings.CutPrefix(req.GetAccessToken(), accessTokenPrefix)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "invalid token format")
+	}
 	claims, err := s.tokenSvc.ValidateToken(ctx, raw)
 	if err != nil {
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
@@ -110,7 +113,10 @@ func (s *AuthServiceServer) IntrospectToken(ctx context.Context, req *authv1.Int
 		return nil, status.Error(codes.InvalidArgument, "access_token is required")
 	}
 
-	raw := strings.TrimPrefix(req.GetAccessToken(), accessTokenPrefix)
+	raw, ok := strings.CutPrefix(req.GetAccessToken(), accessTokenPrefix)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "invalid token format")
+	}
 	claims, err := s.tokenSvc.ValidateToken(ctx, raw)
 	if err != nil {
 		return &authv1.IntrospectTokenResponse{Active: false}, nil

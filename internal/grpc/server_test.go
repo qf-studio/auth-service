@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -248,8 +249,11 @@ func TestValidateToken_InvalidToken(t *testing.T) {
 	deps, _ := defaultTestDeps(t)
 	client, _ := setupBufConn(t, deps)
 
+	// Prefixed but not a well-formed JWT: exercises the ValidateToken(claims
+	// parse) failure path, distinct from the qf_at_ prefix gate (GH-473)
+	// covered by TestValidateToken_MissingPrefix_Unauthenticated.
 	resp, err := client.ValidateToken(context.Background(), &authv1.ValidateTokenRequest{
-		AccessToken: "invalid-token",
+		AccessToken: "qf_at_invalid-token",
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.GetValid())
@@ -262,6 +266,42 @@ func TestValidateToken_EmptyToken(t *testing.T) {
 	_, err := client.ValidateToken(context.Background(), &authv1.ValidateTokenRequest{})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+// TestValidateToken_MissingPrefix_Unauthenticated verifies that a valid
+// access token presented WITHOUT its qf_at_ prefix is rejected outright
+// (GH-473): gRPC must match the HTTP middleware's requirement that the
+// prefix be present, rather than silently accepting a bare JWT.
+func TestValidateToken_MissingPrefix_Unauthenticated(t *testing.T) {
+	deps, tokenSvc := defaultTestDeps(t)
+	client, _ := setupBufConn(t, deps)
+
+	result, err := tokenSvc.IssueTokenPair(context.Background(), "user-123", []string{"user"}, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	unprefixed := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	_, err = client.ValidateToken(context.Background(), &authv1.ValidateTokenRequest{
+		AccessToken: unprefixed,
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+}
+
+// TestValidateToken_IDToken_Unauthenticated verifies that an OIDC ID token
+// (which never carries the qf_at_ prefix) cannot be used to authenticate
+// via gRPC token validation (GH-473).
+func TestValidateToken_IDToken_Unauthenticated(t *testing.T) {
+	deps, tokenSvc := defaultTestDeps(t)
+	client, _ := setupBufConn(t, deps)
+
+	idToken, err := tokenSvc.IssueIDToken(context.Background(), "user-123", "client-abc", "", time.Now())
+	require.NoError(t, err)
+
+	_, err = client.ValidateToken(context.Background(), &authv1.ValidateTokenRequest{
+		AccessToken: idToken,
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
 // ── GetUser tests ────────────────────────────────────────────────────────────
@@ -357,8 +397,11 @@ func TestIntrospectToken_Invalid(t *testing.T) {
 	deps, _ := defaultTestDeps(t)
 	client, _ := setupBufConn(t, deps)
 
+	// Prefixed but not a well-formed JWT: exercises the ValidateToken(claims
+	// parse) failure path, distinct from the qf_at_ prefix gate (GH-473)
+	// covered by TestIntrospectToken_MissingPrefix_Unauthenticated.
 	resp, err := client.IntrospectToken(context.Background(), &authv1.IntrospectTokenRequest{
-		AccessToken: "bad-token",
+		AccessToken: "qf_at_bad-token",
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.GetActive())
@@ -379,6 +422,40 @@ func TestIntrospectToken_Revoked(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.False(t, resp.GetActive())
+}
+
+// TestIntrospectToken_MissingPrefix_Unauthenticated mirrors
+// TestValidateToken_MissingPrefix_Unauthenticated for the IntrospectToken
+// RPC, which strips the same qf_at_ prefix (GH-473).
+func TestIntrospectToken_MissingPrefix_Unauthenticated(t *testing.T) {
+	deps, tokenSvc := defaultTestDeps(t)
+	client, _ := setupBufConn(t, deps)
+
+	result, err := tokenSvc.IssueTokenPair(context.Background(), "user-123", []string{"user"}, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	unprefixed := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	_, err = client.IntrospectToken(context.Background(), &authv1.IntrospectTokenRequest{
+		AccessToken: unprefixed,
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+}
+
+// TestIntrospectToken_IDToken_Unauthenticated verifies that an OIDC ID token
+// is rejected by IntrospectToken as well as ValidateToken (GH-473).
+func TestIntrospectToken_IDToken_Unauthenticated(t *testing.T) {
+	deps, tokenSvc := defaultTestDeps(t)
+	client, _ := setupBufConn(t, deps)
+
+	idToken, err := tokenSvc.IssueIDToken(context.Background(), "user-123", "client-abc", "", time.Now())
+	require.NoError(t, err)
+
+	_, err = client.IntrospectToken(context.Background(), &authv1.IntrospectTokenRequest{
+		AccessToken: idToken,
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
 // ── Health tests ─────────────────────────────────────────────────────────────
