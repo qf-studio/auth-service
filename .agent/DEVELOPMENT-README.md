@@ -67,12 +67,12 @@ The original 3-phase plan (41 issues) is **fully delivered**. The service is at 
 | # | Title | Notes |
 |---|---|---|
 | #447 | Move Pointer AWS deploy workflow to private infra repo | Security: self-hosted runner on public repo; needs infra-repo + org-admin access |
-| #465 | Pointer consumer actions (now targets v0.70.0) | Consolidated checklist in comments: deploy v0.70.0 directly (skip v0.69.0), aud two-step, SPA as public client, OIDC_LOGIN_UI_URL, iss warning. No Pointer response yet as of 2026-07-27; live instance predates v0.69.0 |
+| #465 | Pointer consumer actions (now targets v0.70.0) | Consolidated checklist in comments: deploy v0.70.0 directly (skip v0.69.0), aud two-step, SPA as public client, OIDC_LOGIN_UI_URL, iss warning. Live instance predates v0.69.0; Nelya pinged in Slack #pointer 2026-07-27 |
 
-**Pilot operational notes** (bookkeeping bugs observed 2026-07-25/27):
-1. Post-PR state loss: worker can die after opening a PR without closing the child issue → repick loop → `pilot-blocked` with all work actually done in open PRs. Check `gh pr list` before re-arming.
-2. False completion: any *merged* PR whose title mentions "GH-NN" gets issue NN labeled `pilot-done` — and the scan re-runs every ~6 min, so removing the label never sticks. Remediation (verified 2026-07-27): retitle the merged PRs (`gh pr list --state merged --search "NN in:title"`, then `gh pr edit`), then remove the label once.
-3. Stale worker file state: PR branches can carry (a) reverts of files fixed on main after the branch was cut — #475 silently reverted a reviewed bugfix from #474 — and (b) polluted meta files (`.claude/settings.json` worker hook paths, stale `.agent/` doc restores). Before merging a Pilot PR: `git diff origin/main <branch>` (not the GitHub compare, which can show a stale merge base) and `git checkout origin/main -- <file>` the regressions on the branch.
+**Pilot operational notes** (bugs observed 2026-07-25/27; instance upgraded to v2.246.1 + restarted 2026-07-27 12:46 UTC):
+1. Post-PR state loss: worker can die after opening a PR without closing the child issue → repick loop → `pilot-blocked` with all work actually done in open PRs. Check `gh pr list` before re-arming. Unverified against v2.246.1.
+2. ~~False completion via merged-PR title scan~~ **RESOLVED**: the title-based completion scan was removed in Pilot v2.237.0 (pilot PRs #4178/#4192); running instance is v2.246.1, so this can no longer occur. Historical remediation (needed only on pre-v2.237 instances): retitle merged PRs matching `"GH-NN" in:title`, then remove the bogus `pilot-done` once.
+3. Stale worker file state: PR branches can carry (a) reverts of files fixed on main after the branch was cut — #475 silently reverted a reviewed bugfix from #474 — and (b) polluted meta files (`.claude/settings.json` worker hook paths, stale `.agent/` doc restores). Before merging a Pilot PR: `git diff origin/main <branch>` (not the GitHub compare, which can show a stale merge base) and `git checkout origin/main -- <file>` the regressions on the branch. Unverified against v2.246.1 — keep checking.
 
 ### Deployment
 - **Own strategy** (issue #40): Docker Compose on VPS, Caddy auto-TLS, `scripts/deploy.sh` / `rollback.sh`, manual `deploy-production.yml` (SSH). Staging disabled until infra exists (GH-416).
