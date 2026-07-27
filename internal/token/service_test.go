@@ -296,6 +296,40 @@ func TestValidateToken_GarbageInput(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestValidateToken_RejectsIDToken verifies that a cryptographically valid
+// OIDC ID token (IssueIDToken) is rejected by ValidateToken with
+// domain.ErrNotAccessToken, since ID tokens carry no client_type claim
+// (GH-473: gRPC and other ValidateToken callers must not treat an ID token
+// as an authenticated access-token subject).
+func TestValidateToken_RejectsIDToken(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	idToken, err := svc.IssueIDToken(ctx, "user-123", "client-abc", "", time.Now())
+	require.NoError(t, err)
+
+	_, err = svc.ValidateToken(ctx, idToken)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrNotAccessToken)
+}
+
+// TestValidateToken_AccessTokenOK is a control alongside
+// TestValidateToken_RejectsIDToken: a real access token (which always
+// carries client_type) must continue to validate successfully.
+func TestValidateToken_AccessTokenOK(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueTokenPair(ctx, "user-123", []string{"user"}, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+	assert.Equal(t, "user-123", claims.Subject)
+	assert.Equal(t, domain.ClientTypeUser, claims.ClientType)
+}
+
 func TestValidateToken_WrongSigningKey(t *testing.T) {
 	svc1, _ := newES256Service(t)
 	ctx := context.Background()
@@ -454,19 +488,17 @@ func TestIssueIDToken_ClaimsAndSignature(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, idToken)
 
-	// Signature/alg verification: the ID token must be signed by the same
-	// key as access tokens. customClaims is a structural superset of the ID
-	// token's claims (both embed jwt.RegisteredClaims), so ValidateToken can
-	// cryptographically verify it directly.
-	claims, err := svc.ValidateToken(ctx, idToken)
-	require.NoError(t, err)
-	assert.Equal(t, "user-123", claims.Subject)
-	assert.Equal(t, []string{"client-abc"}, claims.Audience)
-
-	parser := jwtv5.NewParser()
+	// Signature/alg verification: ID tokens carry no client_type claim, so
+	// ValidateToken now rejects them (GH-473). Verify the signature directly
+	// against the service's own key instead, mirroring
+	// internal/oidc/oidc_flow_integration_test.go's idTokenIssuer helper.
 	tc := &idTokenTestClaims{}
-	parsedToken, _, err := parser.ParseUnverified(idToken, tc)
-	require.NoError(t, err)
+	parsedToken, err := jwtv5.ParseWithClaims(idToken, tc, func(*jwtv5.Token) (interface{}, error) {
+		return &key.PublicKey, nil
+	}, jwtv5.WithValidMethods([]string{"ES256"}))
+	require.NoError(t, err, "parse/verify ID token")
+	assert.Equal(t, "user-123", tc.Subject)
+	assert.Equal(t, jwtv5.ClaimStrings{"client-abc"}, tc.Audience)
 
 	assert.Equal(t, "ES256", parsedToken.Method.Alg())
 
@@ -503,14 +535,14 @@ func TestIssueIDToken_EdDSA(t *testing.T) {
 	idToken, err := svc.IssueIDToken(ctx, "svc-456", "client-def", "", time.Now())
 	require.NoError(t, err)
 
-	claims, err := svc.ValidateToken(ctx, idToken)
-	require.NoError(t, err)
-	assert.Equal(t, "svc-456", claims.Subject)
-
-	parser := jwtv5.NewParser()
+	// ID tokens carry no client_type claim, so ValidateToken rejects them
+	// (GH-473); verify the signature directly against the service's key.
 	tc := &idTokenTestClaims{}
-	parsedToken, _, err := parser.ParseUnverified(idToken, tc)
-	require.NoError(t, err)
+	parsedToken, err := jwtv5.ParseWithClaims(idToken, tc, func(*jwtv5.Token) (interface{}, error) {
+		return key.Public(), nil
+	}, jwtv5.WithValidMethods([]string{"EdDSA"}))
+	require.NoError(t, err, "parse/verify ID token")
+	assert.Equal(t, "svc-456", tc.Subject)
 	assert.Equal(t, "EdDSA", parsedToken.Method.Alg())
 }
 

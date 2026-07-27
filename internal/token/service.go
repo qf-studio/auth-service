@@ -293,10 +293,19 @@ func (s *Service) JWKS(_ context.Context) (*api.JWKSResponse, error) {
 
 // ValidateToken parses and cryptographically validates the raw JWT (qf_at_ prefix
 // already stripped), returning its claims. Implements middleware.TokenValidator.
+//
+// Only access tokens are accepted: every access token carries a client_type
+// claim, while OIDC ID tokens (IssueIDToken) never do, so a token lacking it
+// is rejected with domain.ErrNotAccessToken even if its signature is valid
+// (GH-473 defense-in-depth against token-type confusion).
 func (s *Service) ValidateToken(_ context.Context, rawToken string) (*domain.TokenClaims, error) {
 	claims, err := s.parseAndVerifyJWT(rawToken)
 	if err != nil {
 		return nil, err
+	}
+
+	if claims.ClientType == "" {
+		return nil, fmt.Errorf("validate token: %w", domain.ErrNotAccessToken)
 	}
 
 	return claimsToDomain(claims)

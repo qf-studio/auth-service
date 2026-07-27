@@ -22,6 +22,11 @@ var (
 	ErrTokenRevoked = errors.New("token revoked")
 	ErrTokenInvalid = errors.New("token invalid")
 
+	// ErrNotAccessToken indicates a token was cryptographically valid but is
+	// not an access token (e.g. an OIDC ID token), identified by the absence
+	// of the client_type claim that every access token carries (GH-473).
+	ErrNotAccessToken = errors.New("token is not an access token")
+
 	// Client errors.
 	ErrClientNotFound  = errors.New("client not found")
 	ErrClientSuspended = errors.New("client suspended")
