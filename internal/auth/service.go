@@ -16,6 +16,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
@@ -49,39 +50,50 @@ type MFAChecker interface {
 // Service implements api.AuthService with Redis-backed password reset tokens
 // and PostgreSQL-backed user authentication.
 type Service struct {
-	redis    *redis.Client
-	logger   *zap.Logger
-	audit    audit.EventLogger
-	users    storage.UserRepository
-	tokens   storage.RefreshTokenRepository
-	issuer   TokenIssuer
-	hasher   password.Hasher
-	breaches hibp.BreachChecker
-	mfa      MFAChecker
-	policy   *password.PolicyValidator
+	redis        *redis.Client
+	logger       *zap.Logger
+	audit        audit.EventLogger
+	users        storage.UserRepository
+	tokens       storage.RefreshTokenRepository
+	issuer       TokenIssuer
+	hasher       password.Hasher
+	breaches     hibp.BreachChecker
+	mfa          MFAChecker
+	policy       *password.PolicyValidator
+	email        email.EmailSender
+	resetURLBase string
+}
+
+// ServiceDeps groups the dependencies needed to construct a Service. Using a
+// struct here keeps NewService's call sites readable now that email delivery
+// has been added on top of the existing 8 constructor parameters.
+type ServiceDeps struct {
+	Redis        *redis.Client
+	Logger       *zap.Logger
+	Auditor      audit.EventLogger
+	Users        storage.UserRepository
+	Tokens       storage.RefreshTokenRepository
+	Issuer       TokenIssuer
+	Hasher       password.Hasher
+	Breaches     hibp.BreachChecker
+	Email        email.EmailSender
+	ResetURLBase string // base URL password-reset links are built from: "<ResetURLBase>?token=<token>"
 }
 
 // NewService creates a new auth Service.
-func NewService(
-	redisClient *redis.Client,
-	logger *zap.Logger,
-	auditor audit.EventLogger,
-	users storage.UserRepository,
-	tokens storage.RefreshTokenRepository,
-	issuer TokenIssuer,
-	hasher password.Hasher,
-	breaches hibp.BreachChecker,
-) *Service {
+func NewService(deps ServiceDeps) *Service {
 	return &Service{
-		redis:    redisClient,
-		logger:   logger,
-		audit:    auditor,
-		users:    users,
-		tokens:   tokens,
-		issuer:   issuer,
-		hasher:   hasher,
-		breaches: breaches,
-		policy:   password.NewPolicyValidator(password.DefaultPolicy(), hasher),
+		redis:        deps.Redis,
+		logger:       deps.Logger,
+		audit:        deps.Auditor,
+		users:        deps.Users,
+		tokens:       deps.Tokens,
+		issuer:       deps.Issuer,
+		hasher:       deps.Hasher,
+		breaches:     deps.Breaches,
+		email:        deps.Email,
+		resetURLBase: deps.ResetURLBase,
+		policy:       password.NewPolicyValidator(password.DefaultPolicy(), deps.Hasher),
 	}
 }
 
@@ -295,9 +307,23 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 }
 
 // ResetPassword initiates a password reset by generating a token, storing it in Redis,
-// and (in future) sending an email. Returns nil even if the email doesn't exist to
-// prevent enumeration.
-func (s *Service) ResetPassword(ctx context.Context, email string) error {
+// and emailing the reset link. Returns nil even if the email doesn't exist, and even if
+// delivery fails, to prevent user enumeration via response timing/content.
+func (s *Service) ResetPassword(ctx context.Context, emailAddr string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	// Look up the user first: unknown addresses skip both token storage and
+	// send entirely, so no reset token is ever minted for an address that
+	// isn't registered.
+	if _, err := s.users.FindByEmail(ctx, tenantID, emailAddr); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			s.logger.Info("password reset requested for unknown email", zap.String("email", emailAddr))
+			return nil
+		}
+		s.logger.Error("failed to look up user for password reset", zap.Error(err))
+		return fmt.Errorf("find user: %w", err)
+	}
+
 	token, err := generateResetToken()
 	if err != nil {
 		s.logger.Error("failed to generate reset token", zap.Error(err))
@@ -305,22 +331,38 @@ func (s *Service) ResetPassword(ctx context.Context, email string) error {
 	}
 
 	key := resetTokenPrefix + token
-	if err := s.redis.Set(ctx, key, email, resetTokenTTL).Err(); err != nil {
+	if err := s.redis.Set(ctx, key, emailAddr, resetTokenTTL).Err(); err != nil {
 		s.logger.Error("failed to store reset token in redis", zap.Error(err))
 		return fmt.Errorf("store reset token: %w", err)
 	}
 
 	s.logger.Info("password reset token created",
-		zap.String("email", email),
+		zap.String("email", emailAddr),
 		zap.Duration("ttl", resetTokenTTL),
 	)
 
 	s.audit.LogEvent(ctx, audit.Event{
 		Type:     audit.EventPasswordReset,
-		Metadata: map[string]string{"email": email},
+		Metadata: map[string]string{"email": emailAddr},
 	})
 
-	// TODO(GH-XX): send email with reset link containing the token.
+	if s.email != nil {
+		link := s.resetURLBase + "?token=" + token
+		msg := email.Message{
+			To:      emailAddr,
+			Subject: "Reset your password",
+			Body:    fmt.Sprintf("Use the link below to reset your password:\n\n%s\n\nThis link expires in %s.", link, resetTokenTTL),
+		}
+		if sendErr := s.email.Send(ctx, msg); sendErr != nil {
+			// Delivery failure must not become an enumeration oracle: log and
+			// audit, but still return nil so the handler responds 202.
+			s.logger.Error("failed to send password reset email", zap.Error(sendErr))
+			s.audit.LogEvent(ctx, audit.Event{
+				Type:     audit.EventPasswordResetEmailFailed,
+				Metadata: map[string]string{"email": emailAddr},
+			})
+		}
+	}
 
 	return nil
 }

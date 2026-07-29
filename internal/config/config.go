@@ -39,11 +39,11 @@ type TenantConfig struct {
 
 // SAMLConfig holds SAML Service Provider settings.
 type SAMLConfig struct {
-	Enabled    bool   // SAML_ENABLED: whether SAML SSO is active
-	EntityID   string // SAML_ENTITY_ID: the SP entity identifier
-	ACSURL     string // SAML_ACS_URL: Assertion Consumer Service URL
-	KeyPath    string // SAML_KEY_PATH: path to SP private key file
-	CertPath   string // SAML_CERT_PATH: path to SP certificate file
+	Enabled  bool   // SAML_ENABLED: whether SAML SSO is active
+	EntityID string // SAML_ENTITY_ID: the SP entity identifier
+	ACSURL   string // SAML_ACS_URL: Assertion Consumer Service URL
+	KeyPath  string // SAML_KEY_PATH: path to SP private key file
+	CertPath string // SAML_CERT_PATH: path to SP certificate file
 }
 
 // OIDCConfig holds OpenID Connect provider settings.
@@ -90,10 +90,11 @@ type DPoPConfig struct {
 
 // EmailConfig holds outbound email delivery settings.
 type EmailConfig struct {
-	ServiceURL    string // EMAIL_SERVICE_URL: base URL of the email-service
-	APIKey        string // EMAIL_API_KEY: bearer token for the email-service API
-	SenderAddress string // EMAIL_SENDER_ADDRESS: the From address on outgoing mail
-	Enabled       bool   // EMAIL_ENABLED: false → skip delivery (useful in dev/test)
+	ServiceURL           string // EMAIL_SERVICE_URL: base URL of the email-service
+	APIKey               string // EMAIL_API_KEY: bearer token for the email-service API
+	SenderAddress        string // EMAIL_SENDER_ADDRESS: the From address on outgoing mail
+	Enabled              bool   // EMAIL_ENABLED: false → skip delivery (useful in dev/test)
+	PasswordResetURLBase string // PASSWORD_RESET_URL_BASE: base URL the reset token is appended to (?token=<token>); required when Enabled
 }
 
 // AppConfig holds server-level settings.
@@ -558,20 +559,32 @@ func loadRequestLimit(l *loader) (RequestLimitConfig, error) {
 }
 
 func loadEmail(l *loader) (EmailConfig, error) {
-	serviceURL := l.optStr("EMAIL_SERVICE_URL", "")
-	apiKey := l.optStr("EMAIL_API_KEY", "")
-	senderAddress := l.optStr("EMAIL_SENDER_ADDRESS", "")
-
 	enabled, err := l.optBool("EMAIL_ENABLED", false)
 	if err != nil {
 		return EmailConfig{}, err
 	}
 
+	// When email delivery is enabled, every downstream field is required so
+	// startup fails fast instead of silently dropping password-reset emails.
+	var serviceURL, apiKey, senderAddress, resetURLBase string
+	if enabled {
+		serviceURL = l.requireStr("EMAIL_SERVICE_URL")
+		apiKey = l.requireStr("EMAIL_API_KEY")
+		senderAddress = l.requireStr("EMAIL_SENDER_ADDRESS")
+		resetURLBase = l.requireStr("PASSWORD_RESET_URL_BASE")
+	} else {
+		serviceURL = l.optStr("EMAIL_SERVICE_URL", "")
+		apiKey = l.optStr("EMAIL_API_KEY", "")
+		senderAddress = l.optStr("EMAIL_SENDER_ADDRESS", "")
+		resetURLBase = l.optStr("PASSWORD_RESET_URL_BASE", "")
+	}
+
 	return EmailConfig{
-		ServiceURL:    serviceURL,
-		APIKey:        apiKey,
-		SenderAddress: senderAddress,
-		Enabled:       enabled,
+		ServiceURL:           serviceURL,
+		APIKey:               apiKey,
+		SenderAddress:        senderAddress,
+		Enabled:              enabled,
+		PasswordResetURLBase: resetURLBase,
 	}, nil
 }
 

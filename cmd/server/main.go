@@ -22,6 +22,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/dpop"
+	"github.com/qf-studio/auth-service/internal/email"
 	grpcserver "github.com/qf-studio/auth-service/internal/grpc"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/hibp"
@@ -96,7 +97,27 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Enrich refresh-minted access tokens with the user's current roles (GH-432).
 	tokenSvc.SetUserLookup(userRepo)
 	hibpClient := hibp.NewClient(http.DefaultClient)
-	authSvc := auth.NewService(redisClient, log, auditSvc, userRepo, refreshTokenRepo, tokenSvc, hasher, hibpClient)
+
+	// ── Email ────────────────────────────────────────────────────────────
+	var emailSender email.EmailSender
+	if cfg.Email.Enabled {
+		emailSender = email.NewHTTPSender(cfg.Email.ServiceURL, cfg.Email.APIKey, cfg.Email.SenderAddress, nil)
+	} else {
+		emailSender = email.NewConsoleSender(log)
+	}
+
+	authSvc := auth.NewService(auth.ServiceDeps{
+		Redis:        redisClient,
+		Logger:       log,
+		Auditor:      auditSvc,
+		Users:        userRepo,
+		Tokens:       refreshTokenRepo,
+		Issuer:       tokenSvc,
+		Hasher:       hasher,
+		Breaches:     hibpClient,
+		Email:        emailSender,
+		ResetURLBase: cfg.Email.PasswordResetURLBase,
+	})
 
 	// ── Session ──────────────────────────────────────────────────────────
 	sessionStore := session.NewMemoryStore()
