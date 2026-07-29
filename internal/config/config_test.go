@@ -88,6 +88,7 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.Equal(t, "", cfg.Email.APIKey)
 	assert.Equal(t, "", cfg.Email.SenderAddress)
 	assert.False(t, cfg.Email.Enabled)
+	assert.Equal(t, "", cfg.Email.PasswordResetURLBase)
 
 	// DPoP defaults
 	assert.False(t, cfg.DPoP.Enabled)
@@ -157,6 +158,7 @@ func TestLoad_EmailConfig(t *testing.T) {
 	env["EMAIL_API_KEY"] = "secret-key"
 	env["EMAIL_SENDER_ADDRESS"] = "noreply@example.com"
 	env["EMAIL_ENABLED"] = "true"
+	env["PASSWORD_RESET_URL_BASE"] = "https://app.example.com/reset-password"
 	setEnv(t, env)
 
 	cfg, err := Load()
@@ -166,6 +168,31 @@ func TestLoad_EmailConfig(t *testing.T) {
 	assert.Equal(t, "secret-key", cfg.Email.APIKey)
 	assert.Equal(t, "noreply@example.com", cfg.Email.SenderAddress)
 	assert.True(t, cfg.Email.Enabled)
+	assert.Equal(t, "https://app.example.com/reset-password", cfg.Email.PasswordResetURLBase)
+}
+
+func TestLoad_EmailEnabledMissingFields(t *testing.T) {
+	env := requiredEnv()
+	env["EMAIL_ENABLED"] = "true"
+	// Missing EMAIL_SERVICE_URL, EMAIL_API_KEY, EMAIL_SENDER_ADDRESS, PASSWORD_RESET_URL_BASE.
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "EMAIL_SERVICE_URL")
+	assert.Contains(t, err.Error(), "EMAIL_API_KEY")
+	assert.Contains(t, err.Error(), "EMAIL_SENDER_ADDRESS")
+	assert.Contains(t, err.Error(), "PASSWORD_RESET_URL_BASE")
+}
+
+func TestLoad_EmailDisabled_FieldsNotRequired(t *testing.T) {
+	setEnv(t, requiredEnv())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.False(t, cfg.Email.Enabled)
+	assert.Empty(t, cfg.Email.PasswordResetURLBase)
 }
 
 func TestLoad_CustomValues(t *testing.T) {

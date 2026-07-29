@@ -153,10 +153,11 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `CORS_MAX_AGE` | `12h` | Preflight cache duration |
 | `REQUEST_MAX_BODY_SIZE` | `1048576` | Max request body in bytes (1 MiB) |
 | `REQUEST_TIMEOUT` | `30s` | Request timeout |
-| `EMAIL_ENABLED` | `false` | Enable email delivery |
-| `EMAIL_SERVICE_URL` | _(empty)_ | Email service base URL |
-| `EMAIL_API_KEY` | _(empty)_ | Email service API key |
-| `EMAIL_SENDER_ADDRESS` | _(empty)_ | From address for outgoing mail |
+| `EMAIL_ENABLED` | `false` | Enable email delivery (`false` uses a console logger, no external calls) |
+| `EMAIL_SERVICE_URL` | _(empty)_ | Email service base URL (required when `EMAIL_ENABLED=true`) |
+| `EMAIL_API_KEY` | _(empty)_ | Email service API key (required when `EMAIL_ENABLED=true`) |
+| `EMAIL_SENDER_ADDRESS` | _(empty)_ | From address for outgoing mail (required when `EMAIL_ENABLED=true`) |
+| `PASSWORD_RESET_URL_BASE` | _(empty)_ | Base URL password reset links are built from: `<base>?token=<token>` (required when `EMAIL_ENABLED=true`) |
 | `DPOP_ENABLED` | `false` | Enable DPoP proof binding |
 | `DPOP_NONCE_TTL` | `5m` | DPoP nonce lifetime |
 | `DPOP_JTI_WINDOW` | `1m` | DPoP replay window |

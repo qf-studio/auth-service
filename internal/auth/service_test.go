@@ -15,6 +15,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -154,6 +155,19 @@ func (m *mockBreachChecker) IsBreached(ctx context.Context, password string) (bo
 	return false, nil
 }
 
+type mockEmailSender struct {
+	sendFn func(ctx context.Context, msg email.Message) error
+	sent   []email.Message
+}
+
+func (m *mockEmailSender) Send(ctx context.Context, msg email.Message) error {
+	m.sent = append(m.sent, msg)
+	if m.sendFn != nil {
+		return m.sendFn(ctx, msg)
+	}
+	return nil
+}
+
 type mockHasher struct {
 	verifyFn       func(password, hash string) (bool, error)
 	needsUpgradeFn func(hash string) bool
@@ -184,7 +198,17 @@ func (m *mockHasher) NeedsUpgrade(hash string) bool {
 func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefreshTokenRepository, issuer *mockTokenIssuer, hasher *mockHasher) *Service {
 	t.Helper()
 	logger, _ := zap.NewDevelopment()
-	return NewService(nil, logger, audit.NopLogger{}, users, tokens, issuer, hasher, &mockBreachChecker{})
+	return NewService(ServiceDeps{
+		Redis:    nil,
+		Logger:   logger,
+		Auditor:  audit.NopLogger{},
+		Users:    users,
+		Tokens:   tokens,
+		Issuer:   issuer,
+		Hasher:   hasher,
+		Breaches: &mockBreachChecker{},
+		Email:    &mockEmailSender{},
+	})
 }
 
 // newRedisClient creates a Redis client for integration tests (password reset).
@@ -215,12 +239,39 @@ func newRedisClient(t *testing.T) *redis.Client {
 	return client
 }
 
-// newIntegrationService creates a Service with a real Redis client.
+// newIntegrationService creates a Service with a real Redis client and a user
+// repository that resolves any email to a found user, for tests exercising
+// the Redis-backed reset/confirm flow that don't care about the lookup
+// outcome itself.
 func newIntegrationService(t *testing.T) *Service {
+	t.Helper()
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, addr string) (*domain.User, error) {
+			return &domain.User{ID: "user-1", Email: addr, PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g"}, nil
+		},
+	}
+	return newIntegrationServiceWithDeps(t, users, &mockEmailSender{}, "")
+}
+
+// newIntegrationServiceWithDeps creates a Service with a real Redis client and
+// caller-supplied user repository / email sender, for tests that assert on
+// email delivery behavior.
+func newIntegrationServiceWithDeps(t *testing.T, users *mockUserRepository, sender email.EmailSender, resetURLBase string) *Service {
 	t.Helper()
 	client := newRedisClient(t)
 	logger, _ := zap.NewDevelopment()
-	return NewService(client, logger, audit.NopLogger{}, &mockUserRepository{}, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{}, &mockBreachChecker{})
+	return NewService(ServiceDeps{
+		Redis:        client,
+		Logger:       logger,
+		Auditor:      audit.NopLogger{},
+		Users:        users,
+		Tokens:       &mockRefreshTokenRepository{},
+		Issuer:       &mockTokenIssuer{},
+		Hasher:       &mockHasher{},
+		Breaches:     &mockBreachChecker{},
+		Email:        sender,
+		ResetURLBase: resetURLBase,
+	})
 }
 
 // ── Login Tests ──────────────────────────────────────────────────────────────
@@ -380,8 +431,8 @@ func TestLogin(t *testing.T) {
 // ── MFA Mocks ───────────────────────────────────────────────────────────────
 
 type mockMFAChecker struct {
-	isMFAEnabledFn       func(ctx context.Context, userID string) (bool, error)
-	generateMFATokenFn   func(ctx context.Context, userID string) (string, error)
+	isMFAEnabledFn     func(ctx context.Context, userID string) (bool, error)
+	generateMFATokenFn func(ctx context.Context, userID string) (string, error)
 }
 
 func (m *mockMFAChecker) IsMFAEnabled(ctx context.Context, userID string) (bool, error) {
@@ -701,6 +752,84 @@ func TestResetPassword_FullFlow(t *testing.T) {
 	exists, err := svc.redis.Exists(ctx, keys[0]).Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), exists)
+}
+
+// ── Password Reset Email Tests ──────────────────────────────────────────────
+
+func TestResetPassword_KnownUser_SendsResetLink(t *testing.T) {
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, addr string) (*domain.User, error) {
+			return &domain.User{ID: "user-1", Email: addr}, nil
+		},
+	}
+	sender := &mockEmailSender{}
+	svc := newIntegrationServiceWithDeps(t, users, sender, "https://app.example.com/reset")
+	ctx := context.Background()
+
+	err := svc.ResetPassword(ctx, "alice@example.com")
+	require.NoError(t, err)
+
+	require.Len(t, sender.sent, 1, "expected exactly one email to be sent")
+	msg := sender.sent[0]
+	assert.Equal(t, "alice@example.com", msg.To)
+
+	keys, err := svc.redis.Keys(ctx, resetTokenPrefix+"*").Result()
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	token := keys[0][len(resetTokenPrefix):]
+
+	assert.Contains(t, msg.Body, "https://app.example.com/reset?token="+token)
+}
+
+func TestResetPassword_UnknownEmail_NoSendNoRedisWrite(t *testing.T) {
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	sender := &mockEmailSender{}
+	svc := newIntegrationServiceWithDeps(t, users, sender, "https://app.example.com/reset")
+	ctx := context.Background()
+
+	err := svc.ResetPassword(ctx, "nobody@example.com")
+	require.NoError(t, err, "unknown email must still return nil (202, anti-enumeration)")
+
+	assert.Empty(t, sender.sent, "expected zero emails sent for an unknown address")
+
+	keys, err := svc.redis.Keys(ctx, resetTokenPrefix+"*").Result()
+	require.NoError(t, err)
+	assert.Empty(t, keys, "expected zero reset tokens stored for an unknown address")
+}
+
+func TestResetPassword_EmailSendFailure_StillReturnsNil(t *testing.T) {
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, addr string) (*domain.User, error) {
+			return &domain.User{ID: "user-1", Email: addr}, nil
+		},
+	}
+	sender := &mockEmailSender{
+		sendFn: func(_ context.Context, _ email.Message) error {
+			return fmt.Errorf("email service unreachable")
+		},
+	}
+	svc := newIntegrationServiceWithDeps(t, users, sender, "https://app.example.com/reset")
+
+	err := svc.ResetPassword(context.Background(), "alice@example.com")
+	require.NoError(t, err, "delivery failure must not become an enumeration oracle")
+	assert.Len(t, sender.sent, 1, "send should still have been attempted")
+}
+
+func TestResetPassword_ConsoleSenderPath(t *testing.T) {
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, addr string) (*domain.User, error) {
+			return &domain.User{ID: "user-1", Email: addr}, nil
+		},
+	}
+	logger, _ := zap.NewDevelopment()
+	svc := newIntegrationServiceWithDeps(t, users, email.NewConsoleSender(logger), "https://app.example.com/reset")
+
+	err := svc.ResetPassword(context.Background(), "alice@example.com")
+	require.NoError(t, err, "ConsoleSender path (EMAIL_ENABLED=false) must not error")
 }
 
 func TestGenerateResetToken_Uniqueness(t *testing.T) {
