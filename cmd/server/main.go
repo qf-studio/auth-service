@@ -107,16 +107,17 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	authSvc := auth.NewService(auth.ServiceDeps{
-		Redis:        redisClient,
-		Logger:       log,
-		Auditor:      auditSvc,
-		Users:        userRepo,
-		Tokens:       refreshTokenRepo,
-		Issuer:       tokenSvc,
-		Hasher:       hasher,
-		Breaches:     hibpClient,
-		Email:        emailSender,
-		ResetURLBase: cfg.Email.PasswordResetURLBase,
+		Redis:         redisClient,
+		Logger:        log,
+		Auditor:       auditSvc,
+		Users:         userRepo,
+		Tokens:        refreshTokenRepo,
+		Issuer:        tokenSvc,
+		Hasher:        hasher,
+		Breaches:      hibpClient,
+		Email:         emailSender,
+		ResetURLBase:  cfg.Email.PasswordResetURLBase,
+		VerifyURLBase: cfg.Email.EmailVerifyURLBase,
 	})
 
 	// ── Session ──────────────────────────────────────────────────────────

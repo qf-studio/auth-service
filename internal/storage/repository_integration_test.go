@@ -310,6 +310,81 @@ func TestPostgresUserRepository_UpdateLastLogin_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
 
+func TestPostgresUserRepository_ConsumeEmailVerifyToken_Valid(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	err = repo.SetEmailVerifyToken(ctx, domain.DefaultTenantID, user.ID, "valid-token", time.Now().UTC().Add(24*time.Hour))
+	require.NoError(t, err)
+
+	verified, err := repo.ConsumeEmailVerifyToken(ctx, domain.DefaultTenantID, "valid-token")
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, verified.ID)
+	assert.True(t, verified.EmailVerified)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, user.ID)
+	require.NoError(t, err)
+	assert.True(t, found.EmailVerified)
+}
+
+func TestPostgresUserRepository_ConsumeEmailVerifyToken_Expired(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	err = repo.SetEmailVerifyToken(ctx, domain.DefaultTenantID, user.ID, "expired-token", time.Now().UTC().Add(-1*time.Hour))
+	require.NoError(t, err)
+
+	_, err = repo.ConsumeEmailVerifyToken(ctx, domain.DefaultTenantID, "expired-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrTokenExpired)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, user.ID)
+	require.NoError(t, err)
+	assert.False(t, found.EmailVerified, "expired token must not verify the user")
+}
+
+func TestPostgresUserRepository_ConsumeEmailVerifyToken_Invalid(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.ConsumeEmailVerifyToken(ctx, domain.DefaultTenantID, "bogus-token-nobody-has")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestPostgresUserRepository_ConsumeEmailVerifyToken_AlreadyVerified_Idempotent(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	err = repo.SetEmailVerifyToken(ctx, domain.DefaultTenantID, user.ID, "reused-token", time.Now().UTC().Add(24*time.Hour))
+	require.NoError(t, err)
+
+	// First click verifies the account.
+	_, err = repo.ConsumeEmailVerifyToken(ctx, domain.DefaultTenantID, "reused-token")
+	require.NoError(t, err)
+
+	// Second click with the same link must still succeed (idempotent), not 404.
+	verified, err := repo.ConsumeEmailVerifyToken(ctx, domain.DefaultTenantID, "reused-token")
+	require.NoError(t, err)
+	assert.True(t, verified.EmailVerified)
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // RefreshTokenRepository tests
 // ────────────────────────────────────────────────────────────────────────────
