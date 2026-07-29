@@ -39,6 +39,7 @@ services:
     ports:
       - "${PUBLIC_PORT:-4000}:4000"
       - "${ADMIN_PORT:-4001}:4001"
+      - "${GRPC_PORT:-4002}:4002"
     depends_on:
       postgres:
         condition: service_healthy
