@@ -95,6 +95,7 @@ type EmailConfig struct {
 	SenderAddress        string // EMAIL_SENDER_ADDRESS: the From address on outgoing mail
 	Enabled              bool   // EMAIL_ENABLED: false → skip delivery (useful in dev/test)
 	PasswordResetURLBase string // PASSWORD_RESET_URL_BASE: base URL the reset token is appended to (?token=<token>); required when Enabled
+	EmailVerifyURLBase   string // EMAIL_VERIFY_URL_BASE: base URL the verify token is appended to (?token=<token>); required when Enabled
 }
 
 // AppConfig holds server-level settings.
@@ -565,18 +566,21 @@ func loadEmail(l *loader) (EmailConfig, error) {
 	}
 
 	// When email delivery is enabled, every downstream field is required so
-	// startup fails fast instead of silently dropping password-reset emails.
-	var serviceURL, apiKey, senderAddress, resetURLBase string
+	// startup fails fast instead of silently dropping password-reset or
+	// verification emails.
+	var serviceURL, apiKey, senderAddress, resetURLBase, verifyURLBase string
 	if enabled {
 		serviceURL = l.requireStr("EMAIL_SERVICE_URL")
 		apiKey = l.requireStr("EMAIL_API_KEY")
 		senderAddress = l.requireStr("EMAIL_SENDER_ADDRESS")
 		resetURLBase = l.requireStr("PASSWORD_RESET_URL_BASE")
+		verifyURLBase = l.requireStr("EMAIL_VERIFY_URL_BASE")
 	} else {
 		serviceURL = l.optStr("EMAIL_SERVICE_URL", "")
 		apiKey = l.optStr("EMAIL_API_KEY", "")
 		senderAddress = l.optStr("EMAIL_SENDER_ADDRESS", "")
 		resetURLBase = l.optStr("PASSWORD_RESET_URL_BASE", "")
+		verifyURLBase = l.optStr("EMAIL_VERIFY_URL_BASE", "")
 	}
 
 	return EmailConfig{
@@ -585,6 +589,7 @@ func loadEmail(l *loader) (EmailConfig, error) {
 		SenderAddress:        senderAddress,
 		Enabled:              enabled,
 		PasswordResetURLBase: resetURLBase,
+		EmailVerifyURLBase:   verifyURLBase,
 	}, nil
 }
 

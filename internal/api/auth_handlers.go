@@ -84,6 +84,21 @@ func (h *AuthHandlers) ConfirmPasswordReset(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Password has been reset"})
 }
 
+// VerifyEmail handles POST /auth/verify-email.
+func (h *AuthHandlers) VerifyEmail(c *gin.Context) {
+	req := c.MustGet("validated_request").(*domain.VerifyEmailRequest)
+
+	// Any failure (unknown, expired) maps to 400 — verification tokens aren't
+	// an enumeration risk the way password reset is, so there's no need to
+	// mask the outcome. Success is idempotent: already-verified users also get 200.
+	if err := h.auth.VerifyEmail(c.Request.Context(), req.Token); err != nil {
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid or expired verification token")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Email verified"})
+}
+
 // Me handles GET /auth/me.
 func (h *AuthHandlers) Me(c *gin.Context) {
 	userID := c.GetString("user_id")

@@ -21,6 +21,8 @@ const (
 	EventPasswordReset            = "password_reset"
 	EventPasswordResetConfm       = "password_reset_confirm"
 	EventPasswordResetEmailFailed = "password_reset_email_failed"
+	EventEmailVerifyEmailFailed   = "email_verify_email_failed"
+	EventEmailVerified            = "email_verified"
 	EventPasswordExpired          = "password_expired"
 	EventHashUpgraded             = "hash_upgraded"
 	EventPasswordReused           = "password_reused"

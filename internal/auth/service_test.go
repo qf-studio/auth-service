@@ -23,13 +23,15 @@ import (
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 type mockUserRepository struct {
-	findByEmailFn        func(ctx context.Context, email string) (*domain.User, error)
-	findByIDFn           func(ctx context.Context, id string) (*domain.User, error)
-	createFn             func(ctx context.Context, user *domain.User) (*domain.User, error)
-	updateLastLogin      func(ctx context.Context, userID string, ts time.Time) error
-	updatePasswordHashFn func(ctx context.Context, userID, newHash string) error
-	getPasswordHistoryFn func(ctx context.Context, userID string, limit int) ([]domain.PasswordHistoryEntry, error)
-	addPasswordHistoryFn func(ctx context.Context, userID, hash string) error
+	findByEmailFn             func(ctx context.Context, email string) (*domain.User, error)
+	findByIDFn                func(ctx context.Context, id string) (*domain.User, error)
+	createFn                  func(ctx context.Context, user *domain.User) (*domain.User, error)
+	updateLastLogin           func(ctx context.Context, userID string, ts time.Time) error
+	updatePasswordHashFn      func(ctx context.Context, userID, newHash string) error
+	getPasswordHistoryFn      func(ctx context.Context, userID string, limit int) ([]domain.PasswordHistoryEntry, error)
+	addPasswordHistoryFn      func(ctx context.Context, userID, hash string) error
+	setEmailVerifyTokenFn     func(ctx context.Context, userID, token string, expiresAt time.Time) error
+	consumeEmailVerifyTokenFn func(ctx context.Context, token string) (*domain.User, error)
 }
 
 func (m *mockUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
@@ -60,11 +62,17 @@ func (m *mockUserRepository) UpdateLastLogin(ctx context.Context, _ uuid.UUID, u
 	return nil
 }
 
-func (m *mockUserRepository) SetEmailVerifyToken(_ context.Context, _ uuid.UUID, _ string, _ string, _ time.Time) error {
+func (m *mockUserRepository) SetEmailVerifyToken(ctx context.Context, _ uuid.UUID, userID string, token string, expiresAt time.Time) error {
+	if m.setEmailVerifyTokenFn != nil {
+		return m.setEmailVerifyTokenFn(ctx, userID, token, expiresAt)
+	}
 	return nil
 }
 
-func (m *mockUserRepository) ConsumeEmailVerifyToken(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
+func (m *mockUserRepository) ConsumeEmailVerifyToken(ctx context.Context, _ uuid.UUID, token string) (*domain.User, error) {
+	if m.consumeEmailVerifyTokenFn != nil {
+		return m.consumeEmailVerifyTokenFn(ctx, token)
+	}
 	return nil, fmt.Errorf("not implemented")
 }
 
@@ -208,6 +216,26 @@ func newUnitService(t *testing.T, users *mockUserRepository, tokens *mockRefresh
 		Hasher:   hasher,
 		Breaches: &mockBreachChecker{},
 		Email:    &mockEmailSender{},
+	})
+}
+
+// newUnitServiceWithEmail creates a Service with a nil Redis client and a
+// caller-supplied user repository / email sender / verify URL base, for
+// register and verify-email unit tests that don't touch Redis.
+func newUnitServiceWithEmail(t *testing.T, users *mockUserRepository, sender email.EmailSender, verifyURLBase string) *Service {
+	t.Helper()
+	logger, _ := zap.NewDevelopment()
+	return NewService(ServiceDeps{
+		Redis:         nil,
+		Logger:        logger,
+		Auditor:       audit.NopLogger{},
+		Users:         users,
+		Tokens:        &mockRefreshTokenRepository{},
+		Issuer:        &mockTokenIssuer{},
+		Hasher:        &mockHasher{},
+		Breaches:      &mockBreachChecker{},
+		Email:         sender,
+		VerifyURLBase: verifyURLBase,
 	})
 }
 
@@ -937,6 +965,144 @@ func TestRegister_CreatesUser(t *testing.T) {
 	require.NotNil(t, createdUser)
 	assert.NotEmpty(t, createdUser.PasswordHash)
 	assert.NotNil(t, createdUser.PasswordChangedAt)
+}
+
+func TestRegister_IssuesEmailVerificationTokenAndSendsLink(t *testing.T) {
+	var (
+		tokenUserID string
+		tokenValue  string
+		expiresAt   time.Time
+	)
+	users := &mockUserRepository{
+		createFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+			u.ID = "user-1"
+			return u, nil
+		},
+		setEmailVerifyTokenFn: func(_ context.Context, userID, token string, expiry time.Time) error {
+			tokenUserID = userID
+			tokenValue = token
+			expiresAt = expiry
+			return nil
+		},
+	}
+	sender := &mockEmailSender{}
+	svc := newUnitServiceWithEmail(t, users, sender, "https://app.example.com/verify-email")
+
+	before := time.Now().UTC()
+	info, err := svc.Register(context.Background(), "test@example.com", "valid-password-12345", "Test User")
+	require.NoError(t, err)
+
+	assert.Equal(t, "user-1", tokenUserID)
+	assert.Len(t, tokenValue, resetTokenBytes*2, "hex-encoded 32-byte token")
+	assert.WithinDuration(t, before.Add(verifyTokenTTL), expiresAt, 2*time.Second)
+
+	require.Len(t, sender.sent, 1, "expected exactly one verification email to be sent")
+	msg := sender.sent[0]
+	assert.Equal(t, info.Email, msg.To)
+	assert.Contains(t, msg.Body, "https://app.example.com/verify-email?token="+tokenValue)
+}
+
+func TestRegister_EmailSendFailure_RegistrationStillSucceeds(t *testing.T) {
+	users := &mockUserRepository{
+		createFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+			u.ID = "user-1"
+			return u, nil
+		},
+	}
+	sender := &mockEmailSender{
+		sendFn: func(_ context.Context, _ email.Message) error {
+			return fmt.Errorf("email service unreachable")
+		},
+	}
+	svc := newUnitServiceWithEmail(t, users, sender, "https://app.example.com/verify-email")
+
+	info, err := svc.Register(context.Background(), "test@example.com", "valid-password-12345", "Test User")
+	require.NoError(t, err, "a verification email delivery failure must not fail registration")
+	assert.Equal(t, "test@example.com", info.Email)
+	assert.Len(t, sender.sent, 1, "send should still have been attempted")
+}
+
+func TestRegister_ConsoleSenderPath_RegistrationUnchanged(t *testing.T) {
+	users := &mockUserRepository{
+		createFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+			u.ID = "user-1"
+			return u, nil
+		},
+	}
+	logger, _ := zap.NewDevelopment()
+	svc := newUnitServiceWithEmail(t, users, email.NewConsoleSender(logger), "")
+
+	info, err := svc.Register(context.Background(), "test@example.com", "valid-password-12345", "Test User")
+	require.NoError(t, err, "ConsoleSender path (EMAIL_ENABLED=false) must not error")
+	assert.Equal(t, "test@example.com", info.Email)
+}
+
+// ── VerifyEmail Tests ────────────────────────────────────────────────────────
+
+func TestVerifyEmail(t *testing.T) {
+	verifiedUser := &domain.User{ID: "user-1", Email: "alice@example.com", EmailVerified: true}
+
+	tests := []struct {
+		name    string
+		token   string
+		users   *mockUserRepository
+		wantErr bool
+	}{
+		{
+			name:  "happy path",
+			token: "valid-token",
+			users: &mockUserRepository{
+				consumeEmailVerifyTokenFn: func(_ context.Context, token string) (*domain.User, error) {
+					assert.Equal(t, "valid-token", token)
+					return verifiedUser, nil
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "already verified is idempotent",
+			token: "already-used-token",
+			users: &mockUserRepository{
+				consumeEmailVerifyTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+					return verifiedUser, nil
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "expired token",
+			token: "expired-token",
+			users: &mockUserRepository{
+				consumeEmailVerifyTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+					return nil, fmt.Errorf("email verify token: %w", storage.ErrTokenExpired)
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:  "invalid token",
+			token: "bogus-token",
+			users: &mockUserRepository{
+				consumeEmailVerifyTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+					return nil, fmt.Errorf("email verify token: %w", storage.ErrNotFound)
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newUnitService(t, tt.users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+			err := svc.VerifyEmail(context.Background(), tt.token)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 // ── ChangePassword Tests ────────────────────────────────────────────────────

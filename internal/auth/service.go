@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
@@ -31,6 +32,9 @@ const (
 
 	// resetTokenBytes is the number of random bytes in a reset token (32 bytes = 64 hex chars).
 	resetTokenBytes = 32
+
+	// verifyTokenTTL is how long an email verification token remains valid.
+	verifyTokenTTL = 24 * time.Hour
 )
 
 // TokenIssuer abstracts token pair creation for the auth service.
@@ -50,50 +54,53 @@ type MFAChecker interface {
 // Service implements api.AuthService with Redis-backed password reset tokens
 // and PostgreSQL-backed user authentication.
 type Service struct {
-	redis        *redis.Client
-	logger       *zap.Logger
-	audit        audit.EventLogger
-	users        storage.UserRepository
-	tokens       storage.RefreshTokenRepository
-	issuer       TokenIssuer
-	hasher       password.Hasher
-	breaches     hibp.BreachChecker
-	mfa          MFAChecker
-	policy       *password.PolicyValidator
-	email        email.EmailSender
-	resetURLBase string
+	redis         *redis.Client
+	logger        *zap.Logger
+	audit         audit.EventLogger
+	users         storage.UserRepository
+	tokens        storage.RefreshTokenRepository
+	issuer        TokenIssuer
+	hasher        password.Hasher
+	breaches      hibp.BreachChecker
+	mfa           MFAChecker
+	policy        *password.PolicyValidator
+	email         email.EmailSender
+	resetURLBase  string
+	verifyURLBase string
 }
 
 // ServiceDeps groups the dependencies needed to construct a Service. Using a
 // struct here keeps NewService's call sites readable now that email delivery
 // has been added on top of the existing 8 constructor parameters.
 type ServiceDeps struct {
-	Redis        *redis.Client
-	Logger       *zap.Logger
-	Auditor      audit.EventLogger
-	Users        storage.UserRepository
-	Tokens       storage.RefreshTokenRepository
-	Issuer       TokenIssuer
-	Hasher       password.Hasher
-	Breaches     hibp.BreachChecker
-	Email        email.EmailSender
-	ResetURLBase string // base URL password-reset links are built from: "<ResetURLBase>?token=<token>"
+	Redis         *redis.Client
+	Logger        *zap.Logger
+	Auditor       audit.EventLogger
+	Users         storage.UserRepository
+	Tokens        storage.RefreshTokenRepository
+	Issuer        TokenIssuer
+	Hasher        password.Hasher
+	Breaches      hibp.BreachChecker
+	Email         email.EmailSender
+	ResetURLBase  string // base URL password-reset links are built from: "<ResetURLBase>?token=<token>"
+	VerifyURLBase string // base URL email-verification links are built from: "<VerifyURLBase>?token=<token>"
 }
 
 // NewService creates a new auth Service.
 func NewService(deps ServiceDeps) *Service {
 	return &Service{
-		redis:        deps.Redis,
-		logger:       deps.Logger,
-		audit:        deps.Auditor,
-		users:        deps.Users,
-		tokens:       deps.Tokens,
-		issuer:       deps.Issuer,
-		hasher:       deps.Hasher,
-		breaches:     deps.Breaches,
-		email:        deps.Email,
-		resetURLBase: deps.ResetURLBase,
-		policy:       password.NewPolicyValidator(password.DefaultPolicy(), deps.Hasher),
+		redis:         deps.Redis,
+		logger:        deps.Logger,
+		audit:         deps.Auditor,
+		users:         deps.Users,
+		tokens:        deps.Tokens,
+		issuer:        deps.Issuer,
+		hasher:        deps.Hasher,
+		breaches:      deps.Breaches,
+		email:         deps.Email,
+		resetURLBase:  deps.ResetURLBase,
+		verifyURLBase: deps.VerifyURLBase,
+		policy:        password.NewPolicyValidator(password.DefaultPolicy(), deps.Hasher),
 	}
 }
 
@@ -146,6 +153,11 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 		}
 	}
 
+	// Issue an email-verification token and send the link. This is best-effort:
+	// a failure to generate, persist, or send the token must not fail
+	// registration — the account is fully usable unverified (see Login).
+	s.issueEmailVerification(ctx, tenantID, created)
+
 	info := &api.UserInfo{
 		ID:    created.ID,
 		Email: created.Email,
@@ -158,6 +170,65 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 		Metadata: map[string]string{"email": email},
 	})
 	return info, nil
+}
+
+// issueEmailVerification generates a verification token, persists it with a
+// 24h expiry, and emails the verification link. Every failure mode (token
+// generation, persistence, or delivery) is logged and audited but swallowed —
+// registration must succeed regardless, per GH-478.
+func (s *Service) issueEmailVerification(ctx context.Context, tenantID uuid.UUID, user *domain.User) {
+	token, err := generateResetToken()
+	if err != nil {
+		s.logger.Error("failed to generate email verify token", zap.String("user_id", user.ID), zap.Error(err))
+		return
+	}
+
+	expiresAt := time.Now().UTC().Add(verifyTokenTTL)
+	if err := s.users.SetEmailVerifyToken(ctx, tenantID, user.ID, token, expiresAt); err != nil {
+		s.logger.Error("failed to persist email verify token", zap.String("user_id", user.ID), zap.Error(err))
+		return
+	}
+
+	if s.email == nil {
+		return
+	}
+
+	link := s.verifyURLBase + "?token=" + token
+	msg := email.Message{
+		To:      user.Email,
+		Subject: "Verify your email",
+		Body:    fmt.Sprintf("Use the link below to verify your email address:\n\n%s\n\nThis link expires in %s.", link, verifyTokenTTL),
+	}
+	if sendErr := s.email.Send(ctx, msg); sendErr != nil {
+		s.logger.Error("failed to send email verification email", zap.String("user_id", user.ID), zap.Error(sendErr))
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventEmailVerifyEmailFailed,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"email": user.Email},
+		})
+	}
+}
+
+// VerifyEmail marks a user's email as verified using the token from the
+// verification link. Idempotent: calling it again after success (e.g. the
+// user double-clicks the link) still returns nil. Returns an error for any
+// invalid or expired token; the handler maps all errors here to 400.
+func (s *Service) VerifyEmail(ctx context.Context, token string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	user, err := s.users.ConsumeEmailVerifyToken(ctx, tenantID, token)
+	if err != nil {
+		return fmt.Errorf("verify email: %w", err)
+	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventEmailVerified,
+		ActorID:  user.ID,
+		TargetID: user.ID,
+	})
+
+	return nil
 }
 
 // Login authenticates a user by email and password.
@@ -179,6 +250,10 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	}
 
 	// Check account status before verifying password.
+	// Note: user.EmailVerified is intentionally NOT checked here. In v1, email
+	// verification is informational only (GH-478) — gating login on it would
+	// block dogfood and design-partner signups whose links may go unclicked.
+	// Do not add an EmailVerified check without a product decision to enforce it.
 	if user.DeletedAt != nil {
 		s.audit.LogEvent(ctx, audit.Event{
 			Type:     audit.EventLoginFailure,

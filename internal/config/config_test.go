@@ -159,6 +159,7 @@ func TestLoad_EmailConfig(t *testing.T) {
 	env["EMAIL_SENDER_ADDRESS"] = "noreply@example.com"
 	env["EMAIL_ENABLED"] = "true"
 	env["PASSWORD_RESET_URL_BASE"] = "https://app.example.com/reset-password"
+	env["EMAIL_VERIFY_URL_BASE"] = "https://app.example.com/verify-email"
 	setEnv(t, env)
 
 	cfg, err := Load()
@@ -169,12 +170,13 @@ func TestLoad_EmailConfig(t *testing.T) {
 	assert.Equal(t, "noreply@example.com", cfg.Email.SenderAddress)
 	assert.True(t, cfg.Email.Enabled)
 	assert.Equal(t, "https://app.example.com/reset-password", cfg.Email.PasswordResetURLBase)
+	assert.Equal(t, "https://app.example.com/verify-email", cfg.Email.EmailVerifyURLBase)
 }
 
 func TestLoad_EmailEnabledMissingFields(t *testing.T) {
 	env := requiredEnv()
 	env["EMAIL_ENABLED"] = "true"
-	// Missing EMAIL_SERVICE_URL, EMAIL_API_KEY, EMAIL_SENDER_ADDRESS, PASSWORD_RESET_URL_BASE.
+	// Missing EMAIL_SERVICE_URL, EMAIL_API_KEY, EMAIL_SENDER_ADDRESS, PASSWORD_RESET_URL_BASE, EMAIL_VERIFY_URL_BASE.
 	setEnv(t, env)
 
 	_, err := Load()
@@ -183,6 +185,7 @@ func TestLoad_EmailEnabledMissingFields(t *testing.T) {
 	assert.Contains(t, err.Error(), "EMAIL_API_KEY")
 	assert.Contains(t, err.Error(), "EMAIL_SENDER_ADDRESS")
 	assert.Contains(t, err.Error(), "PASSWORD_RESET_URL_BASE")
+	assert.Contains(t, err.Error(), "EMAIL_VERIFY_URL_BASE")
 }
 
 func TestLoad_EmailDisabled_FieldsNotRequired(t *testing.T) {
@@ -193,6 +196,7 @@ func TestLoad_EmailDisabled_FieldsNotRequired(t *testing.T) {
 
 	assert.False(t, cfg.Email.Enabled)
 	assert.Empty(t, cfg.Email.PasswordResetURLBase)
+	assert.Empty(t, cfg.Email.EmailVerifyURLBase)
 }
 
 func TestLoad_CustomValues(t *testing.T) {

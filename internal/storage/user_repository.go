@@ -163,21 +163,23 @@ func (r *PostgresUserRepository) SetEmailVerifyToken(ctx context.Context, tenant
 }
 
 // ConsumeEmailVerifyToken marks the email as verified if the token matches and hasn't expired.
+// Returns ErrNotFound if the token doesn't match any user, or ErrTokenExpired if it matched
+// but expired. Idempotent: if the user is already verified, it returns the user with no error
+// so a repeated click on the same verification link still succeeds (GH-478). The token is
+// intentionally left in place after verification (not nulled) to preserve that idempotency —
+// unlike a password-reset token, a spent verification token isn't a bearer credential, so
+// leaving it resolvable after use isn't a meaningful security regression.
 func (r *PostgresUserRepository) ConsumeEmailVerifyToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error) {
-	query := `UPDATE users
-		SET email_verified = TRUE,
-		    email_verify_token = NULL,
-		    email_verify_token_expires_at = NULL,
-		    updated_at = $1
-		WHERE email_verify_token = $2 AND tenant_id = $3 AND deleted_at IS NULL
-		RETURNING id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason,
-		          email_verified, email_verify_token, email_verify_token_expires_at,
-		          last_login_at, force_password_change, password_changed_at,
-		          created_at, updated_at, deleted_at`
+	selectQuery := `
+		SELECT id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason,
+		       email_verified, email_verify_token, email_verify_token_expires_at,
+		       last_login_at, force_password_change, password_changed_at,
+		       created_at, updated_at, deleted_at
+		FROM users
+		WHERE email_verify_token = $1 AND tenant_id = $2 AND deleted_at IS NULL`
 
-	now := time.Now().UTC()
 	user := &domain.User{}
-	err := r.pool.QueryRow(ctx, query, now, token, tenantID).Scan(
+	err := r.pool.QueryRow(ctx, selectQuery, token, tenantID).Scan(
 		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
 		&user.Locked, &user.LockedAt, &user.LockedReason,
 		&user.EmailVerified, &user.EmailVerifyToken, &user.EmailVerifyTokenExpiresAt,
@@ -191,6 +193,22 @@ func (r *PostgresUserRepository) ConsumeEmailVerifyToken(ctx context.Context, te
 		return nil, fmt.Errorf("consume email verify token: %w", err)
 	}
 
+	if user.EmailVerified {
+		return user, nil
+	}
+
+	now := time.Now().UTC()
+	if user.EmailVerifyTokenExpiresAt == nil || now.After(*user.EmailVerifyTokenExpiresAt) {
+		return nil, fmt.Errorf("email verify token: %w", ErrTokenExpired)
+	}
+
+	updateQuery := `UPDATE users SET email_verified = TRUE, updated_at = $1 WHERE id = $2 AND tenant_id = $3`
+	if _, err := r.pool.Exec(ctx, updateQuery, now, user.ID, tenantID); err != nil {
+		return nil, fmt.Errorf("mark email verified: %w", err)
+	}
+
+	user.EmailVerified = true
+	user.UpdatedAt = now
 	return user, nil
 }
 

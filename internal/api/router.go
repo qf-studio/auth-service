@@ -92,6 +92,7 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		auth.POST("/login", ValidateReq(v, &domain.LoginRequest{}), authH.Login)
 		auth.POST("/token", ValidateReq(v, &domain.TokenRequest{}), tokenH.Token)
 		auth.POST("/revoke", ValidateReq(v, &domain.RevokeRequest{}), tokenH.Revoke)
+		auth.POST("/verify-email", ValidateReq(v, &domain.VerifyEmailRequest{}), authH.VerifyEmail)
 
 		pw := auth.Group("/password")
 		pw.POST("/reset", ValidateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
@@ -191,6 +192,8 @@ func ValidateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
 		return domain.ValidateRequest(v, func() interface{} { return &domain.PasswordResetConfirmRequest{} })
 	case *domain.PasswordChangeRequest:
 		return domain.ValidateRequest(v, func() interface{} { return &domain.PasswordChangeRequest{} })
+	case *domain.VerifyEmailRequest:
+		return domain.ValidateRequest(v, func() interface{} { return &domain.VerifyEmailRequest{} })
 	default:
 		log.Printf("ERROR: unsupported request type for validation middleware: %T", zero)
 		return func(c *gin.Context) {

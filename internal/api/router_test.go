@@ -29,6 +29,7 @@ type mockAuthService struct {
 	loginFn                func(ctx context.Context, email, password string) (*api.AuthResult, error)
 	resetPasswordFn        func(ctx context.Context, email string) error
 	confirmPasswordResetFn func(ctx context.Context, token, newPassword string) error
+	verifyEmailFn          func(ctx context.Context, token string) error
 	getMeFn                func(ctx context.Context, userID string) (*api.UserInfo, error)
 	changePasswordFn       func(ctx context.Context, userID, oldPassword, newPassword string) error
 	logoutFn               func(ctx context.Context, userID, token string) error
@@ -64,6 +65,13 @@ func (m *mockAuthService) ResetPassword(ctx context.Context, email string) error
 func (m *mockAuthService) ConfirmPasswordReset(ctx context.Context, token, newPassword string) error {
 	if m.confirmPasswordResetFn != nil {
 		return m.confirmPasswordResetFn(ctx, token, newPassword)
+	}
+	return nil
+}
+
+func (m *mockAuthService) VerifyEmail(ctx context.Context, token string) error {
+	if m.verifyEmailFn != nil {
+		return m.verifyEmailFn(ctx, token)
 	}
 	return nil
 }
@@ -345,6 +353,70 @@ func TestPasswordResetConfirm_InvalidToken(t *testing.T) {
 	w := doRequest(router, http.MethodPost, "/auth/password/reset/confirm", body)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// --- Email verification tests ---
+
+func TestVerifyEmail_Success(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"token": "valid-verify-token"}
+	w := doRequest(router, http.MethodPost, "/auth/verify-email", body)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestVerifyEmail_AlreadyVerified_StillOK(t *testing.T) {
+	authSvc := &mockAuthService{
+		verifyEmailFn: func(_ context.Context, _ string) error {
+			return nil // already-verified is idempotent success at the service layer.
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "already-used-token"}
+	w := doRequest(router, http.MethodPost, "/auth/verify-email", body)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestVerifyEmail_ExpiredToken(t *testing.T) {
+	authSvc := &mockAuthService{
+		verifyEmailFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("verify email: token expired")
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "expired-token"}
+	w := doRequest(router, http.MethodPost, "/auth/verify-email", body)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestVerifyEmail_InvalidToken(t *testing.T) {
+	authSvc := &mockAuthService{
+		verifyEmailFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("verify email: not found")
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "bogus-token"}
+	w := doRequest(router, http.MethodPost, "/auth/verify-email", body)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestVerifyEmail_MissingToken(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{}
+	w := doRequest(router, http.MethodPost, "/auth/verify-email", body)
+
+	// Request-level validation (missing required field) is a 422, distinct
+	// from the service-level "invalid/expired token" 400s above.
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
 // --- Token endpoint tests ---
