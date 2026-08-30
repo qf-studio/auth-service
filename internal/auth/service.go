@@ -333,7 +333,17 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		mfaEnabled, mfaErr := s.mfa.IsMFAEnabled(ctx, user.ID)
 		if mfaErr != nil {
 			s.logger.Error("failed to check mfa status", zap.String("user_id", user.ID), zap.Error(mfaErr))
-			// Continue with normal login on MFA check failure (fail-open for availability).
+			// Fail closed (NIST SP 800-63-4 AAL2): an MFA-status lookup error
+			// must not silently downgrade an MFA-enrolled user to a
+			// password-only (AAL1) login. An MFA-store outage blocks login
+			// for MFA-enrolled users rather than letting the second factor
+			// be bypassed by degrading the store (GH-488).
+			s.audit.LogEvent(ctx, audit.Event{
+				Type:     "mfa_status_check_failed",
+				ActorID:  user.ID,
+				TargetID: user.ID,
+			})
+			return nil, fmt.Errorf("check mfa status: %w", api.ErrInternalError)
 		} else if mfaEnabled {
 			mfaToken, tokenErr := s.mfa.GenerateMFAToken(ctx, user.ID)
 			if tokenErr != nil {

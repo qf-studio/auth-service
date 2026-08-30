@@ -144,7 +144,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Period:          uint(cfg.MFA.Period), //nolint:gosec // non-negative from config
 		BackupCodeCount: cfg.MFA.BackupCodeCount,
 	}
-	mfaSvc := mfa.NewService(mfaCfg, mfaRepo, mfaStore, tokenSvc, log, auditSvc)
+	mfaSvc, err := mfa.NewService(mfaCfg, mfaRepo, mfaStore, tokenSvc, userRepo, log, auditSvc)
+	if err != nil {
+		return fmt.Errorf("mfa service init failed: %w", err)
+	}
 
 	// Inject MFA checker into auth service to enable MFA challenge on login.
 	authSvc.SetMFAChecker(mfaSvc)
