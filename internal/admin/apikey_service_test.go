@@ -52,7 +52,7 @@ func (m *mockAPIKeyRepo) List(_ context.Context, _ uuid.UUID, _, _ int, _ string
 	return out, len(out), nil
 }
 
-func (m *mockAPIKeyRepo) FindByID(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.APIKey, error) {
+func (m *mockAPIKeyRepo) FindByID(_ context.Context, _, id uuid.UUID) (*domain.APIKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k, ok := m.keys[id]
@@ -100,7 +100,7 @@ func (m *mockAPIKeyRepo) Update(_ context.Context, key *domain.APIKey) (*domain.
 	return &out, nil
 }
 
-func (m *mockAPIKeyRepo) Revoke(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
+func (m *mockAPIKeyRepo) Revoke(_ context.Context, _, id uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k, ok := m.keys[id]
@@ -114,7 +114,7 @@ func (m *mockAPIKeyRepo) Revoke(_ context.Context, _ uuid.UUID, id uuid.UUID) er
 	return nil
 }
 
-func (m *mockAPIKeyRepo) RotateKey(_ context.Context, _ uuid.UUID, id uuid.UUID, newKeyHash string, gracePeriodEnds time.Time) error {
+func (m *mockAPIKeyRepo) RotateKey(_ context.Context, _, id uuid.UUID, newKeyHash string, gracePeriodEnds time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k, ok := m.keys[id]
@@ -128,7 +128,7 @@ func (m *mockAPIKeyRepo) RotateKey(_ context.Context, _ uuid.UUID, id uuid.UUID,
 	return nil
 }
 
-func (m *mockAPIKeyRepo) UpdateLastUsed(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
+func (m *mockAPIKeyRepo) UpdateLastUsed(_ context.Context, _, id uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k, ok := m.keys[id]
