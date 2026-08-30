@@ -103,6 +103,7 @@ func (m *mockUserRepository) AddPasswordHistory(ctx context.Context, _ uuid.UUID
 
 type mockRefreshTokenRepository struct {
 	storeFn          func(ctx context.Context, sig, userID string, exp time.Time) error
+	revokeFn         func(ctx context.Context, sig string) error
 	revokeAllForUser func(ctx context.Context, userID string) error
 }
 
@@ -117,7 +118,10 @@ func (m *mockRefreshTokenRepository) FindBySignature(_ context.Context, _ uuid.U
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockRefreshTokenRepository) Revoke(_ context.Context, _ uuid.UUID, _ string) error {
+func (m *mockRefreshTokenRepository) Revoke(ctx context.Context, _ uuid.UUID, sig string) error {
+	if m.revokeFn != nil {
+		return m.revokeFn(ctx, sig)
+	}
 	return nil
 }
 
@@ -139,7 +143,7 @@ func (m *mockTokenIssuer) IssueTokenPair(ctx context.Context, subject string, ro
 	}
 	return &api.AuthResult{
 		AccessToken:  "qf_at_test-access",
-		RefreshToken: "qf_rt_test-refresh",
+		RefreshToken: "qf_rt_test-key.test-refresh-sig",
 		TokenType:    "Bearer",
 		ExpiresIn:    900,
 	}, nil
@@ -448,7 +452,7 @@ func TestLogin(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, result)
 				assert.Equal(t, "qf_at_test-access", result.AccessToken)
-				assert.Equal(t, "qf_rt_test-refresh", result.RefreshToken)
+				assert.Equal(t, "qf_rt_test-key.test-refresh-sig", result.RefreshToken)
 				assert.Equal(t, "Bearer", result.TokenType)
 				assert.Equal(t, 900, result.ExpiresIn)
 			}
@@ -639,11 +643,15 @@ func TestLogin_UpdatesLastLogin(t *testing.T) {
 
 func TestLogin_StoresRefreshTokenSignature(t *testing.T) {
 	var stored bool
+	var storedExpiry time.Time
 	tokens := &mockRefreshTokenRepository{
-		storeFn: func(_ context.Context, sig, userID string, _ time.Time) error {
+		storeFn: func(_ context.Context, sig, userID string, exp time.Time) error {
 			stored = true
-			assert.Equal(t, "qf_rt_test-refresh", sig)
+			// Only the signature segment (after the dot) should be stored,
+			// never the full "qf_rt_<key>.<sig>" token (GH-486).
+			assert.Equal(t, "test-refresh-sig", sig)
 			assert.Equal(t, "user-1", userID)
+			storedExpiry = exp
 			return nil
 		},
 	}
@@ -662,6 +670,80 @@ func TestLogin_StoresRefreshTokenSignature(t *testing.T) {
 	_, err := svc.Login(context.Background(), "alice@example.com", "password")
 	require.NoError(t, err)
 	assert.True(t, stored, "expected refresh token signature to be stored")
+	// newUnitService doesn't configure RefreshTokenTTL, so the default fallback applies.
+	assert.WithinDuration(t, time.Now().Add(defaultRefreshTokenTTL), storedExpiry, 5*time.Second)
+}
+
+func TestLogin_StoresRefreshTokenSignature_UsesConfiguredTTL(t *testing.T) {
+	var storedExpiry time.Time
+	tokens := &mockRefreshTokenRepository{
+		storeFn: func(_ context.Context, _, _ string, exp time.Time) error {
+			storedExpiry = exp
+			return nil
+		},
+	}
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return &domain.User{
+				ID:           "user-1",
+				Email:        "alice@example.com",
+				PasswordHash: "hash",
+				Roles:        []string{"user"},
+			}, nil
+		},
+	}
+
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Logger:          logger,
+		Auditor:         audit.NopLogger{},
+		Users:           users,
+		Tokens:          tokens,
+		Issuer:          &mockTokenIssuer{},
+		Hasher:          &mockHasher{},
+		Breaches:        &mockBreachChecker{},
+		Email:           &mockEmailSender{},
+		RefreshTokenTTL: 7 * 24 * time.Hour,
+	})
+
+	_, err := svc.Login(context.Background(), "alice@example.com", "password")
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now().Add(7*24*time.Hour), storedExpiry, 5*time.Second)
+}
+
+func TestLogin_MalformedRefreshTokenSkipsStore(t *testing.T) {
+	var stored bool
+	tokens := &mockRefreshTokenRepository{
+		storeFn: func(_ context.Context, _, _ string, _ time.Time) error {
+			stored = true
+			return nil
+		},
+	}
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return &domain.User{
+				ID:           "user-1",
+				Email:        "alice@example.com",
+				PasswordHash: "hash",
+				Roles:        []string{"user"},
+			}, nil
+		},
+	}
+	issuer := &mockTokenIssuer{
+		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType) (*api.AuthResult, error) {
+			return &api.AuthResult{
+				AccessToken:  "qf_at_test-access",
+				RefreshToken: "qf_rt_no-dot-here",
+				TokenType:    "Bearer",
+				ExpiresIn:    900,
+			}, nil
+		},
+	}
+
+	svc := newUnitService(t, users, tokens, issuer, &mockHasher{})
+	_, err := svc.Login(context.Background(), "alice@example.com", "password")
+	require.NoError(t, err, "login must succeed even when the signature parse fails (best-effort store)")
+	assert.False(t, stored, "malformed refresh token must not be stored")
 }
 
 // ── Logout Tests ─────────────────────────────────────────────────────────────
@@ -691,7 +773,7 @@ func TestLogout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, tt.issuer, &mockHasher{})
-			err := svc.Logout(context.Background(), "user-1", "qf_at_some-token")
+			err := svc.Logout(context.Background(), "user-1", "qf_at_some-token", "")
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {
@@ -711,9 +793,79 @@ func TestLogout_RevokesAccessToken(t *testing.T) {
 	}
 
 	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, issuer, &mockHasher{})
-	err := svc.Logout(context.Background(), "user-1", "qf_at_my-access-token")
+	err := svc.Logout(context.Background(), "user-1", "qf_at_my-access-token", "")
 	require.NoError(t, err)
 	assert.Equal(t, "qf_at_my-access-token", revokedToken)
+}
+
+// TestLogout_RevokesRefreshTokenSignature is a regression test for GH-486:
+// Logout's doc comment claimed the refresh token's DB row was revoked, but
+// the implementation never touched it, so a rotated-away token stayed
+// introspectable as active until its row's original TTL expired. When the
+// caller supplies the refresh token, its signature must be revoked too.
+func TestLogout_RevokesRefreshTokenSignature(t *testing.T) {
+	var revokedSig string
+	tokens := &mockRefreshTokenRepository{
+		revokeFn: func(_ context.Context, sig string) error {
+			revokedSig = sig
+			return nil
+		},
+	}
+
+	svc := newUnitService(t, &mockUserRepository{}, tokens, &mockTokenIssuer{}, &mockHasher{})
+	err := svc.Logout(context.Background(), "user-1", "qf_at_my-access-token", "qf_rt_key123.sig456")
+	require.NoError(t, err)
+	assert.Equal(t, "sig456", revokedSig)
+}
+
+// TestLogout_NoRefreshTokenSkipsRevoke confirms logout stays functional
+// (access-token-only) when the caller doesn't supply a refresh token — the
+// common case for /auth/logout callers that don't send a body.
+func TestLogout_NoRefreshTokenSkipsRevoke(t *testing.T) {
+	var revokeCalled bool
+	tokens := &mockRefreshTokenRepository{
+		revokeFn: func(_ context.Context, _ string) error {
+			revokeCalled = true
+			return nil
+		},
+	}
+
+	svc := newUnitService(t, &mockUserRepository{}, tokens, &mockTokenIssuer{}, &mockHasher{})
+	err := svc.Logout(context.Background(), "user-1", "qf_at_my-access-token", "")
+	require.NoError(t, err)
+	assert.False(t, revokeCalled)
+}
+
+// TestLogout_MalformedRefreshTokenSkipsRevoke confirms a malformed refresh
+// token doesn't fail logout or reach the DB revoke call.
+func TestLogout_MalformedRefreshTokenSkipsRevoke(t *testing.T) {
+	var revokeCalled bool
+	tokens := &mockRefreshTokenRepository{
+		revokeFn: func(_ context.Context, _ string) error {
+			revokeCalled = true
+			return nil
+		},
+	}
+
+	svc := newUnitService(t, &mockUserRepository{}, tokens, &mockTokenIssuer{}, &mockHasher{})
+	err := svc.Logout(context.Background(), "user-1", "qf_at_my-access-token", "qf_rt_no-dot-here")
+	require.NoError(t, err)
+	assert.False(t, revokeCalled)
+}
+
+// TestLogout_RefreshTokenRevokeFailureDoesNotFailLogout confirms the DB
+// revoke is best-effort: a failure there must not fail the overall logout,
+// since the access-token Redis blocklist entry is the primary signal.
+func TestLogout_RefreshTokenRevokeFailureDoesNotFailLogout(t *testing.T) {
+	tokens := &mockRefreshTokenRepository{
+		revokeFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("db down")
+		},
+	}
+
+	svc := newUnitService(t, &mockUserRepository{}, tokens, &mockTokenIssuer{}, &mockHasher{})
+	err := svc.Logout(context.Background(), "user-1", "qf_at_my-access-token", "qf_rt_key123.sig456")
+	require.NoError(t, err)
 }
 
 // ── LogoutAll Tests ──────────────────────────────────────────────────────────

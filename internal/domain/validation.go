@@ -73,6 +73,16 @@ type RevokeRequest struct {
 	Token string `json:"token" validate:"required"`
 }
 
+// LogoutRequest is the optional request body for POST /auth/logout. The
+// refresh token isn't required — logout always revokes the access token via
+// the Redis blocklist — but if the caller supplies the refresh token issued
+// alongside it, its DB row is also marked revoked so introspection reflects
+// the logout (GH-486). Not run through the shared validator middleware since
+// the field is optional and an empty/absent body is valid.
+type LogoutRequest struct {
+	RefreshToken string `json:"refresh_token,omitempty"`
+}
+
 // PasswordChangeRequest is the validated request body for changing a password (authenticated).
 type PasswordChangeRequest struct {
 	OldPassword string `json:"old_password" validate:"required"`

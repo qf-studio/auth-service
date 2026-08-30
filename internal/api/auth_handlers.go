@@ -144,7 +144,13 @@ func (h *AuthHandlers) Logout(c *gin.Context) {
 
 	token := extractBearerToken(c)
 
-	if err := h.auth.Logout(c.Request.Context(), userID, token); err != nil {
+	// The refresh token is optional and not validated via the shared
+	// middleware (an absent/empty body is valid here); ignore bind errors
+	// and fall back to the zero value.
+	var req domain.LogoutRequest
+	_ = c.ShouldBindJSON(&req)
+
+	if err := h.auth.Logout(c.Request.Context(), userID, token, req.RefreshToken); err != nil {
 		handleServiceError(c, err)
 		return
 	}

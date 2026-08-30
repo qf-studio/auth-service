@@ -121,13 +121,10 @@ func (s *TokenService) introspectRefreshToken(ctx context.Context, token string)
 		return &api.IntrospectionResponse{Active: false}, nil
 	}
 
-	// Strip prefix and split into key + signature parts.
-	raw := strings.TrimPrefix(token, "qf_rt_")
-	parts := strings.SplitN(raw, ".", 2)
-	if len(parts) != 2 || parts[1] == "" {
+	signature, ok := domain.RefreshTokenSignature(token)
+	if !ok {
 		return &api.IntrospectionResponse{Active: false}, nil
 	}
-	signature := parts[1]
 
 	tenantID := domain.TenantIDFromContext(ctx)
 	rec, err := s.refreshTokens.FindBySignature(ctx, tenantID, signature)

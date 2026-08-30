@@ -67,7 +67,15 @@ type Service struct {
 	email         email.EmailSender
 	resetURLBase  string
 	verifyURLBase string
+
+	// refreshTokenTTL is the configured lifetime for newly stored refresh
+	// token DB rows. Falls back to defaultRefreshTokenTTL when unset (e.g.
+	// tests that don't configure it), matching the previous hardcoded value.
+	refreshTokenTTL time.Duration
 }
+
+// defaultRefreshTokenTTL is used when ServiceDeps.RefreshTokenTTL is unset.
+const defaultRefreshTokenTTL = 24 * time.Hour
 
 // ServiceDeps groups the dependencies needed to construct a Service. Using a
 // struct here keeps NewService's call sites readable now that email delivery
@@ -84,23 +92,30 @@ type ServiceDeps struct {
 	Email         email.EmailSender
 	ResetURLBase  string // base URL password-reset links are built from: "<ResetURLBase>?token=<token>"
 	VerifyURLBase string // base URL email-verification links are built from: "<VerifyURLBase>?token=<token>"
+
+	// RefreshTokenTTL is the lifetime used for refresh token DB rows stored
+	// at login. Should match the token service's configured refresh TTL
+	// (cfg.JWT.RefreshTokenTTL) so the DB row doesn't outlive or expire
+	// before the Redis-backed token it introspects for.
+	RefreshTokenTTL time.Duration
 }
 
 // NewService creates a new auth Service.
 func NewService(deps ServiceDeps) *Service {
 	return &Service{
-		redis:         deps.Redis,
-		logger:        deps.Logger,
-		audit:         deps.Auditor,
-		users:         deps.Users,
-		tokens:        deps.Tokens,
-		issuer:        deps.Issuer,
-		hasher:        deps.Hasher,
-		breaches:      deps.Breaches,
-		email:         deps.Email,
-		resetURLBase:  deps.ResetURLBase,
-		verifyURLBase: deps.VerifyURLBase,
-		policy:        password.NewPolicyValidator(password.DefaultPolicy(), deps.Hasher),
+		redis:           deps.Redis,
+		logger:          deps.Logger,
+		audit:           deps.Auditor,
+		users:           deps.Users,
+		tokens:          deps.Tokens,
+		issuer:          deps.Issuer,
+		hasher:          deps.Hasher,
+		breaches:        deps.Breaches,
+		email:           deps.Email,
+		resetURLBase:    deps.ResetURLBase,
+		verifyURLBase:   deps.VerifyURLBase,
+		refreshTokenTTL: deps.RefreshTokenTTL,
+		policy:          password.NewPolicyValidator(password.DefaultPolicy(), deps.Hasher),
 	}
 }
 
@@ -373,8 +388,19 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	result.UserID = user.ID
 
 	// Store refresh token signature in DB (best-effort — don't fail login).
-	if err := s.tokens.Store(ctx, tenantID, result.RefreshToken, user.ID, time.Now().Add(24*time.Hour)); err != nil {
-		s.logger.Error("failed to store refresh token signature", zap.String("user_id", user.ID), zap.Error(err))
+	// Only the signature segment is persisted, never the full token
+	// (GH-486): storing the full token broke introspection lookups, which
+	// key on FindBySignature(parts[1]) alone.
+	if sig, ok := domain.RefreshTokenSignature(result.RefreshToken); ok {
+		ttl := s.refreshTokenTTL
+		if ttl <= 0 {
+			ttl = defaultRefreshTokenTTL
+		}
+		if err := s.tokens.Store(ctx, tenantID, sig, user.ID, time.Now().Add(ttl)); err != nil {
+			s.logger.Error("failed to store refresh token signature", zap.String("user_id", user.ID), zap.Error(err))
+		}
+	} else {
+		s.logger.Error("failed to parse refresh token signature, skipping DB store", zap.String("user_id", user.ID))
 	}
 
 	// Update last_login_at (best-effort — don't fail login).
@@ -613,8 +639,12 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 }
 
 // Logout terminates a single session by revoking the access token via Redis
-// blocklist and revoking the refresh token in the database.
-func (s *Service) Logout(ctx context.Context, userID, token string) error {
+// blocklist and, when a refresh token is supplied, marking its DB row
+// revoked so introspection reflects the logout (GH-486). The refresh token
+// is optional and best-effort: its absence or a DB failure must not fail
+// the logout, since the Redis blocklist entry is the primary revocation
+// signal for the access token itself.
+func (s *Service) Logout(ctx context.Context, userID, token, refreshToken string) error {
 	// Revoke the access token via Redis blocklist.
 	if err := s.issuer.Revoke(ctx, token); err != nil {
 		s.logger.Error("failed to revoke access token",
@@ -622,6 +652,21 @@ func (s *Service) Logout(ctx context.Context, userID, token string) error {
 			zap.Error(err),
 		)
 		return fmt.Errorf("revoke access token: %w", err)
+	}
+
+	if refreshToken != "" {
+		if sig, ok := domain.RefreshTokenSignature(refreshToken); ok {
+			tenantID := domain.TenantIDFromContext(ctx)
+			if err := s.tokens.Revoke(ctx, tenantID, sig); err != nil {
+				s.logger.Warn("failed to revoke refresh token on logout",
+					zap.String("user_id", userID),
+					zap.Error(err),
+				)
+			}
+		} else {
+			s.logger.Warn("logout: malformed refresh token, skipping DB revoke",
+				zap.String("user_id", userID))
+		}
 	}
 
 	s.audit.LogEvent(ctx, audit.Event{
