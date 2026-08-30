@@ -96,6 +96,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 	// Enrich refresh-minted access tokens with the user's current roles (GH-432).
 	tokenSvc.SetUserLookup(userRepo)
+	// Keep Postgres refresh-token bookkeeping (used for introspection) truthful
+	// across rotation (GH-486).
+	tokenSvc.SetRefreshTokenStore(refreshTokenRepo)
 	hibpClient := hibp.NewClient(http.DefaultClient)
 
 	// ── Email ────────────────────────────────────────────────────────────
@@ -107,17 +110,18 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	authSvc := auth.NewService(auth.ServiceDeps{
-		Redis:         redisClient,
-		Logger:        log,
-		Auditor:       auditSvc,
-		Users:         userRepo,
-		Tokens:        refreshTokenRepo,
-		Issuer:        tokenSvc,
-		Hasher:        hasher,
-		Breaches:      hibpClient,
-		Email:         emailSender,
-		ResetURLBase:  cfg.Email.PasswordResetURLBase,
-		VerifyURLBase: cfg.Email.EmailVerifyURLBase,
+		Redis:           redisClient,
+		Logger:          log,
+		Auditor:         auditSvc,
+		Users:           userRepo,
+		Tokens:          refreshTokenRepo,
+		Issuer:          tokenSvc,
+		Hasher:          hasher,
+		Breaches:        hibpClient,
+		Email:           emailSender,
+		ResetURLBase:    cfg.Email.PasswordResetURLBase,
+		VerifyURLBase:   cfg.Email.EmailVerifyURLBase,
+		RefreshTokenTTL: cfg.JWT.RefreshTokenTTL,
 	})
 
 	// ── Session ──────────────────────────────────────────────────────────

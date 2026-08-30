@@ -827,6 +827,94 @@ func TestRefresh_UserLookupErrorFailsOpenWithNoRoles(t *testing.T) {
 	assert.Empty(t, refreshClaims.Roles)
 }
 
+// ── Refresh Token Postgres Bookkeeping (GH-486) ─────────────────────────────
+
+// TestRefresh_UpdatesPostgresBookkeeping verifies that rotation revokes the
+// old signature's Postgres row and inserts the new signature's row, using
+// the configured refresh TTL. Previously refreshInternal was Redis-only, so
+// a rotated-away token stayed introspectable as active until its original
+// row's TTL expired, and the new token was never introspectable at all.
+func TestRefresh_UpdatesPostgresBookkeeping(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	var revokedSig string
+	var storedSig, storedUserID string
+	var storedExpiry time.Time
+
+	store := &mocks.MockRefreshTokenRepository{
+		RevokeFn: func(_ context.Context, _ uuid.UUID, sig string) error {
+			revokedSig = sig
+			return nil
+		},
+		StoreFn: func(_ context.Context, _ uuid.UUID, sig, userID string, expiresAt time.Time) error {
+			storedSig = sig
+			storedUserID = userID
+			storedExpiry = expiresAt
+			return nil
+		},
+	}
+	svc.SetRefreshTokenStore(store)
+
+	result, err := svc.IssueTokenPair(ctx, "user-486", nil, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	oldSig, ok := domain.RefreshTokenSignature(result.RefreshToken)
+	require.True(t, ok)
+
+	refreshResult, err := svc.Refresh(ctx, result.RefreshToken)
+	require.NoError(t, err)
+
+	newSig, ok := domain.RefreshTokenSignature(refreshResult.RefreshToken)
+	require.True(t, ok)
+
+	assert.Equal(t, oldSig, revokedSig, "old signature's row should be revoked")
+	assert.Equal(t, newSig, storedSig, "new signature's row should be stored")
+	assert.Equal(t, "user-486", storedUserID)
+	assert.WithinDuration(t, time.Now().Add(defaultCfg().RefreshTokenTTL), storedExpiry, 5*time.Second)
+}
+
+// TestRefresh_PostgresFailureDoesNotFailRefresh fault-injects both the
+// revoke and store calls to confirm Postgres bookkeeping stays best-effort:
+// the refresh grant itself must still succeed since Redis remains the
+// authoritative hot-path source.
+func TestRefresh_PostgresFailureDoesNotFailRefresh(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	store := &mocks.MockRefreshTokenRepository{
+		RevokeFn: func(_ context.Context, _ uuid.UUID, _ string) error {
+			return errors.New("db down")
+		},
+		StoreFn: func(_ context.Context, _ uuid.UUID, _, _ string, _ time.Time) error {
+			return errors.New("db down")
+		},
+	}
+	svc.SetRefreshTokenStore(store)
+
+	result, err := svc.IssueTokenPair(ctx, "user-486", nil, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	refreshResult, err := svc.Refresh(ctx, result.RefreshToken)
+	require.NoError(t, err, "refresh must succeed even when Postgres bookkeeping fails")
+	require.NotNil(t, refreshResult)
+}
+
+// TestRefresh_NoPostgresStoreConfiguredStillWorks preserves refresh behavior
+// when SetRefreshTokenStore is never called (e.g. most existing tests in
+// this file): rotation stays Redis-only, same as before GH-486.
+func TestRefresh_NoPostgresStoreConfiguredStillWorks(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueTokenPair(ctx, "user-486", nil, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	refreshResult, err := svc.Refresh(ctx, result.RefreshToken)
+	require.NoError(t, err)
+	require.NotNil(t, refreshResult)
+}
+
 // ── JWKS ─────────────────────────────────────────────────────────────────────
 
 func TestJWKS_ES256(t *testing.T) {

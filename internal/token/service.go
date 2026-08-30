@@ -56,6 +56,14 @@ type UserLookup interface {
 	FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
 }
 
+// RefreshTokenStore abstracts the Postgres bookkeeping for refresh token
+// signatures performed during rotation. This is a narrow interface satisfied
+// by storage.RefreshTokenRepository.
+type RefreshTokenStore interface {
+	Store(ctx context.Context, tenantID uuid.UUID, signature, userID string, expiresAt time.Time) error
+	Revoke(ctx context.Context, tenantID uuid.UUID, signature string) error
+}
+
 // Service implements api.TokenService and middleware.TokenValidator.
 type Service struct {
 	logger        *zap.Logger
@@ -67,6 +75,7 @@ type Service struct {
 	publicKey     crypto.PublicKey
 	signingMethod jwt.SigningMethod
 	users         UserLookup
+	refreshTokens RefreshTokenStore
 	kid           string
 }
 
@@ -139,6 +148,16 @@ func (s *Service) SetUserLookup(users UserLookup) {
 	s.users = users
 }
 
+// SetRefreshTokenStore injects the Postgres refresh-token repository used to
+// keep introspection state truthful across rotation: on refresh, the old
+// signature's row is marked revoked and the new signature's row is inserted
+// (GH-486). Optional: if unset, rotation stays Redis-only and Postgres
+// introspection state goes stale until the old row's original TTL expires.
+// Injected post-construction, mirroring SetUserLookup.
+func (s *Service) SetRefreshTokenStore(store RefreshTokenStore) {
+	s.refreshTokens = store
+}
+
 // IssueTokenPair generates an access/refresh token pair for the given subject.
 func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error) {
 	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "")
@@ -193,13 +212,28 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 	// Revoke the old refresh token (rotate).
 	s.deleteRefreshToken(ctx, rawRefreshToken)
 
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	// Mark the old signature's Postgres row revoked so introspection reflects
+	// the rotation immediately rather than waiting out the row's original
+	// TTL (GH-486). Best-effort: Postgres bookkeeping must not fail the
+	// refresh — Redis (above) is already the authoritative hot-path
+	// revocation signal.
+	if s.refreshTokens != nil {
+		if oldSig, ok := domain.RefreshTokenSignature(rawRefreshToken); ok {
+			if revokeErr := s.refreshTokens.Revoke(ctx, tenantID, oldSig); revokeErr != nil {
+				s.logger.Warn("failed to revoke old refresh token signature in db",
+					zap.String("subject", subject), zap.Error(revokeErr))
+			}
+		}
+	}
+
 	// Refresh tokens carry no roles/scopes of their own, so look up the user's
 	// current roles (as of refresh time) and mirror what the login path does,
 	// otherwise refresh-minted access tokens would silently drop the roles
 	// claim and demote the user until they re-login (GH-432).
 	var roles []string
 	if s.users != nil {
-		tenantID := domain.TenantIDFromContext(ctx)
 		user, lookupErr := s.users.FindByID(ctx, tenantID, subject)
 		if lookupErr != nil {
 			s.logger.Error("failed to look up user for refresh role enrichment",
@@ -212,6 +246,17 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 	result, err := s.issueTokenPair(ctx, subject, roles, nil, domain.ClientTypeUser, jktThumbprint)
 	if err != nil {
 		return nil, err
+	}
+
+	// Insert the new signature's Postgres row (best-effort, same rationale
+	// as above — mirrors the login-time store in auth.Service.Login).
+	if s.refreshTokens != nil {
+		if newSig, ok := domain.RefreshTokenSignature(result.RefreshToken); ok {
+			if storeErr := s.refreshTokens.Store(ctx, tenantID, newSig, subject, time.Now().Add(s.cfg.RefreshTokenTTL)); storeErr != nil {
+				s.logger.Warn("failed to store new refresh token signature in db",
+					zap.String("subject", subject), zap.Error(storeErr))
+			}
+		}
 	}
 
 	s.audit.LogEvent(ctx, audit.Event{

@@ -32,7 +32,7 @@ type mockAuthService struct {
 	verifyEmailFn          func(ctx context.Context, token string) error
 	getMeFn                func(ctx context.Context, userID string) (*api.UserInfo, error)
 	changePasswordFn       func(ctx context.Context, userID, oldPassword, newPassword string) error
-	logoutFn               func(ctx context.Context, userID, token string) error
+	logoutFn               func(ctx context.Context, userID, token, refreshToken string) error
 	logoutAllFn            func(ctx context.Context, userID string) error
 }
 
@@ -90,9 +90,9 @@ func (m *mockAuthService) ChangePassword(ctx context.Context, userID, oldPasswor
 	return nil
 }
 
-func (m *mockAuthService) Logout(ctx context.Context, userID, token string) error {
+func (m *mockAuthService) Logout(ctx context.Context, userID, token, refreshToken string) error {
 	if m.logoutFn != nil {
-		return m.logoutFn(ctx, userID, token)
+		return m.logoutFn(ctx, userID, token, refreshToken)
 	}
 	return nil
 }
