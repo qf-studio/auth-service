@@ -41,6 +41,13 @@ type TokenIssuer interface {
 	IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error)
 }
 
+// UserLookup abstracts user retrieval for role enrichment when completing
+// MFA login (GH-488). This is a narrow interface satisfied by
+// storage.UserRepository, mirroring token.UserLookup.
+type UserLookup interface {
+	FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
+}
+
 // Config holds MFA-specific settings.
 type Config struct {
 	Issuer          string // TOTP issuer name shown in authenticator apps
@@ -65,27 +72,36 @@ type Service struct {
 	repo   storage.MFARepository
 	tokens MFATokenStore
 	issuer TokenIssuer
+	users  UserLookup
 	logger *zap.Logger
 	audit  audit.EventLogger
 }
 
-// NewService creates a new MFA service.
+// NewService creates a new MFA service. Returns an error if cfg is invalid
+// (e.g. an unsupported TOTP digit count), so misconfiguration is caught at
+// startup rather than producing accounts that can never verify (GH-488).
 func NewService(
 	cfg Config,
 	repo storage.MFARepository,
 	tokens MFATokenStore,
 	issuer TokenIssuer,
+	users UserLookup,
 	logger *zap.Logger,
 	auditor audit.EventLogger,
-) *Service {
+) (*Service, error) {
+	if cfg.Digits != 6 && cfg.Digits != 8 {
+		return nil, fmt.Errorf("mfa: invalid digits %d: must be 6 or 8", cfg.Digits)
+	}
+
 	return &Service{
 		cfg:    cfg,
 		repo:   repo,
 		tokens: tokens,
 		issuer: issuer,
+		users:  users,
 		logger: logger,
 		audit:  auditor,
-	}
+	}, nil
 }
 
 // InitiateEnrollment generates a new TOTP secret for the user.
@@ -93,16 +109,11 @@ func NewService(
 func (s *Service) InitiateEnrollment(ctx context.Context, userID, email string) (*api.MFAEnrollmentResult, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
 
-	otpDigits := otp.DigitsSix
-	if s.cfg.Digits == 8 {
-		otpDigits = otp.DigitsEight
-	}
-
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      s.cfg.Issuer,
 		AccountName: email,
 		Period:      s.cfg.Period,
-		Digits:      otpDigits,
+		Digits:      s.totpDigits(),
 		Algorithm:   otp.AlgorithmSHA1,
 	})
 	if err != nil {
@@ -270,8 +281,20 @@ func (s *Service) CompleteMFALogin(ctx context.Context, mfaToken, code, codeType
 		return nil, fmt.Errorf("unsupported code type %q: %w", codeType, api.ErrUnauthorized)
 	}
 
+	// Re-read the user's current roles before issuance (rather than carrying
+	// roles captured at the password step) so role changes between the
+	// password and MFA steps are honored, consistent with the refresh-path
+	// behavior (GH-432). A lookup failure must not mint a role-less token
+	// (GH-488), so it fails the MFA completion instead of falling back.
+	tenantID := domain.TenantIDFromContext(ctx)
+	user, err := s.users.FindByID(ctx, tenantID, userID)
+	if err != nil {
+		s.logger.Error("failed to look up user for mfa role enrichment", zap.String("user_id", userID), zap.Error(err))
+		return nil, fmt.Errorf("look up user after mfa: %w", api.ErrInternalError)
+	}
+
 	// Issue full token pair now that MFA is verified.
-	result, err := s.issuer.IssueTokenPair(ctx, userID, nil, nil, domain.ClientTypeUser)
+	result, err := s.issuer.IssueTokenPair(ctx, userID, user.Roles, nil, domain.ClientTypeUser)
 	if err != nil {
 		return nil, fmt.Errorf("issue tokens after mfa: %w", err)
 	}
@@ -352,7 +375,7 @@ func (s *Service) IsMFAEnabled(ctx context.Context, userID string) (bool, error)
 func (s *Service) validateTOTP(secret, code string) bool {
 	valid, err := totp.ValidateCustom(code, secret, time.Now().UTC(), totp.ValidateOpts{
 		Period:    s.cfg.Period,
-		Digits:    otp.DigitsSix,
+		Digits:    s.totpDigits(),
 		Algorithm: otp.AlgorithmSHA1,
 	})
 	if err != nil {
@@ -360,6 +383,18 @@ func (s *Service) validateTOTP(secret, code string) bool {
 		return false
 	}
 	return valid
+}
+
+// totpDigits returns the configured TOTP digit count as an otp.Digits value.
+// NewService rejects any Digits value other than 6 or 8, so any value other
+// than 8 here is the 6-digit default (GH-488: this must match the digit
+// count used at enrollment time in InitiateEnrollment, or codes can never
+// verify).
+func (s *Service) totpDigits() otp.Digits {
+	if s.cfg.Digits == 8 {
+		return otp.DigitsEight
+	}
+	return otp.DigitsSix
 }
 
 // generateBackupCodes creates the configured number of random backup codes.

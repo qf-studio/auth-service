@@ -2,20 +2,30 @@ package mfa
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
+	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
+	redisv9 "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
+	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/storage"
+	tokensvc "github.com/qf-studio/auth-service/internal/token"
 )
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -138,18 +148,74 @@ func (m *mockTokenIssuer) IssueTokenPair(ctx context.Context, subject string, ro
 	}, nil
 }
 
+type mockUserLookup struct {
+	findByIDFn func(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
+}
+
+func (m *mockUserLookup) FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error) {
+	if m.findByIDFn != nil {
+		return m.findByIDFn(ctx, tenantID, id)
+	}
+	return &domain.User{ID: id}, nil
+}
+
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
 func newTestService(repo *mockMFARepository, tokens *mockMFATokenStore, issuer *mockTokenIssuer) *Service {
+	return newTestServiceWithUsers(repo, tokens, issuer, &mockUserLookup{})
+}
+
+func newTestServiceWithUsers(repo *mockMFARepository, tokens *mockMFATokenStore, issuer *mockTokenIssuer, users *mockUserLookup) *Service {
+	return newTestServiceWithConfig(DefaultConfig(), repo, tokens, issuer, users)
+}
+
+func newTestServiceWithConfig(cfg Config, repo *mockMFARepository, tokens *mockMFATokenStore, issuer *mockTokenIssuer, users *mockUserLookup) *Service {
 	logger, _ := zap.NewDevelopment()
-	return NewService(
-		DefaultConfig(),
+	svc, err := NewService(
+		cfg,
 		repo,
 		tokens,
 		issuer,
+		users,
 		logger,
 		audit.NopLogger{},
 	)
+	if err != nil {
+		// Only reachable if a test passes an invalid Digits value directly;
+		// callers exercising that path should call NewService themselves.
+		panic(err)
+	}
+	return svc
+}
+
+// newRealTokenIssuer builds a real token.Service (real ES256 key + miniredis)
+// so tests can parse the actual JWT claims minted by CompleteMFALogin,
+// rather than a mockTokenIssuer that echoes back a static token (GH-488).
+func newRealTokenIssuer(t *testing.T) *tokensvc.Service {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(mr.Close)
+	rc := redisv9.NewClient(&redisv9.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rc.Close() })
+
+	cfg := config.JWTConfig{
+		Algorithm:       "ES256",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 7 * 24 * time.Hour,
+		SystemSecrets:   []string{"test-secret-1"},
+	}
+	oidcCfg := config.OIDCConfig{
+		IssuerURL:  "https://auth.qf.studio",
+		IDTokenTTL: 1 * time.Hour,
+	}
+
+	svc, err := tokensvc.NewServiceFromKey(cfg, oidcCfg, key, rc, zap.NewNop(), audit.NopLogger{})
+	require.NoError(t, err)
+	return svc
 }
 
 // ── Enrollment Tests ─────────────────────────────────────────────────────────
@@ -466,6 +532,101 @@ func TestCompleteMFALogin_BackupCode(t *testing.T) {
 	assert.Equal(t, "user-1", result.UserID)
 }
 
+// TestCompleteMFALogin_RolesInAccessTokenClaims is a regression test for
+// GH-488: CompleteMFALogin previously hardcoded nil roles when issuing
+// tokens, so a successful MFA login always demoted the user to a role-less
+// access token. This uses a real token.Service (not a mock) so it can parse
+// the minted JWT and assert on its actual roles claim, per the table-driven
+// cases below.
+func TestCompleteMFALogin_RolesInAccessTokenClaims(t *testing.T) {
+	tests := []struct {
+		name  string
+		roles []string
+	}{
+		{name: "single role", roles: []string{"user"}},
+		{name: "multiple roles", roles: []string{"user", "admin"}},
+		{name: "no roles", roles: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := totp.Generate(totp.GenerateOpts{Issuer: "Test", AccountName: "alice@test.com"})
+			require.NoError(t, err)
+			code, err := totp.GenerateCode(key.Secret(), time.Now())
+			require.NoError(t, err)
+
+			repo := &mockMFARepository{
+				getSecretFn: func(_ context.Context, _ string) (*domain.MFASecret, error) {
+					return &domain.MFASecret{Secret: key.Secret(), Confirmed: true}, nil
+				},
+			}
+			tokenStore := &mockMFATokenStore{
+				consumeFn: func(_ context.Context, _ string) (string, error) {
+					return "user-roles-test", nil
+				},
+			}
+			users := &mockUserLookup{
+				findByIDFn: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
+					return &domain.User{ID: id, Roles: tt.roles}, nil
+				},
+			}
+			issuer := newRealTokenIssuer(t)
+
+			svc, err := NewService(DefaultConfig(), repo, tokenStore, issuer, users, zap.NewNop(), audit.NopLogger{})
+			require.NoError(t, err)
+
+			result, err := svc.CompleteMFALogin(context.Background(), "mfa-token", code, "totp")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			claims, err := issuer.ValidateToken(context.Background(), strings.TrimPrefix(result.AccessToken, "qf_at_"))
+			require.NoError(t, err)
+			assert.Equal(t, tt.roles, claims.Roles)
+		})
+	}
+}
+
+// TestCompleteMFALogin_UserLookupErrorFailsClosed is a regression test for
+// GH-488: a UserLookup failure during MFA completion must fail the login
+// rather than minting a role-less token.
+func TestCompleteMFALogin_UserLookupErrorFailsClosed(t *testing.T) {
+	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Test", AccountName: "alice@test.com"})
+	require.NoError(t, err)
+	code, err := totp.GenerateCode(key.Secret(), time.Now())
+	require.NoError(t, err)
+
+	repo := &mockMFARepository{
+		getSecretFn: func(_ context.Context, _ string) (*domain.MFASecret, error) {
+			return &domain.MFASecret{Secret: key.Secret(), Confirmed: true}, nil
+		},
+	}
+	tokenStore := &mockMFATokenStore{
+		consumeFn: func(_ context.Context, _ string) (string, error) {
+			return "user-1", nil
+		},
+	}
+	users := &mockUserLookup{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
+			return nil, errors.New("db unavailable")
+		},
+	}
+	var issued bool
+	issuer := &mockTokenIssuer{
+		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType) (*api.AuthResult, error) {
+			issued = true
+			return &api.AuthResult{}, nil
+		},
+	}
+
+	svc := newTestServiceWithUsers(repo, tokenStore, issuer, users)
+
+	result, err := svc.CompleteMFALogin(context.Background(), "mfa-token", code, "totp")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
+	assert.Nil(t, result)
+	assert.False(t, issued, "no tokens should be issued when user lookup fails")
+}
+
 // ── Disable Tests ────────────────────────────────────────────────────────────
 
 func TestDisable_Success(t *testing.T) {
@@ -590,6 +751,115 @@ func TestGenerateMFAToken_StoreError(t *testing.T) {
 	svc := newTestService(&mockMFARepository{}, tokens, &mockTokenIssuer{})
 	_, err := svc.GenerateMFAToken(context.Background(), "user-1")
 	require.Error(t, err)
+}
+
+// ── Digit Configuration Tests (GH-488) ──────────────────────────────────────
+
+// TestNewService_RejectsInvalidDigits is a regression test for GH-488:
+// misconfigured digit counts must be rejected at construction time rather
+// than silently producing accounts that can never verify.
+func TestNewService_RejectsInvalidDigits(t *testing.T) {
+	tests := []struct {
+		name    string
+		digits  int
+		wantErr bool
+	}{
+		{name: "6 digits valid", digits: 6, wantErr: false},
+		{name: "8 digits valid", digits: 8, wantErr: false},
+		{name: "7 digits invalid", digits: 7, wantErr: true},
+		{name: "0 digits invalid", digits: 0, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Digits = tt.digits
+
+			logger, _ := zap.NewDevelopment()
+			svc, err := NewService(cfg, &mockMFARepository{}, &mockMFATokenStore{}, &mockTokenIssuer{}, &mockUserLookup{}, logger, audit.NopLogger{})
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, svc)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, svc)
+			}
+		})
+	}
+}
+
+// TestEnrollConfirmVerify_EightDigitRoundtrip is a regression test for
+// GH-488: configuring 8-digit TOTP previously created accounts that could
+// never verify, because validateTOTP hardcoded otp.DigitsSix regardless of
+// config. This exercises the full enroll -> confirm -> verify flow with an
+// 8-digit configuration.
+func TestEnrollConfirmVerify_EightDigitRoundtrip(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Digits = 8
+
+	var savedSecret *domain.MFASecret
+	var confirmed bool
+	repo := &mockMFARepository{
+		saveSecretFn: func(_ context.Context, secret *domain.MFASecret) (*domain.MFASecret, error) {
+			savedSecret = secret
+			return secret, nil
+		},
+		getSecretFn: func(_ context.Context, _ string) (*domain.MFASecret, error) {
+			return &domain.MFASecret{Secret: savedSecret.Secret, Confirmed: confirmed}, nil
+		},
+		confirmSecretFn: func(_ context.Context, _ string) error {
+			confirmed = true
+			return nil
+		},
+	}
+
+	svc := newTestServiceWithConfig(cfg, repo, &mockMFATokenStore{}, &mockTokenIssuer{}, &mockUserLookup{})
+
+	enrollment, err := svc.InitiateEnrollment(context.Background(), "user-1", "alice@example.com")
+	require.NoError(t, err)
+	require.NotNil(t, savedSecret)
+
+	code, err := totp.GenerateCodeCustom(enrollment.Secret, time.Now(), totp.ValidateOpts{
+		Period:    cfg.Period,
+		Digits:    otp.DigitsEight,
+		Algorithm: otp.AlgorithmSHA1,
+	})
+	require.NoError(t, err)
+	require.Len(t, code, 8, "expected an 8-digit code")
+
+	_, err = svc.ConfirmEnrollment(context.Background(), "user-1", code)
+	require.NoError(t, err, "8-digit code must verify against 8-digit config")
+	assert.True(t, confirmed)
+
+	// A subsequent 8-digit code must also verify via VerifyTOTP.
+	verifyCode, err := totp.GenerateCodeCustom(enrollment.Secret, time.Now(), totp.ValidateOpts{
+		Period:    cfg.Period,
+		Digits:    otp.DigitsEight,
+		Algorithm: otp.AlgorithmSHA1,
+	})
+	require.NoError(t, err)
+	err = svc.VerifyTOTP(context.Background(), "user-1", verifyCode)
+	require.NoError(t, err)
+}
+
+// TestValidateTOTP_SixDigitDefaultUnchanged ensures the default 6-digit
+// configuration still validates 6-digit codes (no regression from the
+// GH-488 digit-count fix).
+func TestValidateTOTP_SixDigitDefaultUnchanged(t *testing.T) {
+	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Test", AccountName: "alice@test.com"})
+	require.NoError(t, err)
+	code, err := totp.GenerateCode(key.Secret(), time.Now())
+	require.NoError(t, err)
+	require.Len(t, code, 6)
+
+	repo := &mockMFARepository{
+		getSecretFn: func(_ context.Context, _ string) (*domain.MFASecret, error) {
+			return &domain.MFASecret{Secret: key.Secret(), Confirmed: true}, nil
+		},
+	}
+	svc := newTestService(repo, &mockMFATokenStore{}, &mockTokenIssuer{})
+	err = svc.VerifyTOTP(context.Background(), "user-1", code)
+	require.NoError(t, err)
 }
 
 // ── Backup Code Format Tests ─────────────────────────────────────────────────

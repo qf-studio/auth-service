@@ -477,6 +477,15 @@ func (m *mockMFAChecker) GenerateMFAToken(ctx context.Context, userID string) (s
 	return "mfa-token-123", nil
 }
 
+// spyAuditor records emitted audit events for assertions.
+type spyAuditor struct {
+	events []audit.Event
+}
+
+func (s *spyAuditor) LogEvent(_ context.Context, event audit.Event) {
+	s.events = append(s.events, event)
+}
+
 func TestLogin_MFAChallenge(t *testing.T) {
 	activeUser := &domain.User{
 		ID:           "user-1",
@@ -540,6 +549,69 @@ func TestLogin_MFANotEnabled_ReturnsTokens(t *testing.T) {
 	require.NotNil(t, result)
 	assert.False(t, result.MFARequired)
 	assert.Equal(t, "qf_at_test-access", result.AccessToken)
+}
+
+// TestLogin_MFAStatusCheckError_FailsClosed is a regression test for GH-488:
+// an error checking MFA status must reject the login (NIST SP 800-63-4 AAL2)
+// instead of silently falling back to a password-only login. Previously this
+// path "failed open" and issued tokens anyway.
+func TestLogin_MFAStatusCheckError_FailsClosed(t *testing.T) {
+	activeUser := &domain.User{
+		ID:           "user-1",
+		Email:        "alice@example.com",
+		PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+		Roles:        []string{"user"},
+	}
+
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return activeUser, nil
+		},
+	}
+
+	mfaChecker := &mockMFAChecker{
+		isMFAEnabledFn: func(_ context.Context, _ string) (bool, error) {
+			return false, fmt.Errorf("mfa store unavailable")
+		},
+	}
+
+	var issued bool
+	issuer := &mockTokenIssuer{
+		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType) (*api.AuthResult, error) {
+			issued = true
+			return &api.AuthResult{}, nil
+		},
+	}
+
+	auditor := &spyAuditor{}
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:    nil,
+		Logger:   logger,
+		Auditor:  auditor,
+		Users:    users,
+		Tokens:   &mockRefreshTokenRepository{},
+		Issuer:   issuer,
+		Hasher:   &mockHasher{},
+		Breaches: &mockBreachChecker{},
+		Email:    &mockEmailSender{},
+	})
+	svc.SetMFAChecker(mfaChecker)
+
+	result, err := svc.Login(context.Background(), "alice@example.com", "correct-password")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
+	assert.Nil(t, result)
+	assert.False(t, issued, "no tokens should be issued when the mfa status check fails")
+
+	var sawEvent bool
+	for _, e := range auditor.events {
+		if e.Type == "mfa_status_check_failed" {
+			sawEvent = true
+			assert.Equal(t, "user-1", e.ActorID)
+		}
+	}
+	assert.True(t, sawEvent, "expected mfa_status_check_failed audit event")
 }
 
 func TestLogin_UpdatesLastLogin(t *testing.T) {
