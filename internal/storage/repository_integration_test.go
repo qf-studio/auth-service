@@ -165,11 +165,31 @@ func createTables(t *testing.T, pool *pgxpool.Pool) {
 			created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
 			PRIMARY KEY (client_id, resource_type_id)
 		);
+
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id                        UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+			tenant_id                 UUID        NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants (id),
+			client_id                 UUID        NOT NULL REFERENCES clients (id),
+			name                      TEXT        NOT NULL,
+			key_hash                  TEXT        NOT NULL,
+			previous_key_hash         TEXT        NOT NULL DEFAULT '',
+			previous_key_expires_at   TIMESTAMPTZ,
+			key_prefix                TEXT        NOT NULL,
+			scopes                    TEXT[]      NOT NULL DEFAULT '{}',
+			rate_limit                INTEGER     NOT NULL DEFAULT 0,
+			status                    TEXT        NOT NULL DEFAULT 'active',
+			expires_at                TIMESTAMPTZ,
+			last_used_at              TIMESTAMPTZ,
+			created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys (key_hash);
 	`)
 	require.NoError(t, err)
 
 	// Clean tables before each test file run.
-	_, err = pool.Exec(ctx, `TRUNCATE users, refresh_tokens, clients, mfa_secrets, mfa_backup_codes, rar_resource_types, client_rar_allowed_types, tenants CASCADE`)
+	_, err = pool.Exec(ctx, `TRUNCATE users, refresh_tokens, clients, mfa_secrets, mfa_backup_codes, rar_resource_types, client_rar_allowed_types, api_keys, tenants CASCADE`)
 	require.NoError(t, err)
 
 	// Re-insert default tenant after truncation.
@@ -1461,3 +1481,198 @@ func TestPostgresTenantRepository_Create_WithConfig(t *testing.T) {
 	assert.Equal(t, 20, *created.Config.PasswordPolicy.MinLength)
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// APIKeyRepository tests
+//
+// GH-485: the api_keys table had no migration at all (every query 500'd
+// with "relation does not exist"). These tests run against a real api_keys
+// table (see createTables above, which mirrors
+// migrations/000019_create_api_keys_table.up.sql) to prove the schema and
+// the FindByKeyHash grace-window lookup
+// (key_hash = $1 OR (previous_key_hash = $1 AND previous_key_expires_at > NOW()))
+// actually work against Postgres, not just against the in-memory mock used
+// by internal/admin's service-level tests.
+// ────────────────────────────────────────────────────────────────────────────
+
+func newTestAPIKeyClient(t *testing.T, pool *pgxpool.Pool) *domain.Client {
+	t.Helper()
+	repo := storage.NewPostgresClientRepository(pool)
+	created, err := repo.Create(context.Background(), newTestClient())
+	require.NoError(t, err)
+	return created
+}
+
+func newTestAPIKey(clientID uuid.UUID, keyHash string) *domain.APIKey {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	return &domain.APIKey{
+		ID:        uuid.New(),
+		TenantID:  domain.DefaultTenantID,
+		ClientID:  clientID,
+		Name:      "test-api-key",
+		KeyHash:   keyHash,
+		KeyPrefix: "qf_ak_" + keyHash[:8],
+		Scopes:    []string{"read:users"},
+		RateLimit: 1000,
+		Status:    domain.APIKeyStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+}
+
+func TestPostgresAPIKeyRepository_Create(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresAPIKeyRepository(pool)
+	client := newTestAPIKeyClient(t, pool)
+	ctx := context.Background()
+
+	key := newTestAPIKey(client.ID, "hash-"+uuid.New().String())
+	created, err := repo.Create(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, key.ID, created.ID)
+	assert.Equal(t, key.KeyHash, created.KeyHash)
+	assert.Equal(t, domain.APIKeyStatusActive, created.Status)
+}
+
+func TestPostgresAPIKeyRepository_FindByID(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresAPIKeyRepository(pool)
+	client := newTestAPIKeyClient(t, pool)
+	ctx := context.Background()
+
+	key := newTestAPIKey(client.ID, "hash-"+uuid.New().String())
+	_, err := repo.Create(ctx, key)
+	require.NoError(t, err)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, key.ID)
+	require.NoError(t, err)
+	assert.Equal(t, key.KeyHash, found.KeyHash)
+}
+
+func TestPostgresAPIKeyRepository_FindByID_NotFound(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresAPIKeyRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.FindByID(ctx, domain.DefaultTenantID, uuid.New())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestPostgresAPIKeyRepository_FindByKeyHash(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresAPIKeyRepository(pool)
+	client := newTestAPIKeyClient(t, pool)
+	ctx := context.Background()
+
+	hash := "hash-" + uuid.New().String()
+	key := newTestAPIKey(client.ID, hash)
+	_, err := repo.Create(ctx, key)
+	require.NoError(t, err)
+
+	found, err := repo.FindByKeyHash(ctx, domain.DefaultTenantID, hash)
+	require.NoError(t, err)
+	assert.Equal(t, key.ID, found.ID)
+}
+
+func TestPostgresAPIKeyRepository_FindByKeyHash_NotFound(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresAPIKeyRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.FindByKeyHash(ctx, domain.DefaultTenantID, "nonexistent-hash")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+// TestPostgresAPIKeyRepository_RotateAndFullLifecycle proves the full
+// create -> validate(by hash) -> rotate -> validate(old within grace,
+// rejected after) -> revoke -> rejected lifecycle against real Postgres,
+// exercising the exact SQL grace-window OR clause in FindByKeyHash.
+func TestPostgresAPIKeyRepository_RotateAndFullLifecycle(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresAPIKeyRepository(pool)
+	client := newTestAPIKeyClient(t, pool)
+	ctx := context.Background()
+
+	originalHash := "hash-original-" + uuid.New().String()
+	key := newTestAPIKey(client.ID, originalHash)
+	_, err := repo.Create(ctx, key)
+	require.NoError(t, err)
+
+	// Validate by original hash succeeds.
+	found, err := repo.FindByKeyHash(ctx, domain.DefaultTenantID, originalHash)
+	require.NoError(t, err)
+	assert.True(t, found.IsActive())
+
+	// Rotate: new hash becomes current, old hash becomes previous with a
+	// future grace deadline.
+	newHash := "hash-rotated-" + uuid.New().String()
+	graceEnd := time.Now().UTC().Add(time.Hour)
+	err = repo.RotateKey(ctx, domain.DefaultTenantID, key.ID, newHash, graceEnd)
+	require.NoError(t, err)
+
+	// Old key still resolves within the grace window.
+	found, err = repo.FindByKeyHash(ctx, domain.DefaultTenantID, originalHash)
+	require.NoError(t, err, "old key hash should still resolve within grace window")
+	assert.Equal(t, key.ID, found.ID)
+
+	// New key resolves immediately.
+	found, err = repo.FindByKeyHash(ctx, domain.DefaultTenantID, newHash)
+	require.NoError(t, err)
+	assert.Equal(t, key.ID, found.ID)
+
+	// Rotate again with an already-expired grace deadline to simulate the
+	// old key's grace window having elapsed.
+	newerHash := "hash-rotated-again-" + uuid.New().String()
+	pastGrace := time.Now().UTC().Add(-time.Hour)
+	err = repo.RotateKey(ctx, domain.DefaultTenantID, key.ID, newerHash, pastGrace)
+	require.NoError(t, err)
+
+	_, err = repo.FindByKeyHash(ctx, domain.DefaultTenantID, newHash)
+	require.Error(t, err, "previous key hash should be rejected once its grace window has elapsed")
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+
+	// Revoke: the current key must be rejected (IsActive false) going forward.
+	err = repo.Revoke(ctx, domain.DefaultTenantID, key.ID)
+	require.NoError(t, err)
+
+	found, err = repo.FindByKeyHash(ctx, domain.DefaultTenantID, newerHash)
+	require.NoError(t, err, "revoked key row is still findable by hash")
+	assert.False(t, found.IsActive(), "revoked key must report inactive")
+}
+
+func TestPostgresAPIKeyRepository_Revoke_AlreadyRevoked(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresAPIKeyRepository(pool)
+	client := newTestAPIKeyClient(t, pool)
+	ctx := context.Background()
+
+	key := newTestAPIKey(client.ID, "hash-"+uuid.New().String())
+	_, err := repo.Create(ctx, key)
+	require.NoError(t, err)
+
+	err = repo.Revoke(ctx, domain.DefaultTenantID, key.ID)
+	require.NoError(t, err)
+
+	err = repo.Revoke(ctx, domain.DefaultTenantID, key.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrAlreadyDeleted)
+}
+
+func TestPostgresAPIKeyRepository_UpdateLastUsed(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresAPIKeyRepository(pool)
+	client := newTestAPIKeyClient(t, pool)
+	ctx := context.Background()
+
+	key := newTestAPIKey(client.ID, "hash-"+uuid.New().String())
+	_, err := repo.Create(ctx, key)
+	require.NoError(t, err)
+
+	err = repo.UpdateLastUsed(ctx, domain.DefaultTenantID, key.ID)
+	require.NoError(t, err)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, key.ID)
+	require.NoError(t, err)
+	require.NotNil(t, found.LastUsedAt)
+}

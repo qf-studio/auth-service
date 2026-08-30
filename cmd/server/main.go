@@ -224,7 +224,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
 	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
-	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, hasher, log, auditSvc)
+	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, log, auditSvc)
 	adminWebhookSvc := admin.NewWebhookService(webhookRepo, webhookDeliveryRepo, webhookDispatcher, log, auditSvc)
 
 	// ── Middleware ─────────────────────────────────────────────────────────
