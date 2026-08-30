@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,7 +16,6 @@ import (
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/middleware"
-	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
 
@@ -33,16 +33,14 @@ const (
 // APIKeyService implements api.AdminAPIKeyService.
 type APIKeyService struct {
 	repo   storage.APIKeyRepository
-	hasher password.Hasher
 	logger *zap.Logger
 	audit  audit.EventLogger
 }
 
 // NewAPIKeyService creates a new admin API key service.
-func NewAPIKeyService(repo storage.APIKeyRepository, hasher password.Hasher, logger *zap.Logger, auditor audit.EventLogger) *APIKeyService {
+func NewAPIKeyService(repo storage.APIKeyRepository, logger *zap.Logger, auditor audit.EventLogger) *APIKeyService {
 	return &APIKeyService{
 		repo:   repo,
-		hasher: hasher,
 		logger: logger,
 		audit:  auditor,
 	}
@@ -108,11 +106,7 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, req *api.CreateAPIKeyR
 		return nil, fmt.Errorf("create api key: %w", api.ErrInternalError)
 	}
 
-	hash, err := s.hasher.Hash(rawKey)
-	if err != nil {
-		s.logger.Error("hash api key failed", zap.Error(err))
-		return nil, fmt.Errorf("create api key: %w", api.ErrInternalError)
-	}
+	hash := hashAPIKey(rawKey)
 
 	now := time.Now().UTC()
 	scopes := req.Scopes
@@ -256,11 +250,7 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, keyID string) (*api.Ad
 		return nil, fmt.Errorf("rotate api key: %w", api.ErrInternalError)
 	}
 
-	hash, err := s.hasher.Hash(rawKey)
-	if err != nil {
-		s.logger.Error("hash api key failed", zap.Error(err))
-		return nil, fmt.Errorf("rotate api key: %w", api.ErrInternalError)
-	}
+	hash := hashAPIKey(rawKey)
 
 	graceEnd := time.Now().UTC().Add(apiKeyGracePeriod)
 
@@ -294,11 +284,7 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, keyID string) (*api.Ad
 // This method satisfies middleware.APIKeyValidator.
 func (s *APIKeyService) ValidateAPIKey(ctx context.Context, rawKey string) (*middleware.APIKeyInfo, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
-	hash, err := s.hasher.Hash(rawKey)
-	if err != nil {
-		s.logger.Error("hash api key for validation failed", zap.Error(err))
-		return nil, fmt.Errorf("validate api key: %w", err)
-	}
+	hash := hashAPIKey(rawKey)
 
 	key, err := s.repo.FindByKeyHash(ctx, tenantID, hash)
 	if err != nil {
@@ -326,6 +312,21 @@ func generateAPIKey() (string, error) {
 		return "", fmt.Errorf("generate random bytes: %w", err)
 	}
 	return apiKeyPrefix + hex.EncodeToString(b), nil
+}
+
+// hashAPIKey returns the SHA-256 hex digest of a raw API key.
+//
+// Decision: API keys are 256-bit random secrets, not human passwords, so
+// they don't need Argon2id's slow, salted hashing — brute-forcing the
+// digest is infeasible. A deterministic digest also enables an O(1) indexed
+// lookup (key_hash unique index) instead of a full-table Argon2id re-hash
+// comparison per candidate row, which is both impossible with per-call
+// random salts (see internal/password/hasher.go) and would be prohibitively
+// slow. Mirrors the service's existing "store only token signatures"
+// pattern used for refresh tokens.
+func hashAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return hex.EncodeToString(sum[:])
 }
 
 // domainAPIKeyToAdmin converts a domain.APIKey to an api.AdminAPIKey response DTO.

@@ -57,11 +57,13 @@ func tableExists(t *testing.T, dsn, table string) bool {
 	return exists
 }
 
-// TestMigration_ConsentGrantsUpDown proves 000018_consent_grants applies and
-// reverts cleanly: after `up` the table exists, after reverting exactly this
-// one migration (`steps -1`) it is dropped, matching the down migration's
-// contract. Restores the schema to head afterward so other integration
-// tests sharing TEST_DATABASE_URL see a fully-migrated database.
+// TestMigration_ConsentGrantsUpDown proves 000018_consent_grants and
+// 000019_create_api_keys_table apply and revert cleanly: after `up` both
+// tables exist, after reverting exactly the newest migration (`steps -1`,
+// which undoes 000019) api_keys is dropped while consent_grants — applied
+// by the earlier, non-reverted 000018 — is untouched. Restores the schema
+// to head afterward so other integration tests sharing TEST_DATABASE_URL
+// see a fully-migrated database.
 func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	m, dsn := testMigrate(t)
 
@@ -78,15 +80,17 @@ func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	version, dirty, err := m.Version()
 	require.NoError(t, err)
 	require.False(t, dirty, "schema should not be dirty after a clean up")
-	require.Equal(t, uint(18), version, "expected embedded migrations to be at head version 18")
+	require.Equal(t, uint(19), version, "expected embedded migrations to be at head version 19")
 
 	require.True(t, tableExists(t, dsn, "consent_grants"), "consent_grants table should exist after migrate up")
+	require.True(t, tableExists(t, dsn, "api_keys"), "api_keys table should exist after migrate up")
 
-	require.NoError(t, m.Steps(-1), "migrate down one step (000018 down)")
-	require.False(t, tableExists(t, dsn, "consent_grants"), "consent_grants table should be dropped after reverting 000018")
+	require.NoError(t, m.Steps(-1), "migrate down one step (000019 down)")
+	require.False(t, tableExists(t, dsn, "api_keys"), "api_keys table should be dropped after reverting 000019")
+	require.True(t, tableExists(t, dsn, "consent_grants"), "consent_grants table should be unaffected by reverting 000019")
 
 	version, dirty, err = m.Version()
 	require.NoError(t, err)
 	require.False(t, dirty)
-	require.Equal(t, uint(17), version, "expected version 17 after reverting 000018")
+	require.Equal(t, uint(18), version, "expected version 18 after reverting 000019")
 }
