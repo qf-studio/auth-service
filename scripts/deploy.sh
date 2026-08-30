@@ -7,7 +7,7 @@
 # Steps:
 #   1. Sources the appropriate .env.<environment> file
 #   2. Pulls latest image (production) or rebuilds (staging)
-#   3. Runs database migrations via docker compose exec
+#   3. Runs database migrations via a one-off `docker compose run` container
 #   4. Restarts services
 #   5. Health-check polling with exponential backoff
 #
@@ -109,15 +109,25 @@ fi
 
 # Step 3: Run database migrations
 info "Step 3/5: Running database migrations..."
-# Start all services so auth-service container is running for exec
-$COMPOSE_CMD up -d
-info "Waiting for database to be ready..."
-sleep 5
+# Bring up only the DB/cache dependencies here, not auth-service. The server
+# itself queries schema (e.g. casbin_policies) during startup, so on a fresh
+# database it crash-loops until migrations are applied — which would leave
+# no running auth-service container for `exec` to target. Use a one-off
+# `run --rm` container instead, decoupled from the long-running service.
+$COMPOSE_CMD up -d postgres redis
 
-# Run migrations via docker compose exec as specified
-$COMPOSE_CMD exec auth-service /app/auth-service migrate up 2>&1 || {
-    info "Migration command not available, skipping (migrate binary may not be built yet)"
-}
+# Migrations live in the separate /auth-migrate binary, not the server
+# binary (docker/Dockerfile). `run` reuses the auth-service image/env
+# (DATABASE_URL / POSTGRES_*) but overrides the entrypoint, and a failure
+# here must abort the deploy before Step 4 restarts services — the
+# rollback state saved in Step 1 is only useful if we stop before
+# replacing the running version.
+if ! $COMPOSE_CMD run --rm --entrypoint /auth-migrate auth-service up; then
+    die "Database migration failed. Aborting before restart; previous version is still running."
+fi
+
+info "Applied schema version:"
+$COMPOSE_CMD run --rm --entrypoint /auth-migrate auth-service version
 
 # Step 4: Restart services
 info "Step 4/5: Restarting services..."

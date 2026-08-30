@@ -195,10 +195,11 @@ cp .env.staging.example .env.staging
 2. Sources the environment file
 3. Saves current container image tag to `.deploy-state/previous-image.staging` (for rollback)
 4. Builds the auth-service image from source (`docker compose build`)
-5. Starts all services (`docker compose up -d`)
-6. Runs database migrations (`docker compose exec auth-service /app/auth-service migrate up`)
-7. Polls `http://localhost:4000/health` with exponential backoff (up to 8 retries, ~2 min max)
-8. Exits non-zero if health check fails
+5. Starts the postgres and redis dependencies (`docker compose up -d postgres redis`)
+6. Runs database migrations (`docker compose run --rm --entrypoint /auth-migrate auth-service up`), aborting before the restart step on failure
+7. Restarts all services, including auth-service (`docker compose up -d`)
+8. Polls `http://localhost:4000/health` with exponential backoff (up to 8 retries, ~2 min max)
+9. Exits non-zero if health check fails
 
 #### Staging Compose Services
 
@@ -501,7 +502,7 @@ If a migration caused the issue:
 
 ```bash
 # Run migration rollback (down)
-docker compose -f deployments/docker-compose.<env>.yml exec auth-service /app/auth-service migrate down
+docker compose -f deployments/docker-compose.<env>.yml exec auth-service /auth-migrate down
 
 # Verify database state
 docker compose -f deployments/docker-compose.<env>.yml exec postgres psql -U <user> -d <db> -c '\dt'
