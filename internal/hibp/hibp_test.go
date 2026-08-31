@@ -52,6 +52,16 @@ func TestIsBreached_APIError(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected status 503")
 }
 
+func TestNewClient_DefaultAPIURL(t *testing.T) {
+	c := NewClient(http.DefaultClient, "")
+	assert.Equal(t, defaultAPIURL, c.apiURL)
+}
+
+func TestNewClient_OverrideAPIURL(t *testing.T) {
+	c := NewClient(http.DefaultClient, "http://127.0.0.1:9999/range/")
+	assert.Equal(t, "http://127.0.0.1:9999/range/", c.apiURL)
+}
+
 func TestMatchesSuffix(t *testing.T) {
 	tests := []struct {
 		name   string

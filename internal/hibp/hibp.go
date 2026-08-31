@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const apiURL = "https://api.pwnedpasswords.com/range/"
+const defaultAPIURL = "https://api.pwnedpasswords.com/range/"
 
 // BreachChecker determines whether a password has appeared in a data breach.
 type BreachChecker interface {
@@ -27,8 +27,13 @@ type Client struct {
 	apiURL     string
 }
 
-// NewClient creates a new HIBP client with the given HTTP client.
-func NewClient(httpClient *http.Client) *Client {
+// NewClient creates a new HIBP client with the given HTTP client. apiURL
+// overrides the range-endpoint base URL (e.g. to point at a fake server in
+// tests); pass "" to use the real pwnedpasswords.com API.
+func NewClient(httpClient *http.Client, apiURL string) *Client {
+	if apiURL == "" {
+		apiURL = defaultAPIURL
+	}
 	return &Client{
 		httpClient: httpClient,
 		apiURL:     apiURL,

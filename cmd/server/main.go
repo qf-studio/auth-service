@@ -99,7 +99,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Keep Postgres refresh-token bookkeeping (used for introspection) truthful
 	// across rotation (GH-486).
 	tokenSvc.SetRefreshTokenStore(refreshTokenRepo)
-	hibpClient := hibp.NewClient(http.DefaultClient)
+	hibpClient := hibp.NewClient(http.DefaultClient, cfg.HIBP.APIURL)
 
 	// ── Email ────────────────────────────────────────────────────────────
 	var emailSender email.EmailSender
