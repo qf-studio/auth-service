@@ -1,7 +1,7 @@
 # TASK-01: E2E & Canary Test Strategy
 
 **Created:** 2026-08-31
-**Status:** 📋 Planned — awaiting approval to spec issues A–D
+**Status:** 🚀 In flight — A=#493 (dispatched to Pilot), B=#494, C=#495 (label `pilot` after #493 merges), D=#496 (Navigator-executed; repo qf-studio/auth-service-canary created 2026-08-31)
 **Origin:** Review-003 post-mortem — 25 of 39 verified findings were "built but never wired in `main()`" defects that unit tests structurally cannot see (they bypass `main()` and hand-wire mocks). `cmd/server` has zero test files today; nothing boots the real binary.
 
 ## Goal
