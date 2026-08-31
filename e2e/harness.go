@@ -17,11 +17,15 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
+
+	dockercontainer "github.com/moby/moby/api/types/container"
+	dockernetwork "github.com/moby/moby/api/types/network"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/network"
@@ -159,7 +163,24 @@ func setupSuite(ctx context.Context) (*Env, func(), error) {
 		return nil, teardown, err
 	}
 
-	sutContainer, err := startSUT(ctx, repoRoot, nw.Name, hostKeyPath, hibpPort, emailPort)
+	// The OIDC discovery/token issuer URL must be known to the SUT process at
+	// startup (via OIDC_ISSUER_URL), but that URL embeds the SUT's own mapped
+	// public port, which testcontainers only assigns once the container
+	// starts. Break the cycle by reserving a free host port ourselves first
+	// (accepted TOCTOU race, standard for test infra) and explicitly binding
+	// the SUT's public port to it, so the issuer URL we hand the process
+	// matches the port Docker will actually map.
+	daemonHost, err := dockerDaemonHost(ctx)
+	if err != nil {
+		return nil, teardown, fmt.Errorf("resolve docker daemon host: %w", err)
+	}
+	publicHostPort, err := reserveHostPort()
+	if err != nil {
+		return nil, teardown, fmt.Errorf("reserve SUT public host port: %w", err)
+	}
+	issuerURL := fmt.Sprintf("http://%s:%s", daemonHost, publicHostPort)
+
+	sutContainer, err := startSUT(ctx, repoRoot, nw.Name, hostKeyPath, hibpPort, emailPort, publicHostPort, issuerURL)
 	if err != nil {
 		return nil, teardown, fmt.Errorf("start SUT container: %w", err)
 	}
@@ -287,10 +308,13 @@ func runMigrations(ctx context.Context, repoRoot, networkName, databaseURL strin
 // host ports the HIBPMock/EmailSinkMock fakes are listening on; the SUT
 // reaches them via testcontainers host-port access
 // (host.testcontainers.internal) exactly as it would reach the real
-// services. It does not itself wait for application readiness (see
+// services. publicHostPort pins the host-side mapping of the SUT's public
+// port so it matches issuerURL (already computed by the caller and handed
+// to the SUT as OIDC_ISSUER_URL) instead of letting Docker pick a random
+// one. It does not itself wait for application readiness (see
 // waitForReadiness); it only waits for the public port to start listening
 // so the caller can begin polling.
-func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hibpPort, emailPort int) (testcontainers.Container, error) {
+func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hibpPort, emailPort int, publicHostPort, issuerURL string) (testcontainers.Container, error) {
 	req := imageRequest(repoRoot)
 	req.ExposedPorts = []string{sutPublicPort, sutAdminPort, sutGRPCPort}
 	req.Networks = []string{networkName}
@@ -326,7 +350,15 @@ func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hi
 		"EMAIL_SENDER_ADDRESS":    fakeEmailSenderAddress,
 		"PASSWORD_RESET_URL_BASE": fakePasswordResetURLBase,
 		"EMAIL_VERIFY_URL_BASE":   fakeEmailVerifyURLBase,
+		"OIDC_ISSUER_URL":         issuerURL,
 		"OIDC_LOGIN_UI_URL":       fakeOIDCLoginUIURL,
+	}
+	req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
+		hc.PortBindings = dockernetwork.PortMap{
+			dockernetwork.MustParsePort(sutPublicPort): []dockernetwork.PortBinding{
+				{HostPort: publicHostPort},
+			},
+		}
 	}
 	req.WaitingFor = wait.ForListeningPort(sutPublicPort).WithStartupTimeout(containerStartTimeout)
 
@@ -393,6 +425,40 @@ func waitForReadiness(ctx context.Context, readinessURL string, sut testcontaine
 
 	return fmt.Errorf("SUT did not become ready at %s within %s: %w, logs:\n%s",
 		readinessURL, readinessTimeout, lastErr, containerLogs(ctx, sut))
+}
+
+// dockerDaemonHost resolves the address (IP or name) of the Docker daemon
+// that will run the SUT container, independent of any specific container.
+// It mirrors what testcontainers.Container.Host would return once the SUT
+// exists, letting the caller build the issuer URL before the container
+// starts.
+func dockerDaemonHost(ctx context.Context) (string, error) {
+	provider, err := testcontainers.NewDockerProvider()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = provider.Close() }()
+	return provider.DaemonHost(ctx)
+}
+
+// reserveHostPort finds a currently-free TCP port on the host by binding to
+// port 0 and immediately releasing it, so it can be handed to Docker as an
+// explicit host port binding before the SUT container exists. This has an
+// inherent TOCTOU race (something else could grab the port between release
+// and the container starting) but that is the standard, accepted pattern
+// for pinning a not-yet-existing process's port in test infrastructure.
+func reserveHostPort() (string, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", fmt.Errorf("reserve free port: %w", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		return "", fmt.Errorf("unexpected listener address type %T", l.Addr())
+	}
+	return fmt.Sprintf("%d", addr.Port), nil
 }
 
 // containerBaseURL resolves a container's mapped host port into an
