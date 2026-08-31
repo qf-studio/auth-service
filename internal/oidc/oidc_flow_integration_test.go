@@ -225,6 +225,10 @@ func (s *oidcStack) idTokenIssuer(t *testing.T, idToken string) string {
 // challenge method, unregistered redirect_uri, and the confidential client
 // secret path.
 func TestOIDCFlow_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping testcontainers-backed OIDC integration test in short mode (requires Docker)")
+	}
+
 	stack := setupOIDCStack(t)
 	ctx := context.Background()
 

@@ -24,3 +24,34 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          tags: auth-service:e2e
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run e2e tests
+        env:
+          E2E_IMAGE: auth-service:e2e
+        run: go test ./e2e/ -v -timeout 20m
