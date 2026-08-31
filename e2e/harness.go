@@ -82,6 +82,26 @@ type Env struct {
 	// DEVELOPMENT-README Current Focus) — but the env wiring is already in
 	// place so a future fix needs no harness changes.
 	HIBP *mocks.HIBPMock
+
+	// PostgresDSN is a host-reachable connection string for the shared
+	// Postgres testcontainer, for wiring-assertion tests (GH-494) that need
+	// to query tables directly (e.g. schema_migrations, audit_logs) rather
+	// than through the SUT's HTTP API.
+	PostgresDSN string
+
+	// dockerNetworkName is the Docker network the shared Postgres/Redis/SUT
+	// containers run on. Negative-path tests (GH-494) that need a
+	// differently configured SUT (e.g. a short access-token TTL or a tight
+	// rate limit) start a second SUT container on this same network via
+	// startSecondarySUT instead of paying for a whole redundant
+	// Postgres+Redis stack.
+	dockerNetworkName string
+
+	// redisContainer is the shared suite's Redis container, exposed so the
+	// liveness-vs-readiness negative test (GH-494) can pause/unpause it
+	// directly (Docker pause, not Stop/Terminate) to simulate a dependency
+	// outage without tearing anything down.
+	redisContainer testcontainers.Container
 }
 
 // suiteResources holds everything setupSuite starts, so teardownSuite can
@@ -183,15 +203,40 @@ func setupSuite(ctx context.Context) (*Env, func(), error) {
 		return nil, teardown, err
 	}
 
+	postgresDSN, err := hostPostgresDSN(ctx, pgContainer)
+	if err != nil {
+		return nil, teardown, err
+	}
+
 	env := &Env{
-		PublicBaseURL: publicBaseURL,
-		AdminBaseURL:  adminBaseURL,
-		GRPCAddr:      grpcAddr,
-		HTTPClient:    &http.Client{Timeout: 15 * time.Second},
-		EmailSink:     res.emailMock,
-		HIBP:          res.hibpMock,
+		PublicBaseURL:     publicBaseURL,
+		AdminBaseURL:      adminBaseURL,
+		GRPCAddr:          grpcAddr,
+		HTTPClient:        &http.Client{Timeout: 15 * time.Second},
+		EmailSink:         res.emailMock,
+		HIBP:              res.hibpMock,
+		PostgresDSN:       postgresDSN,
+		dockerNetworkName: nw.Name,
+		redisContainer:    redisContainer,
 	}
 	return env, teardown, nil
+}
+
+// hostPostgresDSN resolves the shared Postgres testcontainer's host-mapped
+// port into a DSN reachable from the test process itself (as opposed to
+// databaseURL above, which uses the in-network alias reachable only from
+// other containers on nw).
+func hostPostgresDSN(ctx context.Context, pg testcontainers.Container) (string, error) {
+	host, err := pg.Host(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve postgres host: %w", err)
+	}
+	mapped, err := pg.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		return "", fmt.Errorf("resolve postgres mapped port: %w", err)
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		fakePostgresUser, fakePostgresPassword, host, mapped.Port(), fakePostgresDB), nil
 }
 
 // startMocks starts the host-bound HIBP/email fakes and resolves the ports
@@ -279,31 +324,15 @@ func runMigrations(ctx context.Context, repoRoot, networkName, databaseURL strin
 	return nil
 }
 
-// startSUT builds/pulls the SUT image, mounts the generated ES256 key, and
-// starts the server container on networkName. hibpPort/emailPort are the
-// host ports the HIBPMock/EmailSinkMock fakes are listening on; the SUT
-// reaches them via testcontainers host-port access
-// (host.testcontainers.internal) exactly as it would reach the real
-// services. publicHostPort pins the host-side mapping of the SUT's public
-// port so it matches issuerURL (already computed by the caller and handed
-// to the SUT as OIDC_ISSUER_URL) instead of letting Docker pick a random
-// one. It does not itself wait for application readiness (see
-// waitForReadiness); it only waits for the public port to start listening
-// so the caller can begin polling.
-func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hibpPort, emailPort int, publicHostPort, issuerURL string) (testcontainers.Container, error) {
-	req := imageRequest(repoRoot)
-	req.ExposedPorts = []string{sutPublicPort, sutAdminPort, sutGRPCPort}
-	req.Networks = []string{networkName}
-	req.NetworkAliases = map[string][]string{networkName: {"auth-service"}}
-	req.HostAccessPorts = []int{hibpPort, emailPort}
-	req.Files = []testcontainers.ContainerFile{
-		{
-			HostFilePath:      hostKeyPath,
-			ContainerFilePath: containerKeyPath,
-			FileMode:          0o644,
-		},
-	}
-	req.Env = map[string]string{
+// baseSUTEnv returns the full environment every SUT container needs to boot
+// (the shared suite's primary instance, or a secondary negative-path
+// instance started by startSecondarySUT), pointed at the given HIBP/email
+// mock ports and issuer URL. Callers that need a config value the shared
+// suite doesn't otherwise set (e.g. a short access-token TTL or a tight
+// rate limit for GH-494's negative-path tests) layer overrides on top with
+// mergeEnv rather than duplicating this map.
+func baseSUTEnv(hibpPort, emailPort int, issuerURL string) map[string]string {
+	return map[string]string{
 		"APP_ENV":                 "development",
 		"LOG_LEVEL":               "info",
 		"POSTGRES_HOST":           postgresAlias,
@@ -329,6 +358,58 @@ func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hi
 		"OIDC_ISSUER_URL":         issuerURL,
 		"OIDC_LOGIN_UI_URL":       fakeOIDCLoginUIURL,
 	}
+}
+
+// mergeEnv returns a new map with every key of overrides layered on top of
+// base (overrides wins on key collision), leaving both inputs untouched.
+func mergeEnv(base, overrides map[string]string) map[string]string {
+	merged := make(map[string]string, len(base)+len(overrides))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range overrides {
+		merged[k] = v
+	}
+	return merged
+}
+
+// startSUT builds/pulls the SUT image, mounts the generated ES256 key, and
+// starts the server container on networkName. hibpPort/emailPort are the
+// host ports the HIBPMock/EmailSinkMock fakes are listening on; the SUT
+// reaches them via testcontainers host-port access
+// (host.testcontainers.internal) exactly as it would reach the real
+// services. publicHostPort pins the host-side mapping of the SUT's public
+// port so it matches issuerURL (already computed by the caller and handed
+// to the SUT as OIDC_ISSUER_URL) instead of letting Docker pick a random
+// one. It does not itself wait for application readiness (see
+// waitForReadiness); it only waits for the public port to start listening
+// so the caller can begin polling.
+func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hibpPort, emailPort int, publicHostPort, issuerURL string) (testcontainers.Container, error) {
+	env := baseSUTEnv(hibpPort, emailPort, issuerURL)
+	return runSUTContainer(ctx, repoRoot, networkName, hostKeyPath, publicHostPort, env, []int{hibpPort, emailPort})
+}
+
+// runSUTContainer starts a SUT container on networkName using env as its
+// full environment, mounting the ES256 key at hostKeyPath and pinning the
+// public port's host-side mapping to publicHostPort. hostAccessPorts are
+// the host ports (HIBP/email mocks) the SUT reaches via
+// testcontainers.HostInternal. It does not wait for application readiness
+// (see waitForReadiness); it only waits for the public port to start
+// listening so the caller can begin polling.
+func runSUTContainer(ctx context.Context, repoRoot, networkName, hostKeyPath, publicHostPort string, env map[string]string, hostAccessPorts []int) (testcontainers.Container, error) {
+	req := imageRequest(repoRoot)
+	req.ExposedPorts = []string{sutPublicPort, sutAdminPort, sutGRPCPort}
+	req.Networks = []string{networkName}
+	req.NetworkAliases = map[string][]string{networkName: {"auth-service"}}
+	req.HostAccessPorts = hostAccessPorts
+	req.Files = []testcontainers.ContainerFile{
+		{
+			HostFilePath:      hostKeyPath,
+			ContainerFilePath: containerKeyPath,
+			FileMode:          0o644,
+		},
+	}
+	req.Env = env
 	req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
 		hc.PortBindings = dockernetwork.PortMap{
 			dockernetwork.MustParsePort(sutPublicPort): []dockernetwork.PortBinding{
@@ -372,6 +453,102 @@ func sutEndpoints(ctx context.Context, sut testcontainers.Container) (publicBase
 		return "", "", "", fmt.Errorf("resolve SUT grpc port: %w", err)
 	}
 	return publicBaseURL, adminBaseURL, fmt.Sprintf("%s:%s", grpcHost, grpcPort.Port()), nil
+}
+
+// secondarySUT is a standalone SUT container for negative-path tests
+// (GH-494) that need config the shared suite intentionally doesn't set
+// (e.g. a seconds-level access-token TTL, or a tight rate limit) without
+// the blast radius of mutating the shared suite's config for every other
+// test. It reuses the shared suite's Postgres/Redis containers (same
+// Docker network, same DB) instead of paying for a whole redundant stack —
+// only the SUT process itself, plus its own signing key and HIBP/email
+// mocks (a fresh key is fine: each SUT only ever verifies tokens it issued
+// itself), is per-instance.
+type secondarySUT struct {
+	PublicBaseURL string
+	HTTPClient    *http.Client
+}
+
+// startSecondarySUT boots another SUT container on env.dockerNetworkName —
+// same Postgres/Redis, fresh signing key and HIBP/email mocks — merging
+// envOverrides on top of the same defaults startSUT uses for the primary
+// instance. Must only be called after setupSuite has succeeded (it needs
+// the shared network to already exist), i.e. from within a test, never
+// from TestMain.
+func startSecondarySUT(ctx context.Context, env *Env, envOverrides map[string]string) (*secondarySUT, func(), error) {
+	var (
+		keyDir    string
+		hibpMock  *mocks.HIBPMock
+		emailMock *mocks.EmailSinkMock
+		sut       testcontainers.Container
+	)
+	teardown := func() {
+		if sut != nil {
+			_ = testcontainers.TerminateContainer(sut)
+		}
+		if hibpMock != nil {
+			hibpMock.Close()
+		}
+		if emailMock != nil {
+			emailMock.Close()
+		}
+		if keyDir != "" {
+			_ = os.RemoveAll(keyDir)
+		}
+	}
+
+	repoRoot, err := repoRoot()
+	if err != nil {
+		return nil, teardown, fmt.Errorf("resolve repo root: %w", err)
+	}
+
+	keyDir, err = os.MkdirTemp("", "auth-e2e-secondary-keys-")
+	if err != nil {
+		return nil, teardown, fmt.Errorf("create temp key dir: %w", err)
+	}
+
+	hostKeyPath, err := generateES256KeyFile(keyDir)
+	if err != nil {
+		return nil, teardown, fmt.Errorf("generate ES256 test key: %w", err)
+	}
+
+	hibpMock = mocks.NewHIBPMock()
+	hibpPort, err := hibpMock.Port()
+	if err != nil {
+		return nil, teardown, fmt.Errorf("resolve HIBP mock port: %w", err)
+	}
+
+	emailMock = mocks.NewEmailSinkMock()
+	emailPort, err := emailMock.Port()
+	if err != nil {
+		return nil, teardown, fmt.Errorf("resolve email sink mock port: %w", err)
+	}
+
+	publicHostPort, issuerURL, err := reserveIssuerEndpoint(ctx)
+	if err != nil {
+		return nil, teardown, err
+	}
+
+	sutEnv := mergeEnv(baseSUTEnv(hibpPort, emailPort, issuerURL), envOverrides)
+
+	sut, err = runSUTContainer(ctx, repoRoot, env.dockerNetworkName, hostKeyPath, publicHostPort, sutEnv, []int{hibpPort, emailPort})
+	if err != nil {
+		return nil, teardown, fmt.Errorf("start secondary SUT container: %w", err)
+	}
+
+	publicBaseURL, err := containerBaseURL(ctx, sut, sutPublicPort)
+	if err != nil {
+		return nil, teardown, fmt.Errorf("resolve secondary SUT public endpoint: %w", err)
+	}
+
+	if err := waitForReadiness(ctx, publicBaseURL+"/readiness", sut); err != nil {
+		return nil, teardown, err
+	}
+
+	return &secondarySUT{
+		PublicBaseURL: publicBaseURL,
+		HTTPClient:    &http.Client{Timeout: 15 * time.Second},
+	}, teardown, nil
 }
 
 // reserveIssuerEndpoint resolves the docker daemon host and reserves a free
