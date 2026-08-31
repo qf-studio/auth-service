@@ -27,4 +27,19 @@ const (
 	// Must clear the NIST SP 800-63-4 15-character minimum (no composition
 	// rules apply); it is not a real credential for any account.
 	fakeUserPassword = "correct horse battery staple e2e" //nolint:gosec // fake, test-only
+
+	// fakeEmailAPIKey seeds EMAIL_API_KEY; the SUT's HTTPSender sends it as a
+	// bearer token to EmailSinkMock, which ignores it entirely.
+	fakeEmailAPIKey = "e2e-not-a-real-email-api-key" //nolint:gosec // fake, test-only
+
+	// fakeEmailSenderAddress seeds EMAIL_SENDER_ADDRESS (the From header on
+	// outgoing mail).
+	fakeEmailSenderAddress = "e2e-noreply@example.invalid"
+
+	// fakePasswordResetURLBase/fakeEmailVerifyURLBase seed
+	// PASSWORD_RESET_URL_BASE/EMAIL_VERIFY_URL_BASE. Only the "?token=..."
+	// suffix the SUT appends is ever used (EmailSinkMock.ExtractToken pulls
+	// it out of the email body); these base URLs never need to resolve.
+	fakePasswordResetURLBase = "http://e2e.invalid/reset-password" //nolint:gosec // fake, test-only (URL, not a credential)
+	fakeEmailVerifyURLBase   = "http://e2e.invalid/verify-email"
 )

@@ -159,6 +159,7 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `EMAIL_SENDER_ADDRESS` | _(empty)_ | From address for outgoing mail (required when `EMAIL_ENABLED=true`) |
 | `PASSWORD_RESET_URL_BASE` | _(empty)_ | Base URL password reset links are built from: `<base>?token=<token>` (required when `EMAIL_ENABLED=true`) |
 | `EMAIL_VERIFY_URL_BASE` | _(empty)_ | Base URL email verification links are built from: `<base>?token=<token>` (required when `EMAIL_ENABLED=true`) |
+| `HIBP_API_URL` | _(empty)_ | Pwned Passwords range-endpoint base URL override; empty uses the real `api.pwnedpasswords.com` API (used to redirect at a fake server in tests) |
 | `DPOP_ENABLED` | `false` | Enable DPoP proof binding |
 | `DPOP_NONCE_TTL` | `5m` | DPoP nonce lifetime |
 | `DPOP_JTI_WINDOW` | `1m` | DPoP replay window |

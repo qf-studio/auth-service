@@ -29,6 +29,8 @@ import (
 
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+
+	"github.com/qf-studio/auth-service/e2e/mocks"
 )
 
 const (
@@ -61,17 +63,34 @@ type Env struct {
 	AdminBaseURL  string
 	GRPCAddr      string // host:port
 	HTTPClient    *http.Client
+
+	// EmailSink captures every message the SUT sends via the email-service
+	// API (EMAIL_ENABLED=true, EMAIL_SERVICE_URL wired at it over
+	// testcontainers host-port access), so email-dependent flows
+	// (verify-email, password reset) can pull the link/token out instead of
+	// needing a real mail transport.
+	EmailSink *mocks.EmailSinkMock
+
+	// HIBP is the fake Pwned Passwords range endpoint the SUT's HIBP client
+	// is pointed at (HIBP_API_URL). No golden-path flow drives it today —
+	// internal/auth.Service never calls the breach checker yet
+	// ("HIBP never called", tracked as a review-003 wave-2 gap — see
+	// DEVELOPMENT-README Current Focus) — but the env wiring is already in
+	// place so a future fix needs no harness changes.
+	HIBP *mocks.HIBPMock
 }
 
 // suiteResources holds everything setupSuite starts, so teardownSuite can
 // release it in reverse order. It is unexported: flow tests only ever see
 // the Env returned alongside it.
 type suiteResources struct {
-	sut      testcontainers.Container
-	postgres testcontainers.Container
-	redis    testcontainers.Container
-	nw       *testcontainers.DockerNetwork
-	keyDir   string
+	sut       testcontainers.Container
+	postgres  testcontainers.Container
+	redis     testcontainers.Container
+	nw        *testcontainers.DockerNetwork
+	keyDir    string
+	hibpMock  *mocks.HIBPMock
+	emailMock *mocks.EmailSinkMock
 }
 
 // setupSuite boots Postgres, Redis, and the SUT image on a shared Docker
@@ -131,7 +150,16 @@ func setupSuite(ctx context.Context) (*Env, func(), error) {
 		return nil, teardown, fmt.Errorf("run migrations: %w", err)
 	}
 
-	sutContainer, err := startSUT(ctx, repoRoot, nw.Name, hostKeyPath)
+	// External-service fakes: started on the host (not the Docker network)
+	// and reached by the SUT container over testcontainers host-port access
+	// (host.testcontainers.internal), exactly as it would reach the real
+	// HIBP/email services.
+	hibpPort, emailPort, err := startMocks(&res)
+	if err != nil {
+		return nil, teardown, err
+	}
+
+	sutContainer, err := startSUT(ctx, repoRoot, nw.Name, hostKeyPath, hibpPort, emailPort)
 	if err != nil {
 		return nil, teardown, fmt.Errorf("start SUT container: %w", err)
 	}
@@ -163,8 +191,32 @@ func setupSuite(ctx context.Context) (*Env, func(), error) {
 		AdminBaseURL:  adminBaseURL,
 		GRPCAddr:      fmt.Sprintf("%s:%s", grpcHost, grpcPort.Port()),
 		HTTPClient:    &http.Client{Timeout: 15 * time.Second},
+		EmailSink:     res.emailMock,
+		HIBP:          res.hibpMock,
 	}
 	return env, teardown, nil
+}
+
+// startMocks starts the host-bound HIBP/email fakes and resolves the ports
+// the SUT reaches them on via testcontainers host-port access. Resources are
+// registered on res as soon as they're created so teardownSuite releases
+// them even if port resolution subsequently fails.
+func startMocks(res *suiteResources) (hibpPort, emailPort int, err error) {
+	hibpMock := mocks.NewHIBPMock()
+	res.hibpMock = hibpMock
+	hibpPort, err = hibpMock.Port()
+	if err != nil {
+		return 0, 0, fmt.Errorf("resolve HIBP mock port: %w", err)
+	}
+
+	emailMock := mocks.NewEmailSinkMock()
+	res.emailMock = emailMock
+	emailPort, err = emailMock.Port()
+	if err != nil {
+		return 0, 0, fmt.Errorf("resolve email sink mock port: %w", err)
+	}
+
+	return hibpPort, emailPort, nil
 }
 
 // teardownSuite terminates every container and removes the network,
@@ -189,6 +241,12 @@ func teardownSuite(res *suiteResources) {
 	}
 	if res.keyDir != "" {
 		_ = os.RemoveAll(res.keyDir)
+	}
+	if res.hibpMock != nil {
+		res.hibpMock.Close()
+	}
+	if res.emailMock != nil {
+		res.emailMock.Close()
 	}
 }
 
@@ -225,14 +283,19 @@ func runMigrations(ctx context.Context, repoRoot, networkName, databaseURL strin
 }
 
 // startSUT builds/pulls the SUT image, mounts the generated ES256 key, and
-// starts the server container on networkName. It does not itself wait for
-// application readiness (see waitForReadiness); it only waits for the
-// public port to start listening so the caller can begin polling.
-func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string) (testcontainers.Container, error) {
+// starts the server container on networkName. hibpPort/emailPort are the
+// host ports the HIBPMock/EmailSinkMock fakes are listening on; the SUT
+// reaches them via testcontainers host-port access
+// (host.testcontainers.internal) exactly as it would reach the real
+// services. It does not itself wait for application readiness (see
+// waitForReadiness); it only waits for the public port to start listening
+// so the caller can begin polling.
+func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hibpPort, emailPort int) (testcontainers.Container, error) {
 	req := imageRequest(repoRoot)
 	req.ExposedPorts = []string{sutPublicPort, sutAdminPort, sutGRPCPort}
 	req.Networks = []string{networkName}
 	req.NetworkAliases = map[string][]string{networkName: {"auth-service"}}
+	req.HostAccessPorts = []int{hibpPort, emailPort}
 	req.Files = []testcontainers.ContainerFile{
 		{
 			HostFilePath:      hostKeyPath,
@@ -241,21 +304,28 @@ func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string) (t
 		},
 	}
 	req.Env = map[string]string{
-		"APP_ENV":              "development",
-		"LOG_LEVEL":            "info",
-		"POSTGRES_HOST":        postgresAlias,
-		"POSTGRES_PORT":        "5432",
-		"POSTGRES_DB":          fakePostgresDB,
-		"POSTGRES_USER":        fakePostgresUser,
-		"POSTGRES_PASSWORD":    fakePostgresPassword,
-		"POSTGRES_SSLMODE":     "disable",
-		"REDIS_HOST":           redisAlias,
-		"REDIS_PORT":           "6379",
-		"JWT_PRIVATE_KEY_PATH": containerKeyPath,
-		"JWT_ALGORITHM":        "ES256",
-		"SYSTEM_SECRETS":       fakeSystemSecret,
-		"PASSWORD_PEPPER":      fakePasswordPepper,
-		"CORS_ALLOWED_ORIGINS": fakeCORSOrigin,
+		"APP_ENV":                 "development",
+		"LOG_LEVEL":               "info",
+		"POSTGRES_HOST":           postgresAlias,
+		"POSTGRES_PORT":           "5432",
+		"POSTGRES_DB":             fakePostgresDB,
+		"POSTGRES_USER":           fakePostgresUser,
+		"POSTGRES_PASSWORD":       fakePostgresPassword,
+		"POSTGRES_SSLMODE":        "disable",
+		"REDIS_HOST":              redisAlias,
+		"REDIS_PORT":              "6379",
+		"JWT_PRIVATE_KEY_PATH":    containerKeyPath,
+		"JWT_ALGORITHM":           "ES256",
+		"SYSTEM_SECRETS":          fakeSystemSecret,
+		"PASSWORD_PEPPER":         fakePasswordPepper,
+		"CORS_ALLOWED_ORIGINS":    fakeCORSOrigin,
+		"HIBP_API_URL":            fmt.Sprintf("http://%s:%d/range/", testcontainers.HostInternal, hibpPort),
+		"EMAIL_ENABLED":           "true",
+		"EMAIL_SERVICE_URL":       fmt.Sprintf("http://%s:%d", testcontainers.HostInternal, emailPort),
+		"EMAIL_API_KEY":           fakeEmailAPIKey,
+		"EMAIL_SENDER_ADDRESS":    fakeEmailSenderAddress,
+		"PASSWORD_RESET_URL_BASE": fakePasswordResetURLBase,
+		"EMAIL_VERIFY_URL_BASE":   fakeEmailVerifyURLBase,
 	}
 	req.WaitingFor = wait.ForListeningPort(sutPublicPort).WithStartupTimeout(containerStartTimeout)
 

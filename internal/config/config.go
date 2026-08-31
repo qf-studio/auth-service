@@ -27,6 +27,7 @@ type Config struct {
 	OIDC         OIDCConfig
 	SAML         SAMLConfig
 	Tenant       TenantConfig
+	HIBP         HIBPConfig
 }
 
 // TenantConfig holds multi-tenancy resolution settings.
@@ -86,6 +87,11 @@ type DPoPConfig struct {
 	Enabled   bool          // DPOP_ENABLED: whether DPoP proof binding is active
 	NonceTTL  time.Duration // DPOP_NONCE_TTL: lifetime of server-issued nonces
 	JTIWindow time.Duration // DPOP_JTI_WINDOW: replay window for proof JTI deduplication
+}
+
+// HIBPConfig holds HaveIBeenPwned Pwned Passwords API settings.
+type HIBPConfig struct {
+	APIURL string // HIBP_API_URL: base range-endpoint URL; empty uses internal/hibp's built-in pwnedpasswords.com default
 }
 
 // EmailConfig holds outbound email delivery settings.
@@ -300,6 +306,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	hibpCfg := loadHIBP(l)
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -326,7 +333,15 @@ func Load() (*Config, error) {
 		OIDC:         oidcCfg,
 		SAML:         samlCfg,
 		Tenant:       tenantCfg,
+		HIBP:         hibpCfg,
 	}, nil
+}
+
+// loadHIBP reads the optional HIBP range-endpoint override used to redirect
+// internal/hibp.Client at a fake server in tests; it has no required fields
+// so it never contributes to l.missing.
+func loadHIBP(l *loader) HIBPConfig {
+	return HIBPConfig{APIURL: l.optStr("HIBP_API_URL", "")}
 }
 
 func loadApp(l *loader) (AppConfig, error) {

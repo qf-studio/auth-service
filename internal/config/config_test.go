@@ -695,6 +695,24 @@ func TestLoad_SAMLInvalidEnabled(t *testing.T) {
 	assert.Contains(t, err.Error(), "SAML_ENABLED")
 }
 
+func TestLoad_HIBPDefault(t *testing.T) {
+	setEnv(t, requiredEnv())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Empty(t, cfg.HIBP.APIURL)
+}
+
+func TestLoad_HIBPAPIURLOverride(t *testing.T) {
+	env := requiredEnv()
+	env["HIBP_API_URL"] = "http://127.0.0.1:9999/range/"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1:9999/range/", cfg.HIBP.APIURL)
+}
+
 func BenchmarkLoad(b *testing.B) {
 	for k, v := range requiredEnv() {
 		b.Setenv(k, v)
