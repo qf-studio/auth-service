@@ -54,7 +54,7 @@
 ## Current Focus
 
 ### Status (2026-08-31)
-The original 3-phase plan (41 issues) is **fully delivered**. Latest release: **v0.71.1** (2026-08-31 train: review-003 wave 1, PRs #489-492 — patch bump since all commits were `fix:`-typed). Releases are cut by Pilot autopilot's release train (daily 16:00 Europe/Berlin, semver from conventional-commit types), not manually, since 2026-08-03. Work is issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
+The original 3-phase plan (41 issues) is **fully delivered**. Latest release: **v0.71.2** (2026-08-31, manual cut ahead of the train: E2E suite A1-A4 + MFA-enrollment fix). Before that v0.71.1 (train, review-003 wave 1, PRs #489-492). Releases are cut by Pilot autopilot's release train (daily 16:00 Europe/Berlin, semver from conventional-commit types), not manually, since 2026-08-03. Work is issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
 
 **Recently landed** (on main 2026-08-30, review-003 wave 1 — external feature-inventory audit, verified 0/39 claims wrong; specs `tasks/gh-485..488.md`):
 - GH-485 (PR #489): migration 000019 `api_keys` (table never existed!) + API-key hashing switched Argon2id→SHA-256 digest so indexed lookup works (validation previously always 401'd)
