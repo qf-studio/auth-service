@@ -63,6 +63,7 @@ The original 3-phase plan (41 issues) is **fully delivered**. Latest release: **
 - GH-488 (PR #491): post-MFA tokens carry roles (UserLookup injected), MFA status check fails closed (AAL2), TOTP digits validated at startup + honored in verify; `mfa.NewService` now returns error
 - Full suite green locally with `-race` incl. testcontainers (2026-08-31)
 - Review-003 confirmed-unissued backlog (wave 2 candidates): in-memory sessions, audit_logs never written, HIBP never called, no auth on :4001, RLS unarmed, webhook Dispatch uncalled, scope allow-list on dead DTO, Casbin vs tenant_id, retention
+- **E2E & canary strategy planned** — see [`tasks/TASK-01-e2e-canary-strategy.md`](./tasks/TASK-01-e2e-canary-strategy.md): 3 layers (PR-gated E2E booting the Docker image / 6h canary repo vs published artifacts / staging re-point), issues A–D awaiting approval. Wave-2 fixes should land after issue B so each flips a skipped acceptance test.
 
 **Open issues**:
 | # | Title | Notes |
