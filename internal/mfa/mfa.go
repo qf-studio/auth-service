@@ -109,6 +109,18 @@ func NewService(
 func (s *Service) InitiateEnrollment(ctx context.Context, userID, email string) (*api.MFAEnrollmentResult, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
 
+	// Callers authenticated via a bearer access token (the normal case) have
+	// no email to hand in: JWT access token claims deliberately omit email
+	// (see domain.TokenClaims), so AuthMiddleware never populates it in the
+	// request context. Look it up instead of failing enrollment outright.
+	if email == "" {
+		user, err := s.users.FindByID(ctx, tenantID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("look up user for mfa enrollment: %w", err)
+		}
+		email = user.Email
+	}
+
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      s.cfg.Issuer,
 		AccountName: email,
