@@ -326,6 +326,7 @@ func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hi
 		"EMAIL_SENDER_ADDRESS":    fakeEmailSenderAddress,
 		"PASSWORD_RESET_URL_BASE": fakePasswordResetURLBase,
 		"EMAIL_VERIFY_URL_BASE":   fakeEmailVerifyURLBase,
+		"OIDC_LOGIN_UI_URL":       fakeOIDCLoginUIURL,
 	}
 	req.WaitingFor = wait.ForListeningPort(sutPublicPort).WithStartupTimeout(containerStartTimeout)
 

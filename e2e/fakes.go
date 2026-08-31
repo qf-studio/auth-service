@@ -42,4 +42,13 @@ const (
 	// it out of the email body); these base URLs never need to resolve.
 	fakePasswordResetURLBase = "http://e2e.invalid/reset-password" //nolint:gosec // fake, test-only (URL, not a credential)
 	fakeEmailVerifyURLBase   = "http://e2e.invalid/verify-email"
+
+	// fakeOIDCLoginUIURL seeds OIDC_LOGIN_UI_URL. ProviderService.Authorize
+	// refuses to run at all ("oidc provider misconfigured") when this is
+	// unset, so it must be set even though no test in this package ever
+	// dials it directly: the login/consent flow is driven entirely through
+	// the admin API (PUT /admin/oauth/auth/requests/login), and the redirect
+	// this URL anchors is only ever parsed for its login_challenge query
+	// param, never followed.
+	fakeOIDCLoginUIURL = "http://e2e.invalid/login"
 )
