@@ -3,7 +3,7 @@
 **Project**: Authentication service for QuantFlow Studio ecosystem
 **Tech Stack**: Go 1.24+, Gin, PostgreSQL (pgx/v5), Redis (go-redis/v9), JWT (ES256/EdDSA)
 **Repo**: github.com/qf-studio/auth-service
-**Updated**: 2026-07-27
+**Updated**: 2026-08-31
 
 ---
 
@@ -53,15 +53,16 @@
 
 ## Current Focus
 
-### Status (2026-07-27)
-The original 3-phase plan (41 issues) is **fully delivered**. The service is at **v0.70.0** (tag `84e758a`, release green incl. in-image migration dry-run): full OIDC provider (GH-431) + token-type hardening (GH-473). Pointer still runs pre-v0.69.0 — told to skip straight to v0.70.0 (see #465 comment). Work is issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
+### Status (2026-08-31)
+The original 3-phase plan (41 issues) is **fully delivered**. Latest release: **v0.71.0** (email wiring GH-477/478, gRPC port GH-483); **v0.72.0 expected 2026-08-31 ~14:00 UTC** via Pilot autopilot's release train (daily 16:00 Europe/Berlin — releases are cut by the train, not manually, since 2026-08-03). Work is issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
 
-**Recently landed** (on main, 2026-07-27, post-v0.69.0):
-- GH-431 (OIDC provider) complete via children GH-467→470, PRs #471/#472/#474/#475:
-  - `internal/oidc/`: Redis-backed one-time login/consent challenges + auth codes (GETDEL), ProviderService (discovery/authorize/exchange/userinfo), ConsentService (Hydra-style admin login/consent API), ApprovalService (third-party clients, suspended-until-approved)
-  - Migration 000018 `consent_grants` (remembered consent; one active grant per tenant+user+client, upsert on re-consent)
-  - `iss` now sourced from `OIDC_ISSUER_URL` (was hardcoded — GH-468); `IssueIDToken` on token.Service; new env: `OIDC_LOGIN_UI_URL` (required for the flow), `OIDC_CONSENT_UI_URL` (defaults to login UI)
-  - Testcontainers e2e flow tests (require Docker, no skip guard)
+**Recently landed** (on main 2026-08-30, review-003 wave 1 — external feature-inventory audit, verified 0/39 claims wrong; specs `tasks/gh-485..488.md`):
+- GH-485 (PR #489): migration 000019 `api_keys` (table never existed!) + API-key hashing switched Argon2id→SHA-256 digest so indexed lookup works (validation previously always 401'd)
+- GH-486 (PR #492): refresh-token introspection fixed — `domain.RefreshTokenSignature` helper, login stores signature-only with configured TTL, rotation revokes-old/inserts-new in Postgres, logout takes optional `refresh_token` body field
+- GH-487 (PR #490): `deploy.sh` migrations now actually run (`compose run --rm --entrypoint /auth-migrate auth-service up`), hard-fail before restart
+- GH-488 (PR #491): post-MFA tokens carry roles (UserLookup injected), MFA status check fails closed (AAL2), TOTP digits validated at startup + honored in verify; `mfa.NewService` now returns error
+- Full suite green locally with `-race` incl. testcontainers (2026-08-31)
+- Review-003 confirmed-unissued backlog (wave 2 candidates): in-memory sessions, audit_logs never written, HIBP never called, no auth on :4001, RLS unarmed, webhook Dispatch uncalled, scope allow-list on dead DTO, Casbin vs tenant_id, retention
 
 **Open issues**:
 | # | Title | Notes |
@@ -69,7 +70,8 @@ The original 3-phase plan (41 issues) is **fully delivered**. The service is at 
 | #447 | Move Pointer AWS deploy workflow to private infra repo | Security: self-hosted runner on public repo; needs infra-repo + org-admin access |
 | #465 | Pointer consumer actions (now targets v0.70.0) | Consolidated checklist in comments: deploy v0.70.0 directly (skip v0.69.0), aud two-step, SPA as public client, OIDC_LOGIN_UI_URL, iss warning. Live instance predates v0.69.0; Nelya pinged in Slack #pointer 2026-07-27 |
 
-**Pilot operational notes** (bugs observed 2026-07-25/27; instance upgraded to v2.246.1 + restarted 2026-07-27 12:46 UTC):
+**Pilot operational notes** (instance at v2.271.2 as of 2026-08-30):
+0. Base-presence check (new, observed 2026-08-30): specs referencing a file path that doesn't exist on main verbatim get silently held ~2h then labeled `pilot-needs-human` with NO issue comment. Use full repo-relative paths in specs. Recovery: fix path, `gh issue edit NN --body-file <doc> --remove-label pilot-needs-human`, wait out repick backoff (~8-15 min).
 1. Post-PR state loss: worker can die after opening a PR without closing the child issue → repick loop → `pilot-blocked` with all work actually done in open PRs. Check `gh pr list` before re-arming. Unverified against v2.246.1.
 2. ~~False completion via merged-PR title scan~~ **RESOLVED**: the title-based completion scan was removed in Pilot v2.237.0 (pilot PRs #4178/#4192); running instance is v2.246.1, so this can no longer occur. Historical remediation (needed only on pre-v2.237 instances): retitle merged PRs matching `"GH-NN" in:title`, then remove the bogus `pilot-done` once.
 3. Stale worker file state: PR branches can carry (a) reverts of files fixed on main after the branch was cut — #475 silently reverted a reviewed bugfix from #474 — and (b) polluted meta files (`.claude/settings.json` worker hook paths, stale `.agent/` doc restores). Before merging a Pilot PR: `git diff origin/main <branch>` (not the GitHub compare, which can show a stale merge base) and `git checkout origin/main -- <file>` the regressions on the branch. Unverified against v2.246.1 — keep checking.
