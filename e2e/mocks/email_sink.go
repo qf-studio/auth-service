@@ -126,22 +126,39 @@ func ExtractToken(body string) (string, bool) {
 	return match[1], true
 }
 
+// ExtractTokenFrom pulls the token query-parameter value out of the first
+// link in body that starts with linkBase. Anchoring on the base matters:
+// register and password-reset both email "<base>?token=<token>" links to
+// the same address, and an unanchored extraction returns whichever email
+// landed first (the register-time verification mail), not the one the
+// caller is waiting for.
+func ExtractTokenFrom(body, linkBase string) (string, bool) {
+	re := regexp.MustCompile(regexp.QuoteMeta(linkBase) + `\?token=([^\s&]+)`)
+	match := re.FindStringSubmatch(body)
+	if match == nil {
+		return "", false
+	}
+	return match[1], true
+}
+
 // WaitForToken polls MessagesTo(to) until a message containing a token link
-// arrives or timeout elapses, returning the extracted token. Polling (not a
-// fixed sleep) keeps this robust regardless of how long email delivery
-// takes to land in the sink.
-func (m *EmailSinkMock) WaitForToken(ctx context.Context, to string, timeout time.Duration) (string, error) {
+// starting with linkBase arrives or timeout elapses, returning the
+// extracted token. The linkBase filter distinguishes verification emails
+// from password-reset emails sent to the same recipient (see
+// ExtractTokenFrom). Polling (not a fixed sleep) keeps this robust
+// regardless of how long email delivery takes to land in the sink.
+func (m *EmailSinkMock) WaitForToken(ctx context.Context, to, linkBase string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	const pollInterval = 50 * time.Millisecond
 
 	for {
 		for _, msg := range m.MessagesTo(to) {
-			if token, ok := ExtractToken(msg.Body); ok {
+			if token, ok := ExtractTokenFrom(msg.Body, linkBase); ok {
 				return token, nil
 			}
 		}
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("mocks: no token email received for %q within %s", to, timeout)
+			return "", fmt.Errorf("mocks: no email with a %s?token= link received for %q within %s", linkBase, to, timeout)
 		}
 		select {
 		case <-ctx.Done():

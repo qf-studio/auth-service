@@ -91,16 +91,50 @@ func TestEmailSinkMock_WaitForToken_Success(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	token, err := m.WaitForToken(ctx, "user@example.com", time.Second)
+	token, err := m.WaitForToken(ctx, "user@example.com", "https://app.example.com/reset", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, "xyz789", token)
+}
+
+// TestEmailSinkMock_WaitForToken_FiltersByLinkBase is a regression test for
+// the GH-497 CI failure: register sends a verification email BEFORE the
+// password-reset email to the same address, and an unanchored WaitForToken
+// returned the verification token, which the reset-confirm endpoint
+// rejected with 401.
+func TestEmailSinkMock_WaitForToken_FiltersByLinkBase(t *testing.T) {
+	m := NewEmailSinkMock()
+	defer m.Close()
+
+	postSend(t, m.URL(), sendEmailRequest{
+		From:    "noreply@example.com",
+		To:      []string{"user@example.com"},
+		Subject: "Verify your email",
+		Body:    "Link: https://app.example.com/verify?token=verify123",
+	})
+	postSend(t, m.URL(), sendEmailRequest{
+		From:    "noreply@example.com",
+		To:      []string{"user@example.com"},
+		Subject: "Reset your password",
+		Body:    "Link: https://app.example.com/reset?token=reset456",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	token, err := m.WaitForToken(ctx, "user@example.com", "https://app.example.com/reset", time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, "reset456", token, "must return the reset token, not the earlier verification token")
+
+	token, err = m.WaitForToken(ctx, "user@example.com", "https://app.example.com/verify", time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, "verify123", token)
 }
 
 func TestEmailSinkMock_WaitForToken_Timeout(t *testing.T) {
 	m := NewEmailSinkMock()
 	defer m.Close()
 
-	_, err := m.WaitForToken(context.Background(), "nobody@example.com", 50*time.Millisecond)
+	_, err := m.WaitForToken(context.Background(), "nobody@example.com", "https://app.example.com/reset", 50*time.Millisecond)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nobody@example.com")
 }

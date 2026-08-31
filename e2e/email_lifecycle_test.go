@@ -65,7 +65,7 @@ func TestGoldenPath_RegisterVerifyLoginRefreshIntrospectLogout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitForTokenTimeout)
 	defer cancel()
 
-	verifyToken, err := suite.EmailSink.WaitForToken(ctx, email, waitForTokenTimeout)
+	verifyToken, err := suite.EmailSink.WaitForToken(ctx, email, fakeEmailVerifyURLBase, waitForTokenTimeout)
 	require.NoError(t, err, "waiting for verification email")
 	require.NotEmpty(t, verifyToken)
 

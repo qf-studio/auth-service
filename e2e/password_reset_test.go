@@ -60,7 +60,7 @@ func TestGoldenPath_PasswordReset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitForTokenTimeout)
 	defer cancel()
 
-	resetToken, err := suite.EmailSink.WaitForToken(ctx, email, waitForTokenTimeout)
+	resetToken, err := suite.EmailSink.WaitForToken(ctx, email, fakePasswordResetURLBase, waitForTokenTimeout)
 	require.NoError(t, err, "waiting for password reset email")
 	require.NotEmpty(t, resetToken)
 
