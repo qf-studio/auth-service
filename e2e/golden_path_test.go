@@ -19,11 +19,14 @@ type registerResponse struct {
 }
 
 // authResponse mirrors api.AuthResult's JSON shape (the fields the golden
-// path cares about; omitempty fields not exercised here are left zero).
+// path and MFA flow tests care about; omitempty fields not exercised here
+// are left zero).
 type authResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	UserID       string `json:"user_id"`
+	MFARequired  bool   `json:"mfa_required,omitempty"`
+	MFAToken     string `json:"mfa_token,omitempty"`
 }
 
 // TestGoldenPath_RegisterLoginMeRefreshLogout proves the harness end to

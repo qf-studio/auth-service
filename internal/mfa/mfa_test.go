@@ -244,6 +244,45 @@ func TestInitiateEnrollment_Success(t *testing.T) {
 	assert.False(t, savedSecret.Confirmed)
 }
 
+// TestInitiateEnrollment_LooksUpEmailWhenCallerOmitsIt guards against a real
+// bug: bearer-authenticated requests (the only way this handler is ever
+// reached in production) never carry an email in the request context, since
+// JWT access token claims deliberately omit it. If InitiateEnrollment
+// trusted an empty caller-supplied email outright, TOTP key generation would
+// fail every time. It must fall back to looking the user up.
+func TestInitiateEnrollment_LooksUpEmailWhenCallerOmitsIt(t *testing.T) {
+	repo := &mockMFARepository{}
+	users := &mockUserLookup{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
+			return &domain.User{ID: id, Email: "looked-up@example.com"}, nil
+		},
+	}
+
+	svc := newTestServiceWithUsers(repo, &mockMFATokenStore{}, &mockTokenIssuer{}, users)
+
+	result, err := svc.InitiateEnrollment(context.Background(), "user-1", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Contains(t, result.URI, "looked-up@example.com")
+}
+
+// TestInitiateEnrollment_EmailLookupFailurePropagates ensures a failed user
+// lookup (during the empty-email fallback) surfaces as an error instead of
+// silently generating a TOTP key with no account name.
+func TestInitiateEnrollment_EmailLookupFailurePropagates(t *testing.T) {
+	repo := &mockMFARepository{}
+	users := &mockUserLookup{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+
+	svc := newTestServiceWithUsers(repo, &mockMFATokenStore{}, &mockTokenIssuer{}, users)
+
+	_, err := svc.InitiateEnrollment(context.Background(), "user-1", "")
+	require.Error(t, err)
+}
+
 func TestInitiateEnrollment_DuplicateReturnsConflict(t *testing.T) {
 	repo := &mockMFARepository{
 		saveSecretFn: func(_ context.Context, _ *domain.MFASecret) (*domain.MFASecret, error) {
