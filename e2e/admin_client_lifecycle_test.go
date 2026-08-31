@@ -30,13 +30,8 @@ type adminClientWithSecret struct {
 	GracePeriodEnds string `json:"grace_period_ends,omitempty"`
 }
 
-// oidcTokenResponse mirrors api.OIDCTokenResponse's JSON shape.
-type oidcTokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	IDToken      string `json:"id_token,omitempty"`
-}
+// oidcTokenResponse is declared in oidc_flow_test.go (same package), which
+// carries the full field set; this file decodes the subset it needs.
 
 // redirectResponse mirrors api.RedirectResponse's JSON shape.
 type redirectResponse struct {

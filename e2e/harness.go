@@ -163,22 +163,10 @@ func setupSuite(ctx context.Context) (*Env, func(), error) {
 		return nil, teardown, err
 	}
 
-	// The OIDC discovery/token issuer URL must be known to the SUT process at
-	// startup (via OIDC_ISSUER_URL), but that URL embeds the SUT's own mapped
-	// public port, which testcontainers only assigns once the container
-	// starts. Break the cycle by reserving a free host port ourselves first
-	// (accepted TOCTOU race, standard for test infra) and explicitly binding
-	// the SUT's public port to it, so the issuer URL we hand the process
-	// matches the port Docker will actually map.
-	daemonHost, err := dockerDaemonHost(ctx)
+	publicHostPort, issuerURL, err := reserveIssuerEndpoint(ctx)
 	if err != nil {
-		return nil, teardown, fmt.Errorf("resolve docker daemon host: %w", err)
+		return nil, teardown, err
 	}
-	publicHostPort, err := reserveHostPort()
-	if err != nil {
-		return nil, teardown, fmt.Errorf("reserve SUT public host port: %w", err)
-	}
-	issuerURL := fmt.Sprintf("http://%s:%s", daemonHost, publicHostPort)
 
 	sutContainer, err := startSUT(ctx, repoRoot, nw.Name, hostKeyPath, hibpPort, emailPort, publicHostPort, issuerURL)
 	if err != nil {
@@ -186,21 +174,9 @@ func setupSuite(ctx context.Context) (*Env, func(), error) {
 	}
 	res.sut = sutContainer
 
-	publicBaseURL, err := containerBaseURL(ctx, sutContainer, sutPublicPort)
+	publicBaseURL, adminBaseURL, grpcAddr, err := sutEndpoints(ctx, sutContainer)
 	if err != nil {
-		return nil, teardown, fmt.Errorf("resolve SUT public endpoint: %w", err)
-	}
-	adminBaseURL, err := containerBaseURL(ctx, sutContainer, sutAdminPort)
-	if err != nil {
-		return nil, teardown, fmt.Errorf("resolve SUT admin endpoint: %w", err)
-	}
-	grpcHost, err := sutContainer.Host(ctx)
-	if err != nil {
-		return nil, teardown, fmt.Errorf("resolve SUT host: %w", err)
-	}
-	grpcPort, err := sutContainer.MappedPort(ctx, sutGRPCPort)
-	if err != nil {
-		return nil, teardown, fmt.Errorf("resolve SUT grpc port: %w", err)
+		return nil, teardown, err
 	}
 
 	if err := waitForReadiness(ctx, publicBaseURL+"/readiness", sutContainer); err != nil {
@@ -210,7 +186,7 @@ func setupSuite(ctx context.Context) (*Env, func(), error) {
 	env := &Env{
 		PublicBaseURL: publicBaseURL,
 		AdminBaseURL:  adminBaseURL,
-		GRPCAddr:      fmt.Sprintf("%s:%s", grpcHost, grpcPort.Port()),
+		GRPCAddr:      grpcAddr,
 		HTTPClient:    &http.Client{Timeout: 15 * time.Second},
 		EmailSink:     res.emailMock,
 		HIBP:          res.hibpMock,
@@ -374,6 +350,49 @@ func startSUT(ctx context.Context, repoRoot, networkName, hostKeyPath string, hi
 		return nil, err
 	}
 	return c, nil
+}
+
+// sutEndpoints resolves the SUT container's mapped host endpoints: public
+// and admin HTTP base URLs plus the gRPC host:port address.
+func sutEndpoints(ctx context.Context, sut testcontainers.Container) (publicBaseURL, adminBaseURL, grpcAddr string, err error) {
+	publicBaseURL, err = containerBaseURL(ctx, sut, sutPublicPort)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve SUT public endpoint: %w", err)
+	}
+	adminBaseURL, err = containerBaseURL(ctx, sut, sutAdminPort)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve SUT admin endpoint: %w", err)
+	}
+	grpcHost, err := sut.Host(ctx)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve SUT host: %w", err)
+	}
+	grpcPort, err := sut.MappedPort(ctx, sutGRPCPort)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve SUT grpc port: %w", err)
+	}
+	return publicBaseURL, adminBaseURL, fmt.Sprintf("%s:%s", grpcHost, grpcPort.Port()), nil
+}
+
+// reserveIssuerEndpoint resolves the docker daemon host and reserves a free
+// host port for the SUT's public port, returning both plus the issuer URL
+// built from them. The OIDC discovery/token issuer URL must be known to the
+// SUT process at startup (via OIDC_ISSUER_URL), but that URL embeds the
+// SUT's own mapped public port, which testcontainers only assigns once the
+// container starts. Reserving the port ourselves first (accepted TOCTOU
+// race, standard for test infra) and explicitly binding the SUT's public
+// port to it breaks the cycle, so the issuer URL handed to the process
+// matches the port Docker will actually map.
+func reserveIssuerEndpoint(ctx context.Context) (publicHostPort, issuerURL string, err error) {
+	daemonHost, err := dockerDaemonHost(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve docker daemon host: %w", err)
+	}
+	publicHostPort, err = reserveHostPort()
+	if err != nil {
+		return "", "", fmt.Errorf("reserve SUT public host port: %w", err)
+	}
+	return publicHostPort, fmt.Sprintf("http://%s:%s", daemonHost, publicHostPort), nil
 }
 
 // imageRequest returns a fresh ContainerRequest pointed at either E2E_IMAGE

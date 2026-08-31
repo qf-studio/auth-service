@@ -34,10 +34,8 @@ type oidcDiscoveryResponse struct {
 	JwksURI               string `json:"jwks_uri"`
 }
 
-// redirectResponse mirrors api.RedirectResponse's JSON shape.
-type redirectResponse struct {
-	RedirectTo string `json:"redirect_to"`
-}
+// redirectResponse is declared in admin_client_lifecycle_test.go (same
+// package); the OIDC flow reuses it for login/consent accept responses.
 
 // oidcTokenResponse mirrors api.OIDCTokenResponse's JSON shape.
 type oidcTokenResponse struct {
@@ -64,19 +62,10 @@ type idTokenClaims struct {
 	Nonce string `json:"nonce,omitempty"`
 }
 
-// noRedirectClient returns an *http.Client with the same timeout as
-// suite.HTTPClient but that never follows redirects, so callers can inspect
-// a 302's Location header directly. This is required for /oauth/authorize,
-// which redirects to OIDC_LOGIN_UI_URL (a fake, unreachable address in this
-// harness) rather than returning JSON.
-func noRedirectClient() *http.Client {
-	return &http.Client{
-		Timeout: suite.HTTPClient.Timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-}
+// noRedirectClient (the package-level var in admin_client_lifecycle_test.go)
+// is reused here: /oauth/authorize redirects to OIDC_LOGIN_UI_URL (a fake,
+// unreachable address in this harness), so callers must inspect the 302's
+// Location header instead of following it.
 
 // TestOIDCFlow_AuthorizeLoginTokenUserinfo exercises the full OIDC
 // authorization code flow over real HTTP against the SUT image: create a
@@ -91,7 +80,7 @@ func TestOIDCFlow_AuthorizeLoginTokenUserinfo(t *testing.T) {
 	}
 
 	client := suite.HTTPClient
-	redirectClient := noRedirectClient()
+	redirectClient := noRedirectClient
 
 	email := newE2EEmail("oidc")
 	registered := registerUser(t, client, email, fakeUserPassword)
