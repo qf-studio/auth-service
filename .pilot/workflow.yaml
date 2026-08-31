@@ -1,0 +1,68 @@
+---
+version: 1
+
+agent:
+  reasoning_effort: high
+
+policy:
+  commit_format: conventional
+  branch_prefix: pilot/GH-
+
+hooks:
+  after_create: null
+  before_run: null
+  after_run: null
+  before_remove: null
+---
+
+## Project: auth-service
+
+Go auth service (Gin HTTP on ports 4000/4001, gRPC on 4002, PostgreSQL via
+pgx, Redis, golang-migrate). Follow these conventions on every task.
+
+### Commit Format
+
+Conventional commits: `type(scope): description`. Types: feat, fix, refactor,
+test, docs, chore. Reference the issue as `GH-NN` where natural.
+
+### Build, Test, Lint
+
+```bash
+go build ./...
+go test -short ./...        # unit tests — ALWAYS safe, no Docker needed
+go test ./...               # includes testcontainers suites — requires a
+                            # working Docker daemon; do NOT run without one
+golangci-lint run
+```
+
+If Docker is unavailable in your environment, verify with `go build ./...`,
+`go vet ./...`, and `go test -short ./...` only, and rely on CI for the
+container-backed suites (`e2e/`, `internal/oidc` integration,
+`internal/storage` integration, `migrations`). Do not burn execution time
+retrying Docker-dependent tests locally.
+
+### Security invariants (never violate)
+
+- Never store full tokens in the database — signatures/digests only.
+- Never use symmetric JWT signing (HS256) for access tokens.
+- No password composition rules; no periodic rotation. 15-char minimum only.
+- Argon2id for passwords and client secrets; SHA-256 digest for API keys.
+- Token prefixes: `qf_at_`, `qf_rt_`, `qf_ac_`, `qf_ak_`, `qf_cs_`.
+
+### Test tokens / secrets
+
+Never use realistic-looking secrets in test files — GitHub push protection
+blocks them. Use obviously fake constants (see the e2e package's fake-secret
+file once it exists).
+
+### Migrations
+
+New migrations: next sequential number in `migrations/`. Never edit an
+existing migration. The migration head-version test reads the embedded FS —
+if a test hardcodes a head number, update it in the same PR.
+
+### Spec paths
+
+Issue specs reference files by full repo-relative path. If a spec references
+a path that doesn't exist on main, stop and comment on the issue instead of
+guessing.

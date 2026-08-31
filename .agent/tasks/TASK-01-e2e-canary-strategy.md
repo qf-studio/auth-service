@@ -1,7 +1,7 @@
 # TASK-01: E2E & Canary Test Strategy
 
 **Created:** 2026-08-31
-**Status:** 🚀 In flight — A=#493 (dispatched to Pilot), B=#494, C=#495 (label `pilot` after #493 merges), D=#496 (Navigator-executed; repo qf-studio/auth-service-canary created 2026-08-31)
+**Status:** 🚀 In flight — issue A split after 2× 1h-timeout failures: A1=#493 (rescoped: harness+first flow+CI, re-armed), A2=#497 mocks+email flows, A3=#498 MFA+OIDC, A4=#499 admin+gRPC (label `pilot` on A2–A4 after #493 merges; A3/A4 parallel-safe after that). B=#494, C=#495 (after A1–A4), D=#496 (Navigator-executed; repo qf-studio/auth-service-canary created 2026-08-31). `.pilot/workflow.yaml` added 2026-08-31 (Docker-availability guidance for workers).
 **Origin:** Review-003 post-mortem — 25 of 39 verified findings were "built but never wired in `main()`" defects that unit tests structurally cannot see (they bypass `main()` and hand-wire mocks). `cmd/server` has zero test files today; nothing boots the real binary.
 
 ## Goal
