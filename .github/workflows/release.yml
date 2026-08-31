@@ -14,6 +14,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  SMOKE_IMAGE_NAME: ${{ github.repository }}-smoke
 
 jobs:
   release:
@@ -57,6 +58,36 @@ jobs:
             ${{ steps.meta.outputs.tags }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Smoke image (GH-495): a runnable verification artifact pinned to
+      # the same tag as the service image above, so consumers (Pointer, the
+      # canary cron in issue D) can verify a live deployment without a repo
+      # checkout. Built in the same job as the service image (not a
+      # separate parallel job) so a failure here fails the whole release —
+      # the two images are published together or not at all.
+      - name: Extract smoke metadata
+        id: meta-smoke
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.SMOKE_IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,enable=${{ github.ref_type != 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type != 'tag' }}
+            type=ref,event=tag
+
+      - name: Build and push smoke image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.smoke
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.meta-smoke.outputs.tags }}
+            ${{ env.REGISTRY }}/${{ env.SMOKE_IMAGE_NAME }}:${{ github.sha }}
+          labels: ${{ steps.meta-smoke.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -14,6 +14,7 @@ Covers staging and production environments, secrets management, monitoring, roll
   - [Staging](#staging-deployment)
   - [Production](#production-deployment)
 - [Running Migrations from the Image](#running-migrations-from-the-image)
+- [Verifying a Live Deployment (Smoke Image)](#verifying-a-live-deployment-smoke-image)
 - [Monitoring](#monitoring)
 - [Rollback Procedures](#rollback-procedures)
 - [Troubleshooting](#troubleshooting)
@@ -324,6 +325,41 @@ docker run --rm --entrypoint /auth-migrate -e DATABASE_URL="$DATABASE_URL" \
 docker run --rm --entrypoint /auth-migrate -e DATABASE_URL="$DATABASE_URL" \
   ghcr.io/qf-studio/auth-service:<tag> up
 ```
+
+---
+
+## Verifying a Live Deployment (Smoke Image)
+
+Every release also publishes `ghcr.io/qf-studio/auth-service-smoke:<tag>` — the same tag as the service image — a small, self-contained image that runs the live-safe subset of the E2E suite (`TestSmoke*` in `e2e/`: health/readiness, OIDC discovery + JWKS shape, register → login → refresh → logout with a throwaway user, gRPC `ValidateToken` via `pkg/authclient`) against an already-running deployment. It never touches the admin port destructively and only ever creates disposable identities, so it's safe to run repeatedly against production.
+
+### Basic Usage
+
+```bash
+docker run --rm -e SMOKE_BASE_URL=http://host:4000 \
+  ghcr.io/qf-studio/auth-service-smoke:<tag>
+```
+
+Exit code `0` means every smoke check passed; non-zero means at least one failed. Output is plain `go test -v` text, readable directly from CI or a terminal.
+
+### Configuration
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `SMOKE_BASE_URL` | Yes | Public API base URL to verify (e.g. `http://host:4000` or `https://auth.quantflow.studio`). |
+| `SMOKE_ADMIN_URL` | No | Admin API base URL. When reachable, enables the token-introspection leg of the golden-path check. Omit for deployments where the admin port isn't network-reachable from wherever the smoke image runs. |
+| `SMOKE_GRPC_ADDR` | No | `host:port` for the gRPC service. When set, exercises `ValidateToken` via `pkg/authclient`. Omit to skip the gRPC leg. |
+
+### Full Example
+
+```bash
+docker run --rm \
+  -e SMOKE_BASE_URL=https://auth.quantflow.studio \
+  -e SMOKE_ADMIN_URL=http://127.0.0.1:4001 \
+  -e SMOKE_GRPC_ADDR=auth.quantflow.studio:4002 \
+  ghcr.io/qf-studio/auth-service-smoke:v0.72.0
+```
+
+This is the artifact issue D's canary cron and consumers like Pointer poll against instead of guessing deployment health from `/health` alone.
 
 ---
 

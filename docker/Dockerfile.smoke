@@ -1,0 +1,59 @@
+# Dockerfile for auth-service-smoke: a runnable verification artifact
+# published alongside every auth-service release (GH-495). It packages the
+# live-safe TestSmoke* subset of the e2e suite (see e2e/smoke_test.go) as a
+# compiled `go test -c` binary, so a consumer (e.g. Pointer, or the canary
+# cron in issue D) can verify a live deployment without a checkout of this
+# repo or Docker-in-Docker access.
+#
+# Usage:
+#   docker run --rm -e SMOKE_BASE_URL=http://host:4000 \
+#     ghcr.io/qf-studio/auth-service-smoke:<tag>
+#
+# Config (env):
+#   SMOKE_BASE_URL  - required. Public API base URL to test against.
+#   SMOKE_GRPC_ADDR - optional. host:port for the gRPC ValidateToken leg;
+#                     skipped when unset.
+#   SMOKE_ADMIN_URL - optional. Admin API base URL; enables the introspect
+#                     leg when reachable.
+#
+# Exit code is 0 on pass, non-zero on failure; stdout is plain `go test -v`
+# text (see e2e/main_test.go's liveEnv for how these env vars are consumed).
+
+# ---------- builder ----------
+FROM golang:1.25-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /src
+
+# Cache module downloads
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Compile the e2e package's tests into a standalone binary. This pulls in
+# the whole e2e package (including its testcontainers-go dependency), but
+# none of that code executes: liveEnv (main_test.go) is only reached when
+# SMOKE_BASE_URL is set, which never calls setupSuite/Docker.
+COPY . .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go test -c -o /bin/auth-service-smoke ./e2e
+
+# ---------- runtime ----------
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates \
+    && addgroup -g 1000 appuser \
+    && adduser -u 1000 -G appuser -D -h /home/appuser appuser
+
+COPY --from=builder /bin/auth-service-smoke /auth-service-smoke
+
+USER appuser:appuser
+
+# -test.run selects only the live-safe TestSmoke* subset (see
+# e2e/smoke_test.go); -test.v mirrors `go test -v` output;
+# -test.timeout bounds the whole run so an unreachable SMOKE_BASE_URL
+# fails fast with readable output instead of hanging.
+ENTRYPOINT ["/auth-service-smoke", "-test.v", "-test.run=TestSmoke", "-test.timeout=5m"]
