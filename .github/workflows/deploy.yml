@@ -1,0 +1,139 @@
+name: Deploy
+# Mirrors the GHCR release image into ECR quantflow/auth-service, runs the DB migration task, deploys the
+# ECS service stack quantflow-svc-auth-service (the studio central auth; Pointer consumes it).
+# Trigger: push a vX.Y.Z tag from main -> release.yml ("Release") pushes ghcr.io/qf-studio/auth-service:vX.Y.Z
+# auth-service is the exception to the prod-* convention: an MIT-licensed, semver-released project (89 v* tags),
+# so the release tag stays v* and the production gate is the aws-quantflow environment (required reviewers).
+# -> this workflow runs when that release succeeds and deploys the same tag. Manual fallback: workflow_dispatch.
+# NOTE: workflow_run only fires for workflow files on the default branch.
+on:
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm'
+        required: true
+        type: string
+      image_tag:
+        description: GHCR tag to deploy as produced by Release (vX.Y.Z, e.g. v0.72.0)
+        required: true
+        type: string
+      force_version:
+        description: 'Recovery only: run "/auth-migrate force <N>" before "up" (clears a dirty schema_migrations state - 2026-07-24 Pointer incident)'
+        required: false
+        default: ''
+        type: string
+permissions:
+  contents: read
+  packages: read
+env:
+  AWS_REGION: eu-central-1
+  GHCR_IMAGE: ghcr.io/qf-studio/auth-service
+  ECR_REPO: quantflow/auth-service
+  SERVICE: auth-service
+  TEMPLATE_BASE: s3://quantflow-s3-app-data/templates/quantflow
+jobs:
+  # Job chain: mirror -> deploy (Nelya 2026-09-05). A lint/test job can be inserted in front later:
+  #   lint: {runs-on: ..., steps: [...]}  and  mirror: {needs: lint, ...}
+  mirror:
+    name: Mirror image GHCR -> ECR
+    runs-on: [self-hosted, aws-quantflow-deployer]
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    outputs:
+      tag: ${{ steps.mirror.outputs.tag }}
+    steps:
+      - name: Check confirmation
+        if: github.event_name == 'workflow_dispatch' && inputs.confirm != 'deploy'
+        run: |
+          echo 'Not confirmed - type "deploy" in the confirm input to proceed.'
+          exit 1
+      - name: Mirror GHCR -> ECR
+        id: mirror
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          SRC_TAG="${{ inputs.image_tag || github.event.workflow_run.head_branch }}"
+          ECR_URI="$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO"
+          # Isolated docker config: the runner's default config uses credsStore=ecr-login for
+          # every registry, which breaks `docker login ghcr.io`. Keep ECR on the helper, store
+          # the GHCR token in this temp config only.
+          export DOCKER_CONFIG=$(mktemp -d)
+          printf '{"credHelpers":{"%s.dkr.ecr.%s.amazonaws.com":"ecr-login"}}' "$ACCOUNT" "$AWS_REGION" > "$DOCKER_CONFIG/config.json"
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "$GHCR_IMAGE:$SRC_TAG"
+          # Tag in ECR = the digest-stable source tag plus the run id (immutable, unique)
+          DEST_TAG="${SRC_TAG//\//-}"
+          if aws ecr describe-images --repository-name "$ECR_REPO" --image-ids imageTag="$DEST_TAG" --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "Tag $DEST_TAG already in ECR - skipping push"
+          else
+            docker tag "$GHCR_IMAGE:$SRC_TAG" "$ECR_URI:$DEST_TAG"
+            docker push "$ECR_URI:$DEST_TAG"
+          fi
+          rm -rf "$DOCKER_CONFIG"
+          echo "tag=$DEST_TAG" >> "$GITHUB_OUTPUT"
+      - name: Remove mirrored images (runner disk hygiene)
+        if: always()
+        run: |
+          docker image rm -f $(docker image ls -q "$GHCR_IMAGE" 2>/dev/null) 2>/dev/null || true
+          docker image rm -f $(docker image ls -q "*.dkr.ecr.*.amazonaws.com/$ECR_REPO" 2>/dev/null) 2>/dev/null || true
+          docker image prune -f --filter "until=72h" >/dev/null || true
+          df -h / | tail -1
+  deploy:
+    name: Deploy service
+    runs-on: [self-hosted, aws-quantflow-deployer]
+    needs: mirror
+    environment: aws-quantflow   # unprotected label today; required reviewers can be added in Settings -> Environments
+    steps:
+      - name: Deploy service stack from S3 template
+        run: |
+          set -euo pipefail
+          # A failed first CREATE leaves ROLLBACK_COMPLETE, which cannot be updated - remove the empty shell first
+          STATUS=$(aws cloudformation describe-stacks --stack-name "quantflow-svc-$SERVICE" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            echo "Stack quantflow-svc-$SERVICE is ROLLBACK_COMPLETE (failed create) - deleting the shell before redeploy"
+            aws cloudformation delete-stack --stack-name "quantflow-svc-$SERVICE" --region "$AWS_REGION"
+            aws cloudformation wait stack-delete-complete --stack-name "quantflow-svc-$SERVICE" --region "$AWS_REGION"
+          fi
+          aws s3 cp "$TEMPLATE_BASE/$SERVICE.yml" "./$SERVICE-stack.yml" --region "$AWS_REGION"
+          aws cloudformation deploy \
+            --template-file "./$SERVICE-stack.yml" \
+            --stack-name "quantflow-svc-$SERVICE" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region "$AWS_REGION" \
+            --parameter-overrides \
+              ImageTag="${{ needs.mirror.outputs.tag }}" \
+              JobId="${{ github.run_id }}" \
+            --tags \
+              AppManagerCFNStackKey="quantflow-svc-$SERVICE" \
+              Environment=quantflow \
+              Relation=QuantFlow \
+              Project=Website
+      - name: Run database migration (one-off task, the task definition the stack just registered, entrypoint /auth-migrate)
+        run: |
+          set -euo pipefail
+          # Order: stack first (registers the task definition with the new image), then migrate with THAT definition,
+          # then wait for the service. Migrations are applied in-VPC by the image itself; no DB credentials on the runner
+          # (pointer's workflow pulled them onto the runner). Trade-off: new tasks may serve for ~1-2 min before "up"
+          # completes -> auth-service migrations must stay backward-compatible (expand/contract), as they already must
+          # for rolling deploys. Family quantflow-auth-service, bridge mode -> no awsvpc network config needed.
+          TASKDEF=$(aws ecs describe-task-definition --task-definition quantflow-auth-service --region "$AWS_REGION" --query taskDefinition.taskDefinitionArn --output text)
+          run_migrate() {
+            ARN=$(aws ecs run-task --cluster quantflow --task-definition "$TASKDEF" --count 1 --region "$AWS_REGION" \
+              --overrides "{\"containerOverrides\":[{\"name\":\"auth-service\",\"command\":[\"/auth-migrate\",$1]}]}" \
+              --query 'tasks[0].taskArn' --output text)
+            aws ecs wait tasks-stopped --cluster quantflow --tasks "$ARN" --region "$AWS_REGION"
+            CODE=$(aws ecs describe-tasks --cluster quantflow --tasks "$ARN" --region "$AWS_REGION" --query 'tasks[0].containers[0].exitCode' --output text)
+            echo "/auth-migrate $1 -> exit $CODE (task ${ARN##*/}; logs: /quantflow/auth-service)"; [ "$CODE" = "0" ]
+          }
+          if [ -n "${{ inputs.force_version }}" ]; then run_migrate "\"force\",\"${{ inputs.force_version }}\""; fi
+          run_migrate '"up"'
+      - name: Wait for service to stabilize and probe
+        run: |
+          aws ecs wait services-stable --cluster quantflow --services "$SERVICE" --region "$AWS_REGION"
+          echo "$SERVICE is stable"
+          curl -fsS --max-time 10 https://auth.quantflow.studio/health >/dev/null && echo "public /health OK" || echo "public probe not reachable yet (pre cut-over: expected)"
