@@ -735,6 +735,11 @@ Full list of configuration variables. See `.env.staging.example` and `.env.produ
 | `JWT_AUDIENCE` | Comma-separated list of `aud` values to set on issued access tokens. Empty/unset (default) means no `aud` claim is added. This is the service-wide default; a client can override it per-application via the `audience` field on the admin client API (GH-506) — an empty override means that client inherits this value. | *(empty)* | *(empty)* |
 | `JWT_AUDIENCE_ENFORCE` | When `true`, `ValidateToken` rejects tokens whose `aud` claim does not intersect with `JWT_AUDIENCE` (GH-506). Default `false` preserves the pre-GH-506 behavior of accepting audience-less or mismatched tokens, to avoid a rotation hazard when `JWT_AUDIENCE` is first configured. Only takes effect when `JWT_AUDIENCE` is also set. | `false` | `false` |
 
+See the root [`README.md`](../README.md#per-client-audience-aud) "Per-Client
+Audience" section for the full per-client override model, the recommended
+integration order before flipping `JWT_AUDIENCE_ENFORCE`, and which login
+flows are incompatible with per-client audiences (GH-512).
+
 ### OIDC Provider
 
 | Variable | Description | Staging Default | Production Default |

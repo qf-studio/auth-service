@@ -510,6 +510,151 @@ func TestValidateToken_AudienceEnforce(t *testing.T) {
 	})
 }
 
+// ── Refresh Audience Preservation (GH-512) ──────────────────────────────────
+
+// TestRefresh_PreservesClientAudience is the acceptance test for GH-512: a
+// client with a distinct Audience issues its first token pair via
+// IssueTokenPairForClient (mirroring the OIDC code-exchange path), then
+// refreshes. Before GH-512, refresh always reissued with a nil audience,
+// silently falling back to the global JWT_AUDIENCE — harmless only while
+// JWT_AUDIENCE_ENFORCE is off. The refreshed access token must carry the
+// client's audience, not the global one.
+func TestRefresh_PreservesClientAudience(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	clientID := uuid.New()
+	client := &domain.Client{ID: clientID, Audience: []string{"https://client-x.example.com"}}
+
+	svc.SetClientLookup(&mocks.MockClientRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
+			require.Equal(t, clientID, id)
+			return client, nil
+		},
+	})
+
+	loginResult, err := svc.IssueTokenPairForClient(ctx, "user-gh512", nil, nil, domain.ClientTypeUser, clientID.String())
+	require.NoError(t, err)
+
+	refreshResult, err := svc.Refresh(ctx, loginResult.RefreshToken)
+	require.NoError(t, err)
+
+	refreshClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(refreshResult.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://client-x.example.com"}, refreshClaims.Audience,
+		"refreshed access token must carry the client's audience, not the global JWT_AUDIENCE")
+}
+
+// TestRefresh_NoClientAudienceFallsBackToGlobal preserves existing behavior:
+// a client with no configured Audience (or a token minted with no client
+// context at all) still falls back to the global JWT_AUDIENCE on refresh.
+func TestRefresh_NoClientAudienceFallsBackToGlobal(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	clientID := uuid.New()
+	client := &domain.Client{ID: clientID} // no Audience configured
+
+	svc.SetClientLookup(&mocks.MockClientRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
+			require.Equal(t, clientID, id)
+			return client, nil
+		},
+	})
+
+	loginResult, err := svc.IssueTokenPairForClient(ctx, "user-gh512b", nil, nil, domain.ClientTypeUser, clientID.String())
+	require.NoError(t, err)
+
+	refreshResult, err := svc.Refresh(ctx, loginResult.RefreshToken)
+	require.NoError(t, err)
+
+	refreshClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(refreshResult.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	assert.Empty(t, refreshClaims.Audience)
+}
+
+// TestRefresh_NoClientContextFallsBackToGlobal covers the password/MFA login
+// case: IssueTokenPair (not ...ForClient) mints a refresh token carrying no
+// client id at all, so refresh must behave exactly as before GH-512 even
+// with a ClientLookup wired.
+func TestRefresh_NoClientContextFallsBackToGlobal(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	svc.SetClientLookup(&mocks.MockClientRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
+			t.Fatal("client lookup must not be called when the refresh token carries no client id")
+			return nil, nil
+		},
+	})
+
+	loginResult, err := svc.IssueTokenPair(ctx, "user-gh512c", nil, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	refreshResult, err := svc.Refresh(ctx, loginResult.RefreshToken)
+	require.NoError(t, err)
+
+	refreshClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(refreshResult.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	assert.Empty(t, refreshClaims.Audience)
+}
+
+// TestRefresh_ClientLookupErrorFallsBackToGlobal mirrors the fail-open
+// convention used for roles enrichment (TestRefresh_UserLookupErrorFailsOpenWithNoRoles):
+// a transient client-lookup failure during refresh must not fail the whole
+// refresh, it just falls back to the global audience.
+func TestRefresh_ClientLookupErrorFallsBackToGlobal(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	clientID := uuid.New()
+	svc.SetClientLookup(&mocks.MockClientRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
+			return nil, errors.New("db unavailable")
+		},
+	})
+
+	loginResult, err := svc.IssueTokenPairForClient(ctx, "user-gh512d", nil, nil, domain.ClientTypeUser, clientID.String())
+	require.NoError(t, err)
+
+	refreshResult, err := svc.Refresh(ctx, loginResult.RefreshToken)
+	require.NoError(t, err, "refresh must succeed even when the client lookup fails")
+
+	refreshClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(refreshResult.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	assert.Empty(t, refreshClaims.Audience)
+}
+
+// TestRefresh_LegacyRedisValueWithoutClientID verifies backward compatibility
+// with refresh tokens already stored in Redis before this fix deployed: the
+// value is the bare subject string (not the new JSON {"sub":...} encoding).
+// Refresh must still work, treating the token as having no client context.
+func TestRefresh_LegacyRedisValueWithoutClientID(t *testing.T) {
+	svc, mr := newES256Service(t)
+	ctx := context.Background()
+
+	svc.SetClientLookup(&mocks.MockClientRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
+			t.Fatal("client lookup must not be called for a legacy (no client id) refresh token")
+			return nil, nil
+		},
+	})
+
+	// Issue a normal token pair, then overwrite its Redis value with the
+	// legacy bare-subject format to simulate a pre-GH-512 refresh token.
+	loginResult, err := svc.IssueTokenPair(ctx, "user-gh512e", nil, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	parts := strings.SplitN(strings.TrimPrefix(loginResult.RefreshToken, "qf_rt_"), ".", 2)
+	require.Len(t, parts, 2)
+	keyEncoded := parts[0]
+	require.NoError(t, mr.Set("rt_sig:"+keyEncoded, "user-gh512e"))
+
+	refreshResult, err := svc.Refresh(ctx, loginResult.RefreshToken)
+	require.NoError(t, err)
+	assert.NotEmpty(t, refreshResult.AccessToken)
+}
+
 // ── Issuer (GH-468) ──────────────────────────────────────────────────────────
 
 // TestIssueAccessToken_IssuerFromOIDCConfig verifies the `iss` claim on

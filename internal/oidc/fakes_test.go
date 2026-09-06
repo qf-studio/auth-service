@@ -30,11 +30,19 @@ func (f *fakeUserLookup) FindByID(ctx context.Context, tenantID uuid.UUID, id st
 
 // fakeTokenIssuer is a configurable fake for oidc.TokenIssuer.
 type fakeTokenIssuer struct {
-	issueTokenPairFn func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error)
-	issueIDTokenFn   func(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
+	issueTokenPairFn          func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error)
+	issueTokenPairForClientFn func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
+	issueIDTokenFn            func(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
 }
 
 func (f *fakeTokenIssuer) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error) {
+	return f.issueTokenPairFn(ctx, subject, roles, scopes, clientType, audience...)
+}
+
+func (f *fakeTokenIssuer) IssueTokenPairForClient(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error) {
+	if f.issueTokenPairForClientFn != nil {
+		return f.issueTokenPairForClientFn(ctx, subject, roles, scopes, clientType, clientID, audience...)
+	}
 	return f.issueTokenPairFn(ctx, subject, roles, scopes, clientType, audience...)
 }
 

@@ -175,6 +175,43 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `TENANT_BASE_DOMAIN` | _(empty)_ | Base domain for subdomain parsing |
 | `TENANT_CACHE_TTL` | `5m` | Tenant lookup cache TTL |
 | `TRUSTED_PROXY_CIDRS` | _(empty)_ | Comma-separated CIDRs of reverse proxies allowed to set `X-Forwarded-Proto` / `X-Forwarded-Host`; empty (default) trusts nothing, so the server derives the request scheme from `Request.TLS`. Behind a TLS-terminating AWS ALB (e.g. `auth.quantflow.studio`) `Request.TLS` is always nil, so this must be set to the VPC CIDR(s) or DPoP proof validation always fails on the `htu` scheme (GH-508). |
+| `JWT_AUDIENCE` | _(empty)_ | Comma-separated `aud` values stamped on issued access tokens. Empty/unset means no `aud` claim. Service-wide default; a client's `audience` field (admin client API) overrides it per-application — an empty client override inherits this value. |
+| `JWT_AUDIENCE_ENFORCE` | `false` | When `true`, token validation rejects tokens whose `aud` does not intersect with the validator's configured `JWT_AUDIENCE`. Only takes effect when `JWT_AUDIENCE` is also set. See "Per-Client Audience" below before enabling. |
+
+### Per-Client Audience (`aud`)
+
+Every OAuth2/OIDC client has an `audience` field (`internal/domain/client.go`
+`Client.Audience`, set via the admin client API). It controls the `aud` claim
+on access tokens issued to that client:
+
+- **Empty/unset** (default): the client inherits the service-wide
+  `JWT_AUDIENCE`.
+- **Set**: overrides `JWT_AUDIENCE` for every access token issued to that
+  client, including tokens minted by a refresh of that client's session.
+
+`JWT_AUDIENCE_ENFORCE` is a separate, opt-in flag. With it `false` (default),
+`aud` is stamped but never checked — existing integrations keep working
+regardless of audience. With it `true`, token validation additionally
+requires the token's `aud` to intersect the validator's own configured
+audience.
+
+**Integration order** for a new product/resource server:
+
+1. Set the client's `audience` (or leave it unset to inherit `JWT_AUDIENCE`).
+2. Deploy the resource server verifying tokens with that same audience
+   configured, while `JWT_AUDIENCE_ENFORCE=false` — confirm tokens carry the
+   expected `aud` without anything being rejected yet.
+3. Flip `JWT_AUDIENCE_ENFORCE=true` for that resource server once step 2 is
+   confirmed.
+
+**Login flows without client context.** Password login (`POST
+/auth/login`) and MFA completion have no OAuth2 `client_id` in the request,
+so they always issue tokens with the global `JWT_AUDIENCE` — a per-client
+`audience` override never applies to them. Products that need per-client
+audience isolation must authenticate via the OIDC authorization code flow
+instead. The refresh grant re-resolves the originating client's *current*
+audience on every refresh (not just at initial login), so admin changes to a
+client's `audience` take effect on that client's next refresh.
 
 ## Development
 

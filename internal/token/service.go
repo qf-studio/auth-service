@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -56,6 +57,13 @@ type UserLookup interface {
 	FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error)
 }
 
+// ClientLookup abstracts OAuth2 client retrieval for refresh-token audience
+// preservation (GH-512). This is a narrow interface satisfied by
+// storage.ClientRepository.
+type ClientLookup interface {
+	FindByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.Client, error)
+}
+
 // RefreshTokenStore abstracts the Postgres bookkeeping for refresh token
 // signatures performed during rotation. This is a narrow interface satisfied
 // by storage.RefreshTokenRepository.
@@ -75,6 +83,7 @@ type Service struct {
 	publicKey     crypto.PublicKey
 	signingMethod jwt.SigningMethod
 	users         UserLookup
+	clients       ClientLookup
 	refreshTokens RefreshTokenStore
 	kid           string
 }
@@ -148,6 +157,16 @@ func (s *Service) SetUserLookup(users UserLookup) {
 	s.users = users
 }
 
+// SetClientLookup injects the client repository used to re-resolve a
+// refresh token's originating client at refresh time, so the reissued
+// access token carries that client's current Audience instead of silently
+// falling back to the global JWT_AUDIENCE (GH-512). Optional: if unset,
+// refreshed access tokens always fall back to the global JWT_AUDIENCE, the
+// pre-GH-512 behavior. Injected post-construction, mirroring SetUserLookup.
+func (s *Service) SetClientLookup(clients ClientLookup) {
+	s.clients = clients
+}
+
 // SetRefreshTokenStore injects the Postgres refresh-token repository used to
 // keep introspection state truthful across rotation: on refresh, the old
 // signature's row is marked revoked and the new signature's row is inserted
@@ -164,23 +183,34 @@ func (s *Service) SetRefreshTokenStore(store RefreshTokenStore) {
 // omitting it (or passing an empty client audience) falls back to the
 // service-wide JWT_AUDIENCE.
 func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", audience)
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", "", audience)
 }
 
 // IssueTokenPairWithDPoP generates a DPoP-bound access/refresh token pair.
 // The jktThumbprint is embedded as the cnf.jkt claim in the access token.
 // audience behaves as documented on IssueTokenPair.
 func (s *Service) IssueTokenPairWithDPoP(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, audience ...string) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, jktThumbprint, audience)
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, jktThumbprint, "", audience)
 }
 
-func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, audience []string) (*api.AuthResult, error) {
+// IssueTokenPairForClient generates an access/refresh token pair for a
+// request made on behalf of a known OAuth2 client (e.g. the OIDC
+// code-exchange grant). clientID is persisted alongside the refresh token so
+// that a later refresh (GH-512) can re-resolve the client and reapply its
+// current Audience, rather than silently falling back to the global
+// JWT_AUDIENCE the way a refresh with no client context does. audience
+// behaves as documented on IssueTokenPair.
+func (s *Service) IssueTokenPairForClient(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error) {
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", clientID, audience)
+}
+
+func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint, clientID string, audience []string) (*api.AuthResult, error) {
 	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, jktThumbprint, audience)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
 	}
 
-	refreshToken, err := s.issueRefreshToken(ctx, subject)
+	refreshToken, err := s.issueRefreshToken(ctx, subject, clientID)
 	if err != nil {
 		return nil, fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -209,7 +239,7 @@ func (s *Service) RefreshWithDPoP(ctx context.Context, rawRefreshToken, jktThumb
 }
 
 func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumbprint string) (*api.AuthResult, error) {
-	subject, err := s.validateRefreshToken(ctx, rawRefreshToken)
+	subject, clientID, err := s.validateRefreshToken(ctx, rawRefreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("invalid refresh token: %w", api.ErrUnauthorized)
 	}
@@ -248,13 +278,32 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 		}
 	}
 
-	// Refresh carries no record of the original client's per-app audience
-	// (GH-506), so refreshed access tokens fall back to the service-wide
-	// JWT_AUDIENCE like tokens minted with no client context. Preserving the
-	// original client's audience across rotation would require persisting
-	// the client_id alongside the refresh token signature — left for a
-	// future issue if per-app audience needs to survive refresh.
-	result, err := s.issueTokenPair(ctx, subject, roles, nil, domain.ClientTypeUser, jktThumbprint, nil)
+	// Re-resolve the originating client's current Audience (GH-512): a
+	// refresh token minted via IssueTokenPairForClient carries its client_id
+	// (see issueRefreshToken), so a refreshed access token can inherit that
+	// client's Audience instead of silently falling back to the global
+	// JWT_AUDIENCE like tokens minted with no client context. Re-fetching
+	// rather than freezing the audience at login time also picks up admin
+	// changes to the client's Audience made since the original login.
+	// clientID is empty for refresh tokens minted with no client context
+	// (password/MFA login — see IssueTokenPair callers in auth/mfa), and a
+	// lookup failure is non-fatal (best-effort, same rationale as roles
+	// enrichment above): both fall back to the global audience, matching
+	// issuance's existing empty-audience->global rule.
+	var audience []string
+	if clientID != "" && s.clients != nil {
+		if cid, parseErr := uuid.Parse(clientID); parseErr != nil {
+			s.logger.Warn("refresh token has malformed client id, falling back to global audience",
+				zap.String("client_id", clientID), zap.Error(parseErr))
+		} else if client, lookupErr := s.clients.FindByID(ctx, tenantID, cid); lookupErr != nil {
+			s.logger.Warn("failed to look up client for refresh audience preservation",
+				zap.String("client_id", clientID), zap.Error(lookupErr))
+		} else {
+			audience = client.Audience
+		}
+	}
+
+	result, err := s.issueTokenPair(ctx, subject, roles, nil, domain.ClientTypeUser, jktThumbprint, clientID, audience)
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +635,16 @@ func claimsToDomain(c *customClaims) (*domain.TokenClaims, error) {
 
 // ── Internal: Refresh Token ──────────────────────────────────────────────────
 
-func (s *Service) issueRefreshToken(ctx context.Context, subject string) (string, error) {
+// refreshTokenData is the JSON value stored in Redis for a refresh token
+// key. ClientID is empty for tokens minted with no client context (e.g.
+// password/MFA login); when set (via IssueTokenPairForClient), refresh uses
+// it to re-resolve the client's current Audience (GH-512).
+type refreshTokenData struct {
+	Subject  string `json:"sub"`
+	ClientID string `json:"cid,omitempty"`
+}
+
+func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID string) (string, error) {
 	if len(s.cfg.SystemSecrets) == 0 {
 		return "", fmt.Errorf("no system secrets configured")
 	}
@@ -602,33 +660,42 @@ func (s *Service) issueRefreshToken(ctx context.Context, subject string) (string
 
 	refreshToken := refreshTokenPrefix + keyEncoded + "." + sigEncoded
 
-	// Store the signature in Redis keyed by encoded key, with subject as value.
+	// Store the signature in Redis keyed by encoded key, value is the JSON
+	// encoding of refreshTokenData (subject + originating client, if any).
+	encoded, err := json.Marshal(refreshTokenData{Subject: subject, ClientID: clientID})
+	if err != nil {
+		return "", fmt.Errorf("encode refresh token data: %w", err)
+	}
 	redisKey := refreshKeyPrefix + keyEncoded
-	if err := s.redis.Set(ctx, redisKey, subject, s.cfg.RefreshTokenTTL).Err(); err != nil {
+	if err := s.redis.Set(ctx, redisKey, encoded, s.cfg.RefreshTokenTTL).Err(); err != nil {
 		return "", fmt.Errorf("store refresh token: %w", err)
 	}
 
 	return refreshToken, nil
 }
 
-func (s *Service) validateRefreshToken(ctx context.Context, rawToken string) (string, error) {
+// validateRefreshToken verifies rawToken's HMAC signature and looks up its
+// Redis record, returning the subject and originating client ID (empty if
+// none). Returns an error if the token is malformed, unsigned by a known
+// system secret, or not found/expired in Redis.
+func (s *Service) validateRefreshToken(ctx context.Context, rawToken string) (string, string, error) {
 	token := strings.TrimPrefix(rawToken, refreshTokenPrefix)
 
 	parts := strings.SplitN(token, ".", 2)
 	if len(parts) != 2 {
-		return "", fmt.Errorf("malformed refresh token")
+		return "", "", fmt.Errorf("malformed refresh token")
 	}
 
 	keyEncoded, sigEncoded := parts[0], parts[1]
 
 	keyMaterial, err := base64.RawURLEncoding.DecodeString(keyEncoded)
 	if err != nil {
-		return "", fmt.Errorf("decode refresh key: %w", err)
+		return "", "", fmt.Errorf("decode refresh key: %w", err)
 	}
 
 	sigBytes, err := base64.RawURLEncoding.DecodeString(sigEncoded)
 	if err != nil {
-		return "", fmt.Errorf("decode refresh signature: %w", err)
+		return "", "", fmt.Errorf("decode refresh signature: %w", err)
 	}
 
 	// Try each system secret (newest first) for rotation support.
@@ -641,20 +708,29 @@ func (s *Service) validateRefreshToken(ctx context.Context, rawToken string) (st
 		}
 	}
 	if !valid {
-		return "", fmt.Errorf("invalid refresh token signature")
+		return "", "", fmt.Errorf("invalid refresh token signature")
 	}
 
-	// Look up the subject from Redis.
+	// Look up the stored record from Redis.
 	redisKey := refreshKeyPrefix + keyEncoded
-	subject, err := s.redis.Get(ctx, redisKey).Result()
+	raw, err := s.redis.Get(ctx, redisKey).Result()
 	if err == redis.Nil {
-		return "", fmt.Errorf("refresh token not found or expired")
+		return "", "", fmt.Errorf("refresh token not found or expired")
 	}
 	if err != nil {
-		return "", fmt.Errorf("lookup refresh token: %w", err)
+		return "", "", fmt.Errorf("lookup refresh token: %w", err)
 	}
 
-	return subject, nil
+	var data refreshTokenData
+	if err := json.Unmarshal([]byte(raw), &data); err != nil || data.Subject == "" {
+		// Legacy format (pre-GH-512): the value is the bare subject string,
+		// not JSON. Refresh tokens issued before this deploy are still live
+		// in Redis until their TTL expires, so this must keep working rather
+		// than failing the refresh.
+		return raw, "", nil
+	}
+
+	return data.Subject, data.ClientID, nil
 }
 
 func (s *Service) deleteRefreshToken(ctx context.Context, rawToken string) {
