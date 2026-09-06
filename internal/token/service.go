@@ -159,18 +159,23 @@ func (s *Service) SetRefreshTokenStore(store RefreshTokenStore) {
 }
 
 // IssueTokenPair generates an access/refresh token pair for the given subject.
-func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "")
+// audience, if given, overrides JWT_AUDIENCE on the issued access token —
+// callers pass the requesting client's Client.Audience (GH-506) when known;
+// omitting it (or passing an empty client audience) falls back to the
+// service-wide JWT_AUDIENCE.
+func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error) {
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", audience)
 }
 
 // IssueTokenPairWithDPoP generates a DPoP-bound access/refresh token pair.
 // The jktThumbprint is embedded as the cnf.jkt claim in the access token.
-func (s *Service) IssueTokenPairWithDPoP(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, jktThumbprint)
+// audience behaves as documented on IssueTokenPair.
+func (s *Service) IssueTokenPairWithDPoP(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, audience ...string) (*api.AuthResult, error) {
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, jktThumbprint, audience)
 }
 
-func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string) (*api.AuthResult, error) {
-	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, jktThumbprint)
+func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, audience []string) (*api.AuthResult, error) {
+	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, jktThumbprint, audience)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
 	}
@@ -243,7 +248,13 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 		}
 	}
 
-	result, err := s.issueTokenPair(ctx, subject, roles, nil, domain.ClientTypeUser, jktThumbprint)
+	// Refresh carries no record of the original client's per-app audience
+	// (GH-506), so refreshed access tokens fall back to the service-wide
+	// JWT_AUDIENCE like tokens minted with no client context. Preserving the
+	// original client's audience across rotation would require persisting
+	// the client_id alongside the refresh token signature — left for a
+	// future issue if per-app audience needs to survive refresh.
+	result, err := s.issueTokenPair(ctx, subject, roles, nil, domain.ClientTypeUser, jktThumbprint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +364,35 @@ func (s *Service) ValidateToken(_ context.Context, rawToken string) (*domain.Tok
 		return nil, fmt.Errorf("validate token: %w", domain.ErrNotAccessToken)
 	}
 
+	// GH-506: audience enforcement is opt-in via JWT_AUDIENCE_ENFORCE so
+	// existing consumers (e.g. Pointer, integrated before per-app audiences
+	// existed) keep validating tokens regardless of aud until they confirm
+	// their expected audience and flip the flag. With it unset, this check
+	// never runs — byte-identical to pre-GH-506 behavior. When set but this
+	// validator has no configured Audience, there is nothing to check
+	// against, so the token is accepted (misconfiguration should not lock
+	// out all traffic).
+	if s.cfg.AudienceEnforce && len(s.cfg.Audience) > 0 && !audienceContainsAny(claims.Audience, s.cfg.Audience) {
+		return nil, fmt.Errorf("validate token: %w", domain.ErrInvalidAudience)
+	}
+
 	return claimsToDomain(claims)
+}
+
+// audienceContainsAny reports whether tokenAud contains at least one of the
+// values in expected. A validator may be configured with more than one
+// acceptable audience value (aliases); per RFC 7519 §4.1.3 the token is
+// valid for that validator as soon as any one of them appears in aud, not
+// only when every configured value is present.
+func audienceContainsAny(tokenAud jwt.ClaimStrings, expected []string) bool {
+	for _, want := range expected {
+		for _, got := range tokenAud {
+			if got == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // IsRevoked reports whether the token with the given JTI is present in the
@@ -388,7 +427,7 @@ func (c *customClaims) GetJTI() (string, error) {
 	return c.ID, nil
 }
 
-func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string) (string, error) {
+func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, audience []string) (string, error) {
 	jti, err := generateRandomID(jtiBytes)
 	if err != nil {
 		return "", fmt.Errorf("generate jti: %w", err)
@@ -408,8 +447,16 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 		ClientType: string(clientType),
 	}
 
-	if len(s.cfg.Audience) > 0 {
-		claims.Audience = jwt.ClaimStrings(s.cfg.Audience)
+	// GH-506: a per-client audience (from the requesting OAuth client's
+	// Client.Audience) takes priority over the service-wide JWT_AUDIENCE, so
+	// a token minted for one product does not validate at another once
+	// audience enforcement is turned on for that product.
+	aud := audience
+	if len(aud) == 0 {
+		aud = s.cfg.Audience
+	}
+	if len(aud) > 0 {
+		claims.Audience = jwt.ClaimStrings(aud)
 	}
 
 	if jktThumbprint != "" {

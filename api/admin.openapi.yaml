@@ -654,6 +654,14 @@ components:
           maximum: 900
           default: 300
           description: Access token lifetime in seconds (5–15 minutes)
+        audience:
+          type: array
+          items:
+            type: string
+          description: >
+            Per-client `aud` override for issued access tokens (GH-506).
+            Empty/omitted means this client's tokens inherit the
+            service-wide JWT_AUDIENCE.
       required: [name, client_type, scopes, owner]
 
     UpdateClientRequest:
@@ -688,6 +696,13 @@ components:
         status:
           type: string
           enum: [active, suspended]
+        audience:
+          type: array
+          items:
+            type: string
+          description: >
+            Replaces the client's `aud` override (GH-506). Pass an empty
+            array to clear it back to inheriting JWT_AUDIENCE.
 
     AdminClientResponse:
       type: object
@@ -712,6 +727,14 @@ components:
           description: >
             Registered redirect URIs. Empty for service/agent clients unless
             explicitly set; always present for public clients.
+        audience:
+          type: array
+          items:
+            type: string
+          description: >
+            Per-client `aud` override for issued access tokens (GH-506).
+            Empty means this client's tokens inherit the service-wide
+            JWT_AUDIENCE.
         roles:
           type: array
           items:

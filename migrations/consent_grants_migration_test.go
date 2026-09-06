@@ -57,13 +57,36 @@ func tableExists(t *testing.T, dsn, table string) bool {
 	return exists
 }
 
-// TestMigration_ConsentGrantsUpDown proves 000018_consent_grants and
-// 000019_create_api_keys_table apply and revert cleanly: after `up` both
-// tables exist, after reverting exactly the newest migration (`steps -1`,
-// which undoes 000019) api_keys is dropped while consent_grants — applied
-// by the earlier, non-reverted 000018 — is untouched. Restores the schema
-// to head afterward so other integration tests sharing TEST_DATABASE_URL
-// see a fully-migrated database.
+// columnExists reports whether the given column exists on the given table in
+// the public schema.
+func columnExists(t *testing.T, dsn, table, column string) bool {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	var exists bool
+	err = pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2)`,
+		table, column,
+	).Scan(&exists)
+	require.NoError(t, err)
+
+	return exists
+}
+
+// TestMigration_ConsentGrantsUpDown proves 000018_consent_grants,
+// 000019_create_api_keys_table, and 000020_add_client_audience apply and
+// revert cleanly: after `up` both tables exist and clients has an audience
+// column; reverting the newest migration (000020) drops that column, and
+// reverting the next one (`steps -1` again, undoing 000019) drops api_keys
+// while consent_grants — applied by the earlier, non-reverted 000018 — is
+// untouched. Restores the schema to head afterward so other integration
+// tests sharing TEST_DATABASE_URL see a fully-migrated database.
 func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	m, dsn := testMigrate(t)
 
@@ -80,10 +103,19 @@ func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	version, dirty, err := m.Version()
 	require.NoError(t, err)
 	require.False(t, dirty, "schema should not be dirty after a clean up")
-	require.Equal(t, uint(19), version, "expected embedded migrations to be at head version 19")
+	require.Equal(t, uint(20), version, "expected embedded migrations to be at head version 20")
 
 	require.True(t, tableExists(t, dsn, "consent_grants"), "consent_grants table should exist after migrate up")
 	require.True(t, tableExists(t, dsn, "api_keys"), "api_keys table should exist after migrate up")
+	require.True(t, columnExists(t, dsn, "clients", "audience"), "clients.audience column should exist after migrate up")
+
+	require.NoError(t, m.Steps(-1), "migrate down one step (000020 down)")
+	require.False(t, columnExists(t, dsn, "clients", "audience"), "clients.audience column should be dropped after reverting 000020")
+
+	version, dirty, err = m.Version()
+	require.NoError(t, err)
+	require.False(t, dirty)
+	require.Equal(t, uint(19), version, "expected version 19 after reverting 000020")
 
 	require.NoError(t, m.Steps(-1), "migrate down one step (000019 down)")
 	require.False(t, tableExists(t, dsn, "api_keys"), "api_keys table should be dropped after reverting 000019")

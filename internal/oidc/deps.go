@@ -25,7 +25,7 @@ type UserLookup interface {
 // TokenIssuer abstracts token minting. This is a narrow interface satisfied
 // by *token.Service.
 type TokenIssuer interface {
-	IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error)
+	IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error)
 	IssueIDToken(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
 }
 

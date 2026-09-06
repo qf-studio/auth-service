@@ -84,6 +84,10 @@ func (s *ApprovalService) CreateThirdPartyClient(ctx context.Context, req *api.C
 	if redirectURIs == nil {
 		redirectURIs = []string{}
 	}
+	audience := req.Audience
+	if audience == nil {
+		audience = []string{}
+	}
 
 	client := &domain.Client{
 		ID:             uuid.New(),
@@ -93,6 +97,7 @@ func (s *ApprovalService) CreateThirdPartyClient(ctx context.Context, req *api.C
 		SecretHash:     hash,
 		Scopes:         scopes,
 		RedirectURIs:   redirectURIs,
+		Audience:       audience,
 		Owner:          thirdPartyOwner,
 		AccessTokenTTL: 900,
 		Status:         domain.ClientStatusSuspended,
@@ -187,6 +192,7 @@ func domainClientToAdmin(c *domain.Client) api.AdminClient {
 		ClientType:   string(c.ClientType),
 		Scopes:       c.Scopes,
 		RedirectURIs: c.RedirectURIs,
+		Audience:     c.Audience,
 		CreatedAt:    c.CreatedAt,
 		UpdatedAt:    c.UpdatedAt,
 	}

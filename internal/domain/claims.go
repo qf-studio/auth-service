@@ -51,8 +51,9 @@ type TokenClaims struct {
 	AuthorizationDetails []AuthorizationDetail
 
 	// Audience is the JWT aud claim, listing the intended recipients of the
-	// token. Empty when JWT_AUDIENCE is unset (GH-449). Not validated by
-	// ValidateToken to avoid breaking tokens issued before an audience was
-	// configured.
+	// token. Empty when neither the issuing client's Audience nor the
+	// service-wide JWT_AUDIENCE was set (GH-449, GH-506). Only checked by
+	// ValidateToken when JWT_AUDIENCE_ENFORCE is enabled; otherwise ignored
+	// to avoid breaking tokens issued before an audience was configured.
 	Audience []string
 }

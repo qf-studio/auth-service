@@ -108,6 +108,7 @@ func testClient() *domain.Client {
 		ClientType:     domain.ClientTypeService,
 		SecretHash:     "$argon2id$mock$secret",
 		Scopes:         []string{"read:users"},
+		Audience:       []string{"https://api.example.com"},
 		Owner:          "admin",
 		AccessTokenTTL: 900,
 		Status:         domain.ClientStatusActive,
@@ -236,6 +237,39 @@ func TestClientService_CreateClient_Public_NoSecretHashStored(t *testing.T) {
 	assert.Empty(t, created.SecretHash)
 }
 
+func TestClientService_CreateClient_Audience(t *testing.T) {
+	svc := newTestClientService(&mockClientRepo{})
+
+	req := &api.CreateClientRequest{
+		Name:       "aud-service",
+		ClientType: "service",
+		Audience:   []string{"https://api.example.com"},
+	}
+	result, err := svc.CreateClient(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://api.example.com"}, result.Audience)
+}
+
+func TestClientService_CreateClient_AudienceDefaultsEmpty(t *testing.T) {
+	var created *domain.Client
+	repo := &mockClientRepo{
+		createFn: func(_ context.Context, client *domain.Client) (*domain.Client, error) {
+			created = client
+			return client, nil
+		},
+	}
+	svc := newTestClientService(repo)
+
+	_, err := svc.CreateClient(context.Background(), &api.CreateClientRequest{
+		Name:       "no-aud-service",
+		ClientType: "service",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	assert.NotNil(t, created.Audience, "audience must default to an empty slice, not nil, to satisfy the NOT NULL column")
+	assert.Empty(t, created.Audience)
+}
+
 func TestClientService_CreateClient_Conflict(t *testing.T) {
 	repo := &mockClientRepo{
 		createFn: func(_ context.Context, _ *domain.Client) (*domain.Client, error) {
@@ -286,6 +320,40 @@ func TestClientService_UpdateClient_RedirectURIs(t *testing.T) {
 	client, err := svc.UpdateClient(context.Background(), clientID.String(), &api.UpdateClientRequest{RedirectURIs: uris})
 	require.NoError(t, err)
 	assert.Equal(t, uris, client.RedirectURIs)
+}
+
+func TestClientService_UpdateClient_Audience(t *testing.T) {
+	clientID := uuid.New()
+	repo := &mockClientRepo{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
+			c := testClient()
+			c.ID = id
+			return c, nil
+		},
+	}
+	svc := newTestClientService(repo)
+
+	aud := []string{"https://api.example.com"}
+	client, err := svc.UpdateClient(context.Background(), clientID.String(), &api.UpdateClientRequest{Audience: aud})
+	require.NoError(t, err)
+	assert.Equal(t, aud, client.Audience)
+}
+
+func TestClientService_UpdateClient_AudienceClear(t *testing.T) {
+	clientID := uuid.New()
+	repo := &mockClientRepo{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id uuid.UUID) (*domain.Client, error) {
+			c := testClient()
+			c.ID = id
+			c.Audience = []string{"https://old.example.com"}
+			return c, nil
+		},
+	}
+	svc := newTestClientService(repo)
+
+	client, err := svc.UpdateClient(context.Background(), clientID.String(), &api.UpdateClientRequest{Audience: []string{}})
+	require.NoError(t, err)
+	assert.Empty(t, client.Audience)
 }
 
 func TestClientService_UpdateClient_NotFound(t *testing.T) {
@@ -426,4 +494,5 @@ func TestDomainClientToAdmin(t *testing.T) {
 	assert.Equal(t, c.Name, admin.Name)
 	assert.Equal(t, string(c.ClientType), admin.ClientType)
 	assert.Equal(t, c.Scopes, admin.Scopes)
+	assert.Equal(t, c.Audience, admin.Audience)
 }
