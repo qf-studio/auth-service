@@ -25,6 +25,11 @@ on:
         required: false
         default: ''
         type: string
+# One deploy at a time per service (GitLab: resource_group): a second run queues instead of
+# hitting CloudFormation while the stack is UPDATE_IN_PROGRESS (2026-09-06, runs #6/#7 collided).
+concurrency:
+  group: deploy-auth-service
+  cancel-in-progress: false
 permissions:
   contents: read
   packages: read
