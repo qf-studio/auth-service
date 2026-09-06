@@ -124,7 +124,7 @@ jobs:
             --parameter-overrides \
               ImageTag="${{ needs.mirror.outputs.tag }}" \
               JobId="${{ github.run_id }}" \
-              $([ "$FIRST" = true ] && echo DesiredCount=0) \
+              DesiredCount=$([ "$FIRST" = true ] && echo 0 || echo 2) \
             --tags \
               AppManagerCFNStackKey="quantflow-svc-$SERVICE" \
               Environment=quantflow \
@@ -161,7 +161,7 @@ jobs:
   verify:
     name: Verify service
     runs-on: [self-hosted, aws-quantflow-deployer]
-    needs: [deploy, migrate]
+    needs: [mirror, deploy, migrate]   # mirror too: a job can only read outputs of jobs it lists in needs (2026-09-06: empty ImageTag)
     steps:
       - name: Scale up after the first migration
         if: needs.deploy.outputs.first_deploy == 'true'
