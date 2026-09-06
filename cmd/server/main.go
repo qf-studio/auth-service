@@ -139,6 +139,14 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		)
 	}
 
+	// Trusted reverse-proxy CIDRs (GH-508): behind a TLS-terminating ALB,
+	// Request.TLS is always nil, so DPoP htu scheme reconstruction needs
+	// X-Forwarded-Proto — but only from proxies explicitly trusted here.
+	trustedProxies, err := middleware.ParseTrustedProxyCIDRs(cfg.Proxy.TrustedCIDRs)
+	if err != nil {
+		return fmt.Errorf("trusted proxy cidrs: %w", err)
+	}
+
 	// ── MFA ──────────────────────────────────────────────────────────────
 	mfaRepo := storage.NewPostgresMFARepository(pgPool)
 	mfaStore := storage.NewRedisMFAStore(redisClient)
@@ -196,15 +204,16 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	var samlSvc api.SAMLService
 
 	services := &api.Services{
-		Auth:    authSvc,
-		Token:   tokenSvc,
-		Session: sessionSvc,
-		DPoP:    dpopAPISvc,
-		MFA:     mfaSvc,
-		OAuth:   oauthSvc,
-		OIDC:    oidcSvc,
-		Broker:  brokerTokenSvc,
-		SAML:    samlSvc,
+		Auth:           authSvc,
+		Token:          tokenSvc,
+		Session:        sessionSvc,
+		DPoP:           dpopAPISvc,
+		MFA:            mfaSvc,
+		OAuth:          oauthSvc,
+		OIDC:           oidcSvc,
+		Broker:         brokerTokenSvc,
+		SAML:           samlSvc,
+		TrustedProxies: trustedProxies,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -239,7 +248,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 
 	var dpopMW gin.HandlerFunc
 	if cfg.DPoP.Enabled {
-		dpopMW = middleware.DPoPMiddleware(dpop.NewMiddlewareValidator(dpopSvc))
+		dpopMW = middleware.DPoPMiddleware(dpop.NewMiddlewareValidator(dpopSvc), trustedProxies)
 	}
 
 	mw := &api.MiddlewareStack{

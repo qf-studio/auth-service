@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/middleware"
 )
 
 // AuthResult contains the tokens returned after successful authentication.
@@ -348,6 +349,11 @@ type Services struct {
 	OIDC    OIDCProviderService
 	Broker  BrokerTokenService
 	SAML    SAMLService
+	// TrustedProxies (GH-508): reverse-proxy CIDRs trusted to set
+	// X-Forwarded-Proto/-Host, used by TokenHandlers to reconstruct the
+	// externally-visible request URL for DPoP htu validation. Nil/empty
+	// (the zero value) trusts nothing, matching pre-GH-508 behaviour.
+	TrustedProxies middleware.TrustedProxies
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

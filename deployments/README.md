@@ -737,6 +737,7 @@ Full list of configuration variables. See `.env.staging.example` and `.env.produ
 | `RATE_LIMIT_RPS` | Rate limit requests per second | `20` | `50` |
 | `RATE_LIMIT_BURST` | Rate limit burst size | `40` | `100` |
 | `TLS_ENABLED` | Enable TLS on the service | `false` | *(via Caddy)* |
+| `TRUSTED_PROXY_CIDRS` | Comma-separated CIDR ranges trusted to set `X-Forwarded-Proto`/`X-Forwarded-Host` (GH-508). Behind auth.quantflow.studio's AWS ALB, `Request.TLS` is always nil on this service, so scheme reconstruction for DPoP `htu` validation must come from the forwarded headers — but only when the request actually came from the ALB. Set to the VPC CIDR(s). Empty (default) trusts nothing. | *(empty)* | VPC CIDR(s), e.g. `10.0.0.0/16` |
 | `CORS_ALLOWED_ORIGINS` | Allowed CORS origins | `https://staging.quantflow.studio` | `https://quantflow.studio` |
 
 ### Production-Only (Caddy / TLS)

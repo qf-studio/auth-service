@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ type Config struct {
 	SAML         SAMLConfig
 	Tenant       TenantConfig
 	HIBP         HIBPConfig
+	Proxy        ProxyConfig
 }
 
 // TenantConfig holds multi-tenancy resolution settings.
@@ -182,6 +184,18 @@ type TLSConfig struct {
 	Enabled bool
 }
 
+// ProxyConfig holds settings for trusting reverse-proxy headers (GH-508).
+type ProxyConfig struct {
+	// TrustedCIDRs (TRUSTED_PROXY_CIDRS): comma-separated CIDR ranges allowed
+	// to set X-Forwarded-Proto / X-Forwarded-Host on incoming requests, used
+	// to reconstruct the externally-visible scheme/host (e.g. for DPoP htu
+	// validation) when TLS is terminated upstream (an ALB) and Request.TLS
+	// is always nil on this service. Empty (default) trusts nothing, so
+	// behavior is unchanged unless explicitly configured — set to the VPC
+	// CIDR(s) when running behind the ALB.
+	TrustedCIDRs []string
+}
+
 // CORSConfig holds CORS settings.
 type CORSConfig struct {
 	AllowedOrigins   []string
@@ -312,6 +326,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	hibpCfg := loadHIBP(l)
+	proxyCfg, err := loadProxy(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -339,7 +357,22 @@ func Load() (*Config, error) {
 		SAML:         samlCfg,
 		Tenant:       tenantCfg,
 		HIBP:         hibpCfg,
+		Proxy:        proxyCfg,
 	}, nil
+}
+
+// loadProxy reads the optional TRUSTED_PROXY_CIDRS list and validates each
+// entry is a well-formed CIDR, failing fast at startup rather than silently
+// never matching any request (GH-508).
+func loadProxy(l *loader) (ProxyConfig, error) {
+	raw := l.optStr("TRUSTED_PROXY_CIDRS", "")
+	cidrs := splitCSV(raw)
+	for _, c := range cidrs {
+		if _, _, err := net.ParseCIDR(c); err != nil {
+			return ProxyConfig{}, fmt.Errorf("TRUSTED_PROXY_CIDRS: invalid CIDR %q: %w", c, err)
+		}
+	}
+	return ProxyConfig{TrustedCIDRs: cidrs}, nil
 }
 
 // loadHIBP reads the optional HIBP range-endpoint override used to redirect

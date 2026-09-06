@@ -121,12 +121,26 @@ func newDPoPIntegrationRouter(
 	validator middleware.TokenValidator,
 	dpopValidator middleware.DPoPProofValidator,
 ) *gin.Engine {
-	svc := &api.Services{Auth: authSvc, Token: tokenSvc, DPoP: dpopSvc}
+	return newDPoPIntegrationRouterWithProxies(authSvc, tokenSvc, dpopSvc, validator, dpopValidator, nil)
+}
+
+// newDPoPIntegrationRouterWithProxies is like newDPoPIntegrationRouter but
+// also accepts the set of reverse-proxy CIDRs trusted to set
+// X-Forwarded-Proto/-Host (GH-508).
+func newDPoPIntegrationRouterWithProxies(
+	authSvc api.AuthService,
+	tokenSvc api.TokenService,
+	dpopSvc api.DPoPService,
+	validator middleware.TokenValidator,
+	dpopValidator middleware.DPoPProofValidator,
+	trustedProxies middleware.TrustedProxies,
+) *gin.Engine {
+	svc := &api.Services{Auth: authSvc, Token: tokenSvc, DPoP: dpopSvc, TrustedProxies: trustedProxies}
 	mw := &api.MiddlewareStack{
 		Auth: middleware.AuthMiddleware(validator),
 	}
 	if dpopValidator != nil {
-		mw.DPoP = middleware.DPoPMiddleware(dpopValidator)
+		mw.DPoP = middleware.DPoPMiddleware(dpopValidator, trustedProxies)
 	}
 	return api.NewPublicRouter(svc, mw, health.NewService())
 }
@@ -358,4 +372,126 @@ func TestDPoP_ProtectedEndpoint_UnboundToken_NoProofNeeded(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- GH-508: htu scheme reconstruction behind a trusted reverse proxy ---
+
+// htuCheckingDPoPService is a fake api.DPoPService that simulates RFC 9449
+// htu matching (normally done by internal/dpop's matchHTU): it succeeds
+// only when the httpURI TokenHandlers passes to ValidateProof exactly
+// matches the proof's claimed htu. This lets these tests assert on the
+// scheme/host TokenHandlers reconstructed without needing a real signed
+// DPoP proof.
+type htuCheckingDPoPService struct {
+	claimedHTU string
+}
+
+func (f *htuCheckingDPoPService) Enabled() bool { return true }
+func (f *htuCheckingDPoPService) ValidateProof(_ context.Context, _, _, httpURI string) (*api.DPoPProofClaims, error) {
+	if httpURI != f.claimedHTU {
+		return nil, fmt.Errorf("htu %q does not match request %q", f.claimedHTU, httpURI)
+	}
+	return &api.DPoPProofClaims{JKTThumbprint: "test-jkt"}, nil
+}
+func (f *htuCheckingDPoPService) IssueNonce(_ context.Context) (string, error) {
+	return "test-nonce", nil
+}
+
+func newTokenEndpointRequest() *http.Request {
+	body := `{"grant_type":"refresh_token","refresh_token":"qf_rt_valid"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/token", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("DPoP", "proof-jwt")
+	req.Host = "auth.quantflow.studio"
+	return req
+}
+
+func TestDPoP_TokenEndpoint_TrustedProxy_HTTPSForwardedProto_ValidatesHTTPSHtu(t *testing.T) {
+	dpopSvc := &htuCheckingDPoPService{claimedHTU: "https://auth.quantflow.studio/auth/token"}
+	tokenSvc := &mockTokenService{
+		refreshFn: func(_ context.Context, _ string) (*api.AuthResult, error) {
+			return &api.AuthResult{AccessToken: "qf_at_dpop", TokenType: "DPoP", ExpiresIn: 900}, nil
+		},
+	}
+	validator := &mockTokenValidator{claims: &domain.TokenClaims{Subject: "user-1", TokenID: "tok-1"}}
+	trustedProxies, err := middleware.ParseTrustedProxyCIDRs([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	router := newDPoPIntegrationRouterWithProxies(&mockAuthService{}, tokenSvc, dpopSvc, validator, nil, trustedProxies)
+
+	req := newTokenEndpointRequest()
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.RemoteAddr = "10.0.0.5:12345" // inside the trusted CIDR (e.g. the ALB)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
+func TestDPoP_TokenEndpoint_UntrustedProxy_HTTPSHtuRejected(t *testing.T) {
+	// Spoofing test: an untrusted source cannot flip the scheme via
+	// X-Forwarded-Proto — a proof claiming https is rejected because the
+	// server still resolves the (untrusted, non-TLS) request as http.
+	dpopSvc := &htuCheckingDPoPService{claimedHTU: "https://auth.quantflow.studio/auth/token"}
+	tokenSvc := &mockTokenService{}
+	validator := &mockTokenValidator{claims: &domain.TokenClaims{Subject: "user-1", TokenID: "tok-1"}}
+	trustedProxies, err := middleware.ParseTrustedProxyCIDRs([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	router := newDPoPIntegrationRouterWithProxies(&mockAuthService{}, tokenSvc, dpopSvc, validator, nil, trustedProxies)
+
+	req := newTokenEndpointRequest()
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.RemoteAddr = "203.0.113.5:12345" // outside the trusted CIDR
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid DPoP proof")
+}
+
+func TestDPoP_TokenEndpoint_UntrustedProxy_HTTPHtuAccepted(t *testing.T) {
+	// Same untrusted source, but the proof claims the http scheme the
+	// server actually resolves — this must still succeed.
+	dpopSvc := &htuCheckingDPoPService{claimedHTU: "http://auth.quantflow.studio/auth/token"}
+	tokenSvc := &mockTokenService{
+		refreshFn: func(_ context.Context, _ string) (*api.AuthResult, error) {
+			return &api.AuthResult{AccessToken: "qf_at_dpop", TokenType: "DPoP", ExpiresIn: 900}, nil
+		},
+	}
+	validator := &mockTokenValidator{claims: &domain.TokenClaims{Subject: "user-1", TokenID: "tok-1"}}
+	trustedProxies, err := middleware.ParseTrustedProxyCIDRs([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	router := newDPoPIntegrationRouterWithProxies(&mockAuthService{}, tokenSvc, dpopSvc, validator, nil, trustedProxies)
+
+	req := newTokenEndpointRequest()
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.RemoteAddr = "203.0.113.5:12345" // outside the trusted CIDR
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
+func TestDPoP_TokenEndpoint_NoForwardedHeader_UnchangedBehavior(t *testing.T) {
+	dpopSvc := &htuCheckingDPoPService{claimedHTU: "http://auth.quantflow.studio/auth/token"}
+	tokenSvc := &mockTokenService{
+		refreshFn: func(_ context.Context, _ string) (*api.AuthResult, error) {
+			return &api.AuthResult{AccessToken: "qf_at_dpop", TokenType: "DPoP", ExpiresIn: 900}, nil
+		},
+	}
+	validator := &mockTokenValidator{claims: &domain.TokenClaims{Subject: "user-1", TokenID: "tok-1"}}
+	trustedProxies, err := middleware.ParseTrustedProxyCIDRs([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	router := newDPoPIntegrationRouterWithProxies(&mockAuthService{}, tokenSvc, dpopSvc, validator, nil, trustedProxies)
+
+	req := newTokenEndpointRequest()
+	// No X-Forwarded-Proto header, even from a trusted proxy address.
+	req.RemoteAddr = "10.0.0.5:12345"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }

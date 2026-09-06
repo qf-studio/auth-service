@@ -7,17 +7,21 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/middleware"
 )
 
 // TokenHandlers groups HTTP handlers for token management endpoints.
 type TokenHandlers struct {
-	token TokenService
-	dpop  DPoPService
+	token          TokenService
+	dpop           DPoPService
+	trustedProxies middleware.TrustedProxies
 }
 
-// NewTokenHandlers creates a new TokenHandlers with the given TokenService and optional DPoPService.
-func NewTokenHandlers(token TokenService, dpop DPoPService) *TokenHandlers {
-	return &TokenHandlers{token: token, dpop: dpop}
+// NewTokenHandlers creates a new TokenHandlers with the given TokenService, optional
+// DPoPService, and the set of reverse-proxy CIDRs trusted to set X-Forwarded-Proto/-Host
+// (GH-508; empty/nil trusts nothing).
+func NewTokenHandlers(token TokenService, dpop DPoPService, trustedProxies middleware.TrustedProxies) *TokenHandlers {
+	return &TokenHandlers{token: token, dpop: dpop, trustedProxies: trustedProxies}
 }
 
 // Token handles POST /auth/token — dispatches based on grant_type.
@@ -74,7 +78,7 @@ func (h *TokenHandlers) extractDPoPThumbprint(c *gin.Context) (string, error) {
 		return "", fmt.Errorf("DPoP is not enabled on this server")
 	}
 
-	httpURI := requestURI(c)
+	httpURI := requestURI(c, h.trustedProxies)
 	claims, err := h.dpop.ValidateProof(c.Request.Context(), proofJWT, c.Request.Method, httpURI)
 	if err != nil {
 		return "", err
@@ -84,12 +88,12 @@ func (h *TokenHandlers) extractDPoPThumbprint(c *gin.Context) (string, error) {
 }
 
 // requestURI reconstructs the full request URI for DPoP htu matching.
-func requestURI(c *gin.Context) string {
-	scheme := "https"
-	if c.Request.TLS == nil {
-		scheme = "http"
-	}
-	return fmt.Sprintf("%s://%s%s", scheme, c.Request.Host, c.Request.URL.Path)
+// Scheme/host come from middleware.PublicSchemeHost, which only trusts
+// X-Forwarded-Proto/-Host when the request came from trustedProxies
+// (GH-508) — otherwise it falls back to Request.TLS / Request.Host.
+func requestURI(c *gin.Context, trustedProxies middleware.TrustedProxies) string {
+	scheme, host := middleware.PublicSchemeHost(c.Request, trustedProxies)
+	return fmt.Sprintf("%s://%s%s", scheme, host, c.Request.URL.Path)
 }
 
 // Revoke handles POST /auth/revoke.

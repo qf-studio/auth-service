@@ -34,7 +34,7 @@ func (v *dpopProofValidator) ValidateProof(ctx context.Context, proofJWT, httpMe
 //  2. If the token has a cnf.jkt claim (DPoP-bound), requires a valid DPoP proof
 //  3. Validates the proof's JWK thumbprint matches the token's cnf.jkt
 //  4. Non-bound tokens (no cnf.jkt) pass through without DPoP check
-func DPoPMiddleware(validator DPoPProofValidator) gin.HandlerFunc {
+func DPoPMiddleware(validator DPoPProofValidator, trustedProxies TrustedProxies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, err := GetClaims(c)
 		if err != nil {
@@ -63,7 +63,7 @@ func DPoPMiddleware(validator DPoPProofValidator) gin.HandlerFunc {
 			return
 		}
 
-		httpURI := dpopRequestURI(c)
+		httpURI := dpopRequestURI(c, trustedProxies)
 		thumbprint, validateErr := validator.ValidateProof(c.Request.Context(), proofJWT, c.Request.Method, httpURI)
 		if validateErr != nil {
 			domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized,
@@ -83,10 +83,10 @@ func DPoPMiddleware(validator DPoPProofValidator) gin.HandlerFunc {
 }
 
 // dpopRequestURI reconstructs the full request URI for DPoP htu matching.
-func dpopRequestURI(c *gin.Context) string {
-	scheme := "https"
-	if c.Request.TLS == nil {
-		scheme = "http"
-	}
-	return fmt.Sprintf("%s://%s%s", scheme, c.Request.Host, c.Request.URL.Path)
+// Scheme/host come from PublicSchemeHost, which only trusts
+// X-Forwarded-Proto/-Host when the request came from trustedProxies
+// (GH-508) — otherwise it falls back to Request.TLS / Request.Host.
+func dpopRequestURI(c *gin.Context, trustedProxies TrustedProxies) string {
+	scheme, host := PublicSchemeHost(c.Request, trustedProxies)
+	return fmt.Sprintf("%s://%s%s", scheme, host, c.Request.URL.Path)
 }

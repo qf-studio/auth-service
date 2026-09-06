@@ -47,7 +47,7 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 
 	v := domain.NewValidator()
 	authH := NewAuthHandlers(svc.Auth, svc.Session)
-	tokenH := NewTokenHandlers(svc.Token, svc.DPoP)
+	tokenH := NewTokenHandlers(svc.Token, svc.DPoP, svc.TrustedProxies)
 
 	var sessionH *SessionHandlers
 	if svc.Session != nil {

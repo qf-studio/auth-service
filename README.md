@@ -146,6 +146,7 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `RATE_LIMIT_MAX_FAILED_ATTEMPTS` | `10` | Failed attempts before lockout |
 | `RATE_LIMIT_LOCKOUT_DURATION` | `15m` | Lockout duration |
 | `TLS_ENABLED` | `false` | Enable TLS |
+| `TRUSTED_PROXY_CIDRS` | _(empty)_ | Comma-separated CIDR ranges trusted to set `X-Forwarded-Proto`/`X-Forwarded-Host` (e.g. an AWS ALB terminating TLS in front of this service). Empty (default) trusts nothing, so scheme/host are derived only from `Request.TLS`/`Request.Host` — this is required for correct DPoP `htu` validation behind a TLS-terminating load balancer, since the backend otherwise always sees plaintext HTTP. |
 | `CORS_ALLOWED_METHODS` | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | Allowed HTTP methods |
 | `CORS_ALLOWED_HEADERS` | `Authorization,Content-Type,X-Request-ID` | Allowed headers |
 | `CORS_EXPOSE_HEADERS` | `X-Request-ID` | Exposed headers |

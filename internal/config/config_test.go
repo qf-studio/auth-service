@@ -110,6 +110,29 @@ func TestLoad_AllDefaults(t *testing.T) {
 	// SAML defaults (disabled)
 	assert.False(t, cfg.SAML.Enabled)
 	assert.Empty(t, cfg.SAML.EntityID)
+
+	// Proxy defaults (GH-508): trust nothing unless configured.
+	assert.Empty(t, cfg.Proxy.TrustedCIDRs)
+}
+
+func TestLoad_ProxyTrustedCIDRs(t *testing.T) {
+	env := requiredEnv()
+	env["TRUSTED_PROXY_CIDRS"] = "10.0.0.0/8, 172.16.0.0/12"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.0/8", "172.16.0.0/12"}, cfg.Proxy.TrustedCIDRs)
+}
+
+func TestLoad_InvalidTrustedProxyCIDR(t *testing.T) {
+	env := requiredEnv()
+	env["TRUSTED_PROXY_CIDRS"] = "not-a-cidr"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TRUSTED_PROXY_CIDRS")
 }
 
 func TestLoad_OIDCConfig(t *testing.T) {
