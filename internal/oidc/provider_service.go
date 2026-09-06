@@ -239,7 +239,11 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
 
-	result, err := s.tokens.IssueTokenPair(ctx, user.ID, user.Roles, code.Scopes, domain.ClientTypeUser, client.Audience...)
+	// GH-512: persist the client id alongside the refresh token (via
+	// IssueTokenPairForClient instead of IssueTokenPair) so a later refresh
+	// can re-resolve this client's Audience rather than falling back to the
+	// global JWT_AUDIENCE.
+	result, err := s.tokens.IssueTokenPairForClient(ctx, user.ID, user.Roles, code.Scopes, domain.ClientTypeUser, req.ClientID, client.Audience...)
 	if err != nil {
 		s.logger.Error("exchange code: issue token pair failed", zap.Error(err))
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)

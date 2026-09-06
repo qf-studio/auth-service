@@ -305,7 +305,11 @@ func (s *Service) CompleteMFALogin(ctx context.Context, mfaToken, code, codeType
 		return nil, fmt.Errorf("look up user after mfa: %w", api.ErrInternalError)
 	}
 
-	// Issue full token pair now that MFA is verified.
+	// Issue full token pair now that MFA is verified. Like password login,
+	// the MFA challenge/completion flow carries no client_id, so there is no
+	// per-client Audience to resolve here — this always issues a
+	// global-JWT_AUDIENCE token (GH-512). See README.md's "Per-Client
+	// Audience" section for flows that need per-client audience isolation.
 	result, err := s.issuer.IssueTokenPair(ctx, userID, user.Roles, nil, domain.ClientTypeUser)
 	if err != nil {
 		return nil, fmt.Errorf("issue tokens after mfa: %w", err)

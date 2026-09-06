@@ -421,6 +421,60 @@ func TestProviderService_ExchangeCode_PassesClientAudience(t *testing.T) {
 	assert.Equal(t, []string{"https://api.example.com"}, capturedAudience)
 }
 
+// TestProviderService_ExchangeCode_PersistsClientIDForRefresh is a
+// regression test for GH-512: code exchange must call
+// IssueTokenPairForClient (not IssueTokenPair) with the requesting client's
+// id, so the token service can persist it alongside the refresh token and
+// re-resolve the client's Audience on a later refresh instead of silently
+// falling back to the global JWT_AUDIENCE.
+func TestProviderService_ExchangeCode_PersistsClientIDForRefresh(t *testing.T) {
+	client := testConfidentialClient()
+	client.Audience = []string{"https://api.example.com"}
+	user := testUserForOIDC()
+	clients := &fakeClientLookup{
+		findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return client, nil },
+	}
+	users := &fakeUserLookup{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) { return user, nil },
+	}
+	var capturedClientID string
+	var capturedAudience []string
+	tokens := &fakeTokenIssuer{
+		issueTokenPairForClientFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error) {
+			capturedClientID = clientID
+			capturedAudience = audience
+			return &api.AuthResult{AccessToken: "at", TokenType: "Bearer", ExpiresIn: 900}, nil
+		},
+	}
+
+	svc, store := newTestProviderService(t, testOIDCConfig(), clients, users, tokens, nil)
+
+	code := &oidc.AuthorizationCode{
+		Code:                "auth-code-cid",
+		Subject:             user.ID,
+		ClientID:            client.ID.String(),
+		RedirectURI:         client.RedirectURIs[0],
+		Scopes:              []string{"profile"},
+		CodeChallenge:       oauth.S256Challenge("verifier-cid"),
+		CodeChallengeMethod: "S256",
+		AuthTime:            time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(time.Minute),
+	}
+	seedAuthCode(t, store, code)
+
+	_, err := svc.ExchangeCode(context.Background(), &api.CodeExchangeRequest{
+		GrantType:    "authorization_code",
+		Code:         "auth-code-cid",
+		RedirectURI:  client.RedirectURIs[0],
+		ClientID:     client.ID.String(),
+		ClientSecret: "correct-secret",
+		CodeVerifier: "verifier-cid",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, client.ID.String(), capturedClientID)
+	assert.Equal(t, []string{"https://api.example.com"}, capturedAudience)
+}
+
 func TestProviderService_ExchangeCode_Success_WithoutOpenIDScope_NoIDToken(t *testing.T) {
 	client := testConfidentialClient()
 	user := testUserForOIDC()

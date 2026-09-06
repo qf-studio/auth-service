@@ -26,6 +26,11 @@ type UserLookup interface {
 // by *token.Service.
 type TokenIssuer interface {
 	IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error)
+	// IssueTokenPairForClient behaves like IssueTokenPair but also persists
+	// clientID alongside the minted refresh token, so a later refresh can
+	// re-resolve the client and reapply its current Audience (GH-512)
+	// instead of falling back to the global JWT_AUDIENCE.
+	IssueTokenPairForClient(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
 	IssueIDToken(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
 }
 

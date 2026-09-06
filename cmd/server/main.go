@@ -108,6 +108,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// Keep Postgres refresh-token bookkeeping (used for introspection) truthful
 	// across rotation (GH-486).
 	tokenSvc.SetRefreshTokenStore(refreshTokenRepo)
+	// Re-resolve a refresh token's originating client at refresh time so the
+	// reissued access token keeps that client's Audience instead of falling
+	// back to the global JWT_AUDIENCE (GH-512).
+	tokenSvc.SetClientLookup(clientRepo)
 	hibpClient := hibp.NewClient(http.DefaultClient, cfg.HIBP.APIURL)
 
 	// ── Email ────────────────────────────────────────────────────────────

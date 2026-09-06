@@ -378,7 +378,12 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		}
 	}
 
-	// Issue token pair.
+	// Issue token pair. Password login (LoginRequest) carries no client_id —
+	// there is no OAuth2 client context here to resolve a per-client
+	// Audience from, so this always issues a global-JWT_AUDIENCE token
+	// (GH-512). Products that need per-client audience isolation must use
+	// the OIDC authorization code flow instead (see README.md's "Per-Client
+	// Audience" section).
 	result, err := s.issuer.IssueTokenPair(ctx, user.ID, user.Roles, nil, domain.ClientTypeUser)
 	if err != nil {
 		s.logger.Error("failed to issue token pair", zap.Error(err))
