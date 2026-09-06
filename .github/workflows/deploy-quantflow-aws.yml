@@ -122,25 +122,29 @@ jobs:
               Environment=quantflow \
               Relation=QuantFlow \
               Project=Website
-      - name: Run database migration (one-off task, the task definition the stack just registered, entrypoint /auth-migrate)
+      - name: Run database migration (one-off task from the migrate task definition the stack registered)
         run: |
           set -euo pipefail
-          # Order: stack first (registers the task definition with the new image), then migrate with THAT definition,
-          # then wait for the service. Migrations are applied in-VPC by the image itself; no DB credentials on the runner
-          # (pointer's workflow pulled them onto the runner). Trade-off: new tasks may serve for ~1-2 min before "up"
-          # completes -> auth-service migrations must stay backward-compatible (expand/contract), as they already must
-          # for rolling deploys. Family quantflow-auth-service, bridge mode -> no awsvpc network config needed.
-          TASKDEF=$(aws ecs describe-task-definition --task-definition quantflow-auth-service --region "$AWS_REGION" --query taskDefinition.taskDefinitionArn --output text)
+          # The stack registers a second task definition, family quantflow-auth-service-migrate: same image and
+          # secrets, no port mappings (the service pins host port 4002 per instance, so a task from the service's own
+          # definition cannot be placed next to it). Migrations run in-VPC with the shipped binary; no DB credentials
+          # on the runner. Order: stack (new task definitions) -> migrate -> service stable. Migrations must stay
+          # backward-compatible (they must anyway for rolling deploys).
+          TASKDEF=$(aws ecs describe-task-definition --task-definition quantflow-auth-service-migrate --region "$AWS_REGION" --query taskDefinition.taskDefinitionArn --output text)
           run_migrate() {
-            ARN=$(aws ecs run-task --cluster quantflow --task-definition "$TASKDEF" --count 1 --region "$AWS_REGION" \
-              --overrides "{\"containerOverrides\":[{\"name\":\"auth-service\",\"command\":[\"/auth-migrate\",$1]}]}" \
-              --query 'tasks[0].taskArn' --output text)
+            OUT=$(aws ecs run-task --cluster quantflow --task-definition "$TASKDEF" --count 1 --region "$AWS_REGION" $1 --query '{arn:tasks[0].taskArn,failures:failures}' --output json)
+            ARN=$(echo "$OUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["arn"] or "")')
+            if [ -z "$ARN" ]; then echo "run-task failed: $OUT"; exit 1; fi
             aws ecs wait tasks-stopped --cluster quantflow --tasks "$ARN" --region "$AWS_REGION"
             CODE=$(aws ecs describe-tasks --cluster quantflow --tasks "$ARN" --region "$AWS_REGION" --query 'tasks[0].containers[0].exitCode' --output text)
-            echo "/auth-migrate $1 -> exit $CODE (task ${ARN##*/}; logs: /quantflow/auth-service)"; [ "$CODE" = "0" ]
+            echo "migration task ${ARN##*/} -> exit $CODE (logs: /quantflow/auth-service, stream migrate/auth-service/${ARN##*/})"
+            aws logs get-log-events --log-group-name /quantflow/auth-service --log-stream-name "migrate/auth-service/${ARN##*/}" --region "$AWS_REGION" --query 'events[].message' --output text 2>/dev/null | tail -5 || true
+            [ "$CODE" = "0" ]
           }
-          if [ -n "${{ inputs.force_version }}" ]; then run_migrate "\"force\",\"${{ inputs.force_version }}\""; fi
-          run_migrate '"up"'
+          if [ -n "${{ inputs.force_version }}" ]; then
+            run_migrate "--overrides {\"containerOverrides\":[{\"name\":\"auth-service\",\"command\":[\"/auth-migrate\",\"force\",\"${{ inputs.force_version }}\"]}]}"
+          fi
+          run_migrate ""
       - name: Scale up after the first migration
         if: env.first_deploy == 'true'
         run: |
