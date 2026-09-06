@@ -35,7 +35,7 @@ env:
   SERVICE: auth-service
   TEMPLATE_BASE: s3://quantflow-s3-app-data/templates/quantflow
 jobs:
-  # Job chain: mirror -> deploy (Nelya 2026-09-05). A lint/test job can be inserted in front later:
+  # Job chain (one job per stage, GitLab-style): mirror -> deploy -> migrate -> verify (Nelya 2026-09-06). A lint/test job can be inserted in front later:
   #   lint: {runs-on: ..., steps: [...]}  and  mirror: {needs: lint, ...}
   mirror:
     name: Mirror image GHCR -> ECR
@@ -83,12 +83,15 @@ jobs:
           docker image prune -f --filter "until=72h" >/dev/null || true
           df -h / | tail -1
   deploy:
-    name: Deploy service
+    name: Deploy stack
     runs-on: [self-hosted, aws-quantflow-deployer]
     needs: mirror
     environment: aws-quantflow   # unprotected label today; required reviewers can be added in Settings -> Environments
+    outputs:
+      first_deploy: ${{ steps.stack.outputs.first_deploy }}
     steps:
       - name: Deploy service stack from S3 template
+        id: stack
         run: |
           set -euo pipefail
           # A failed first CREATE leaves ROLLBACK_COMPLETE, which cannot be updated - remove the empty shell first
@@ -105,7 +108,7 @@ jobs:
           # backward-compatible).
           FIRST=false
           if ! aws cloudformation describe-stacks --stack-name "quantflow-svc-$SERVICE" --region "$AWS_REGION" >/dev/null 2>&1; then FIRST=true; fi
-          echo "first_deploy=$FIRST" >> "$GITHUB_ENV"
+          echo "first_deploy=$FIRST" >> "$GITHUB_OUTPUT"
           aws s3 cp "$TEMPLATE_BASE/$SERVICE.yml" "./$SERVICE-stack.yml" --region "$AWS_REGION"
           aws cloudformation deploy \
             --template-file "./$SERVICE-stack.yml" \
@@ -122,6 +125,11 @@ jobs:
               Environment=quantflow \
               Relation=QuantFlow \
               Project=Website
+  migrate:
+    name: Migrate database
+    runs-on: [self-hosted, aws-quantflow-deployer]
+    needs: deploy
+    steps:
       - name: Run database migration (one-off task from the migrate task definition the stack registered)
         run: |
           set -euo pipefail
@@ -145,10 +153,16 @@ jobs:
             run_migrate "--overrides {\"containerOverrides\":[{\"name\":\"auth-service\",\"command\":[\"/auth-migrate\",\"force\",\"${{ inputs.force_version }}\"]}]}"
           fi
           run_migrate ""
+  verify:
+    name: Verify service
+    runs-on: [self-hosted, aws-quantflow-deployer]
+    needs: [deploy, migrate]
+    steps:
       - name: Scale up after the first migration
-        if: env.first_deploy == 'true'
+        if: needs.deploy.outputs.first_deploy == 'true'
         run: |
           set -euo pipefail
+          aws s3 cp "$TEMPLATE_BASE/$SERVICE.yml" "./$SERVICE-stack.yml" --region "$AWS_REGION"
           aws cloudformation deploy \
             --template-file "./$SERVICE-stack.yml" \
             --stack-name "quantflow-svc-$SERVICE" \
