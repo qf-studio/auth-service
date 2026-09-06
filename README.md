@@ -145,7 +145,6 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `RATE_LIMIT_PROGRESSIVE_DELAY_AFTER` | `5` | Failed attempts before progressive delay |
 | `RATE_LIMIT_MAX_FAILED_ATTEMPTS` | `10` | Failed attempts before lockout |
 | `RATE_LIMIT_LOCKOUT_DURATION` | `15m` | Lockout duration |
-| `TLS_ENABLED` | `false` | Enable TLS |
 | `CORS_ALLOWED_METHODS` | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | Allowed HTTP methods |
 | `CORS_ALLOWED_HEADERS` | `Authorization,Content-Type,X-Request-ID` | Allowed headers |
 | `CORS_EXPOSE_HEADERS` | `X-Request-ID` | Exposed headers |

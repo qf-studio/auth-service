@@ -77,9 +77,6 @@ func TestLoad_AllDefaults(t *testing.T) {
 	assert.Equal(t, 50, cfg.Rate.RPS)
 	assert.Equal(t, 100, cfg.Rate.Burst)
 
-	// TLS default
-	assert.False(t, cfg.TLS.Enabled)
-
 	// CORS
 	assert.Equal(t, []string{"https://example.com"}, cfg.CORS.AllowedOrigins)
 
@@ -218,7 +215,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	env["ARGON2_PARALLELISM"] = "2"
 	env["RATE_LIMIT_RPS"] = "100"
 	env["RATE_LIMIT_BURST"] = "200"
-	env["TLS_ENABLED"] = "true"
 	env["CORS_ALLOWED_ORIGINS"] = "https://a.com, https://b.com"
 	env["APP_ENV"] = "staging"
 	setEnv(t, env)
@@ -250,7 +246,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	assert.Equal(t, 100, cfg.Rate.RPS)
 	assert.Equal(t, 200, cfg.Rate.Burst)
 
-	assert.True(t, cfg.TLS.Enabled)
 	assert.Equal(t, []string{"https://a.com", "https://b.com"}, cfg.CORS.AllowedOrigins)
 }
 
@@ -286,12 +281,12 @@ func TestLoad_InvalidInteger(t *testing.T) {
 
 func TestLoad_InvalidBoolean(t *testing.T) {
 	env := requiredEnv()
-	env["TLS_ENABLED"] = "maybe"
+	env["CORS_ALLOW_CREDENTIALS"] = "maybe"
 	setEnv(t, env)
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "TLS_ENABLED")
+	assert.Contains(t, err.Error(), "CORS_ALLOW_CREDENTIALS")
 	assert.Contains(t, err.Error(), "invalid boolean")
 }
 

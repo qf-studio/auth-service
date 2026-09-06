@@ -52,7 +52,7 @@ Covers staging and production environments, secrets management, monitoring, roll
 
 ### TLS Certificate
 
-- **Staging**: TLS disabled by default (`TLS_ENABLED=false`). Caddy is not included in the staging stack.
+- **Staging**: no TLS termination in the compose stack; Caddy is not included in the staging stack.
 - **Production**: Caddy 2 handles automatic TLS via ACME (Let's Encrypt). Requires:
   - A valid domain pointing to the server (e.g., `auth.quantflow.studio`)
   - Port 80 and 443 open for ACME challenge and HTTPS
@@ -735,7 +735,6 @@ Full list of configuration variables. See `.env.staging.example` and `.env.produ
 | `PASSWORD_PEPPER` | HMAC pepper for password hashing | *(required)* | *(required)* |
 | `RATE_LIMIT_RPS` | Rate limit requests per second | `20` | `50` |
 | `RATE_LIMIT_BURST` | Rate limit burst size | `40` | `100` |
-| `TLS_ENABLED` | Enable TLS on the service | `false` | *(via Caddy)* |
 | `CORS_ALLOWED_ORIGINS` | Allowed CORS origins | `https://staging.quantflow.studio` | `https://quantflow.studio` |
 
 ### Production-Only (Caddy / TLS)

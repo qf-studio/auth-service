@@ -17,7 +17,6 @@ type Config struct {
 	JWT          JWTConfig
 	Argon2       Argon2Config
 	Rate         RateLimitConfig
-	TLS          TLSConfig
 	CORS         CORSConfig
 	RequestLimit RequestLimitConfig
 	Email        EmailConfig
@@ -172,11 +171,6 @@ type RateLimitConfig struct {
 	MaxFailedAttempts     int           // failed attempts before lockout
 }
 
-// TLSConfig holds TLS settings.
-type TLSConfig struct {
-	Enabled bool
-}
-
 // CORSConfig holds CORS settings.
 type CORSConfig struct {
 	AllowedOrigins   []string
@@ -266,10 +260,6 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	tls, err := loadTLS(l)
-	if err != nil {
-		return nil, err
-	}
 	cors, err := loadCORS(l)
 	if err != nil {
 		return nil, err
@@ -323,7 +313,6 @@ func Load() (*Config, error) {
 		JWT:          jwt,
 		Argon2:       argon,
 		Rate:         rate,
-		TLS:          tls,
 		CORS:         cors,
 		RequestLimit: reqLimit,
 		Email:        email,
@@ -519,14 +508,6 @@ func loadRateLimit(l *loader) (RateLimitConfig, error) {
 		LockoutDuration:       lockoutDur,
 		MaxFailedAttempts:     maxFailedAttempts,
 	}, nil
-}
-
-func loadTLS(l *loader) (TLSConfig, error) {
-	tlsEnabled, err := l.optBool("TLS_ENABLED", false)
-	if err != nil {
-		return TLSConfig{}, err
-	}
-	return TLSConfig{Enabled: tlsEnabled}, nil
 }
 
 func loadCORS(l *loader) (CORSConfig, error) {
