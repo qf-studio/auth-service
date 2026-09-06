@@ -65,6 +65,15 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
+	// Decision: TLS_ENABLED was a no-op — every deployment terminates TLS at
+	// the ingress (ALB/Caddy), and internal/httpserver always serves
+	// plaintext (GH-507). Warn for one release cycle so anyone still
+	// setting it notices before this check is dropped in the release
+	// after next; note the removal in the changelog for that release.
+	if _, ok := os.LookupEnv("TLS_ENABLED"); ok {
+		log.Warn("TLS_ENABLED is ignored: TLS terminates at the ingress (this check will be removed in a future release)")
+	}
+
 	// ── Redis ─────────────────────────────────────────────────────────────
 	redisClient, err := storage.NewRedisClient(cfg.Redis.Addr(), cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {
