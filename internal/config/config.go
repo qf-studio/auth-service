@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ type Config struct {
 	SAML         SAMLConfig
 	Tenant       TenantConfig
 	HIBP         HIBPConfig
+	Proxy        ProxyConfig
 }
 
 // TenantConfig holds multi-tenancy resolution settings.
@@ -91,6 +93,18 @@ type DPoPConfig struct {
 // HIBPConfig holds HaveIBeenPwned Pwned Passwords API settings.
 type HIBPConfig struct {
 	APIURL string // HIBP_API_URL: base range-endpoint URL; empty uses internal/hibp's built-in pwnedpasswords.com default
+}
+
+// ProxyConfig holds trusted reverse-proxy settings.
+type ProxyConfig struct {
+	// TrustedCIDRs: TRUSTED_PROXY_CIDRS, comma-separated CIDRs. Requests whose
+	// immediate peer address falls within one of these ranges are allowed to
+	// set X-Forwarded-Proto / X-Forwarded-Host, which the server then trusts
+	// when reconstructing the externally-visible request URL (e.g. for DPoP
+	// htu matching behind a TLS-terminating AWS ALB). Empty (the default)
+	// trusts nothing — headers are ignored and the scheme/host come from
+	// Request.TLS / Request.Host, exactly as before this setting existed.
+	TrustedCIDRs []*net.IPNet
 }
 
 // EmailConfig holds outbound email delivery settings.
@@ -302,6 +316,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	hibpCfg := loadHIBP(l)
+	proxyCfg, err := loadProxy(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -328,6 +346,7 @@ func Load() (*Config, error) {
 		SAML:         samlCfg,
 		Tenant:       tenantCfg,
 		HIBP:         hibpCfg,
+		Proxy:        proxyCfg,
 	}, nil
 }
 
@@ -336,6 +355,24 @@ func Load() (*Config, error) {
 // so it never contributes to l.missing.
 func loadHIBP(l *loader) HIBPConfig {
 	return HIBPConfig{APIURL: l.optStr("HIBP_API_URL", "")}
+}
+
+// loadProxy reads TRUSTED_PROXY_CIDRS and parses each entry as a CIDR. It has
+// no required fields, so it never contributes to l.missing.
+func loadProxy(l *loader) (ProxyConfig, error) {
+	raw := l.optStr("TRUSTED_PROXY_CIDRS", "")
+	entries := splitCSV(raw)
+
+	cidrs := make([]*net.IPNet, 0, len(entries))
+	for _, entry := range entries {
+		_, ipNet, err := net.ParseCIDR(entry)
+		if err != nil {
+			return ProxyConfig{}, fmt.Errorf("TRUSTED_PROXY_CIDRS: invalid CIDR %q: %w", entry, err)
+		}
+		cidrs = append(cidrs, ipNet)
+	}
+
+	return ProxyConfig{TrustedCIDRs: cidrs}, nil
 }
 
 func loadApp(l *loader) (AppConfig, error) {

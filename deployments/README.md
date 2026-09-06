@@ -270,6 +270,25 @@ cp .env.production.example .env.production
 - **TLS 1.3** — Caddy auto-provisions certificates via Let's Encrypt
 - **PostgreSQL SSL** — `POSTGRES_SSLMODE=require` enforces encrypted DB connections
 
+#### Running Behind an AWS ALB (TLS-terminating load balancer)
+
+Deployments that terminate TLS in front of the service (e.g. an AWS ALB in
+front of `auth.quantflow.studio`, rather than the Caddy setup above) receive
+only plaintext HTTP at the container — `Request.TLS` is always nil. Without
+further configuration the server reconstructs every request URL as
+`http://...`, which breaks DPoP proof validation: a correct client always
+signs its proof against the public `https://...` URL, so the `htu` scheme
+never matches and every DPoP-bound request is rejected (GH-508).
+
+Set `TRUSTED_PROXY_CIDRS` to the VPC CIDR(s) the ALB's target group lives in
+so the server trusts the ALB's `X-Forwarded-Proto` / `X-Forwarded-Host`
+headers when reconstructing the request URL. Leave it unset (the default) for
+any deployment where the load balancer's peer address isn't otherwise
+trusted — the headers are then ignored and the scheme falls back to
+`Request.TLS`, same as before this setting existed. Do not set it to `0.0.0.0/0`
+or anything broader than the actual proxy network: any peer inside a trusted
+CIDR can spoof the scheme seen by DPoP validation.
+
 ---
 
 ## Running Migrations from the Image
