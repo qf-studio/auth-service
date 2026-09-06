@@ -98,6 +98,14 @@ jobs:
             aws cloudformation delete-stack --stack-name "quantflow-svc-$SERVICE" --region "$AWS_REGION"
             aws cloudformation wait stack-delete-complete --stack-name "quantflow-svc-$SERVICE" --region "$AWS_REGION"
           fi
+          # First deploy: the service seeds RBAC tables at start-up and crash-loops on an empty schema, while
+          # CloudFormation waits for a stable service (2026-09-06). So a brand-new stack is created with
+          # DesiredCount=0, the migration step runs against the registered task definition, and the
+          # "Scale up" step below sets the real count. Updates deploy directly (rolling; migrations are
+          # backward-compatible).
+          FIRST=false
+          if ! aws cloudformation describe-stacks --stack-name "quantflow-svc-$SERVICE" --region "$AWS_REGION" >/dev/null 2>&1; then FIRST=true; fi
+          echo "first_deploy=$FIRST" >> "$GITHUB_ENV"
           aws s3 cp "$TEMPLATE_BASE/$SERVICE.yml" "./$SERVICE-stack.yml" --region "$AWS_REGION"
           aws cloudformation deploy \
             --template-file "./$SERVICE-stack.yml" \
@@ -108,6 +116,7 @@ jobs:
             --parameter-overrides \
               ImageTag="${{ needs.mirror.outputs.tag }}" \
               JobId="${{ github.run_id }}" \
+              $([ "$FIRST" = true ] && echo DesiredCount=0) \
             --tags \
               AppManagerCFNStackKey="quantflow-svc-$SERVICE" \
               Environment=quantflow \
@@ -132,6 +141,20 @@ jobs:
           }
           if [ -n "${{ inputs.force_version }}" ]; then run_migrate "\"force\",\"${{ inputs.force_version }}\""; fi
           run_migrate '"up"'
+      - name: Scale up after the first migration
+        if: env.first_deploy == 'true'
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file "./$SERVICE-stack.yml" \
+            --stack-name "quantflow-svc-$SERVICE" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region "$AWS_REGION" \
+            --parameter-overrides \
+              ImageTag="${{ needs.mirror.outputs.tag }}" \
+              JobId="${{ github.run_id }}" \
+              DesiredCount=2
       - name: Wait for service to stabilize and probe
         run: |
           aws ecs wait services-stable --cluster quantflow --services "$SERVICE" --region "$AWS_REGION"
