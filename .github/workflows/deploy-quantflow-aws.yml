@@ -1,4 +1,4 @@
-name: Deploy
+name: Deploy QuantFlow AWS
 # Mirrors the GHCR release image into ECR quantflow/auth-service, runs the DB migration task, deploys the
 # ECS service stack quantflow-svc-auth-service (the studio central auth; Pointer consumes it).
 # Trigger: push a vX.Y.Z tag from main -> release.yml ("Release") pushes ghcr.io/qf-studio/auth-service:vX.Y.Z
