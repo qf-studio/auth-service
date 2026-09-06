@@ -174,6 +174,7 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `TENANT_RESOLUTION_MODE` | `both` | Tenant resolution: `subdomain`, `header`, or `both` |
 | `TENANT_BASE_DOMAIN` | _(empty)_ | Base domain for subdomain parsing |
 | `TENANT_CACHE_TTL` | `5m` | Tenant lookup cache TTL |
+| `TRUSTED_PROXY_CIDRS` | _(empty)_ | Comma-separated CIDRs of reverse proxies allowed to set `X-Forwarded-Proto` / `X-Forwarded-Host`; empty (default) trusts nothing, so the server derives the request scheme from `Request.TLS`. Behind a TLS-terminating AWS ALB (e.g. `auth.quantflow.studio`) `Request.TLS` is always nil, so this must be set to the VPC CIDR(s) or DPoP proof validation always fails on the `htu` scheme (GH-508). |
 
 ## Development
 

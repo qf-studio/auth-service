@@ -2,22 +2,27 @@ package api
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/middleware"
 )
 
 // TokenHandlers groups HTTP handlers for token management endpoints.
 type TokenHandlers struct {
-	token TokenService
-	dpop  DPoPService
+	token             TokenService
+	dpop              DPoPService
+	trustedProxyCIDRs []*net.IPNet
 }
 
 // NewTokenHandlers creates a new TokenHandlers with the given TokenService and optional DPoPService.
-func NewTokenHandlers(token TokenService, dpop DPoPService) *TokenHandlers {
-	return &TokenHandlers{token: token, dpop: dpop}
+// trustedProxyCIDRs controls when X-Forwarded-Proto / X-Forwarded-Host are honored while
+// reconstructing the request URI for DPoP htu matching (see middleware.RequestURI).
+func NewTokenHandlers(token TokenService, dpop DPoPService, trustedProxyCIDRs []*net.IPNet) *TokenHandlers {
+	return &TokenHandlers{token: token, dpop: dpop, trustedProxyCIDRs: trustedProxyCIDRs}
 }
 
 // Token handles POST /auth/token — dispatches based on grant_type.
@@ -74,22 +79,13 @@ func (h *TokenHandlers) extractDPoPThumbprint(c *gin.Context) (string, error) {
 		return "", fmt.Errorf("DPoP is not enabled on this server")
 	}
 
-	httpURI := requestURI(c)
+	httpURI := middleware.RequestURI(c, h.trustedProxyCIDRs)
 	claims, err := h.dpop.ValidateProof(c.Request.Context(), proofJWT, c.Request.Method, httpURI)
 	if err != nil {
 		return "", err
 	}
 
 	return claims.JKTThumbprint, nil
-}
-
-// requestURI reconstructs the full request URI for DPoP htu matching.
-func requestURI(c *gin.Context) string {
-	scheme := "https"
-	if c.Request.TLS == nil {
-		scheme = "http"
-	}
-	return fmt.Sprintf("%s://%s%s", scheme, c.Request.Host, c.Request.URL.Path)
 }
 
 // Revoke handles POST /auth/revoke.

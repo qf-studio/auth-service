@@ -205,15 +205,16 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	var samlSvc api.SAMLService
 
 	services := &api.Services{
-		Auth:    authSvc,
-		Token:   tokenSvc,
-		Session: sessionSvc,
-		DPoP:    dpopAPISvc,
-		MFA:     mfaSvc,
-		OAuth:   oauthSvc,
-		OIDC:    oidcSvc,
-		Broker:  brokerTokenSvc,
-		SAML:    samlSvc,
+		Auth:              authSvc,
+		Token:             tokenSvc,
+		Session:           sessionSvc,
+		DPoP:              dpopAPISvc,
+		MFA:               mfaSvc,
+		OAuth:             oauthSvc,
+		OIDC:              oidcSvc,
+		Broker:            brokerTokenSvc,
+		SAML:              samlSvc,
+		TrustedProxyCIDRs: cfg.Proxy.TrustedCIDRs,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────
@@ -248,7 +249,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 
 	var dpopMW gin.HandlerFunc
 	if cfg.DPoP.Enabled {
-		dpopMW = middleware.DPoPMiddleware(dpop.NewMiddlewareValidator(dpopSvc))
+		dpopMW = middleware.DPoPMiddleware(dpop.NewMiddlewareValidator(dpopSvc), cfg.Proxy.TrustedCIDRs)
 	}
 
 	mw := &api.MiddlewareStack{

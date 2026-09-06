@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -348,6 +349,11 @@ type Services struct {
 	OIDC    OIDCProviderService
 	Broker  BrokerTokenService
 	SAML    SAMLService
+
+	// TrustedProxyCIDRs controls when X-Forwarded-Proto / X-Forwarded-Host are
+	// honored while reconstructing the request URI for DPoP htu matching (see
+	// middleware.RequestURI). Empty (default) trusts nothing.
+	TrustedProxyCIDRs []*net.IPNet
 }
 
 // MiddlewareStack holds middleware handler functions used by the router.

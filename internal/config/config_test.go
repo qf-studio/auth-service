@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -107,6 +108,9 @@ func TestLoad_AllDefaults(t *testing.T) {
 	// SAML defaults (disabled)
 	assert.False(t, cfg.SAML.Enabled)
 	assert.Empty(t, cfg.SAML.EntityID)
+
+	// Proxy defaults: trust nothing.
+	assert.Empty(t, cfg.Proxy.TrustedCIDRs)
 }
 
 func TestLoad_OIDCConfig(t *testing.T) {
@@ -743,6 +747,43 @@ func TestLoad_HIBPAPIURLOverride(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, "http://127.0.0.1:9999/range/", cfg.HIBP.APIURL)
+}
+
+func TestLoad_TrustedProxyCIDRsDefault(t *testing.T) {
+	setEnv(t, requiredEnv())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Proxy.TrustedCIDRs)
+}
+
+func TestLoad_TrustedProxyCIDRs(t *testing.T) {
+	env := requiredEnv()
+	env["TRUSTED_PROXY_CIDRS"] = "10.0.0.0/8, 172.16.0.0/12"
+	setEnv(t, env)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Len(t, cfg.Proxy.TrustedCIDRs, 2)
+
+	_, want1, err := net.ParseCIDR("10.0.0.0/8")
+	require.NoError(t, err)
+	_, want2, err := net.ParseCIDR("172.16.0.0/12")
+	require.NoError(t, err)
+
+	assert.Equal(t, want1.String(), cfg.Proxy.TrustedCIDRs[0].String())
+	assert.Equal(t, want2.String(), cfg.Proxy.TrustedCIDRs[1].String())
+}
+
+func TestLoad_InvalidTrustedProxyCIDR(t *testing.T) {
+	env := requiredEnv()
+	env["TRUSTED_PROXY_CIDRS"] = "not-a-cidr"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TRUSTED_PROXY_CIDRS")
+	assert.Contains(t, err.Error(), "not-a-cidr")
 }
 
 func BenchmarkLoad(b *testing.B) {
