@@ -3,7 +3,7 @@
 **Project**: Authentication service for QuantFlow Studio ecosystem
 **Tech Stack**: Go 1.24+, Gin, PostgreSQL (pgx/v5), Redis (go-redis/v9), JWT (ES256/EdDSA)
 **Repo**: github.com/qf-studio/auth-service
-**Updated**: 2026-08-31
+**Updated**: 2026-09-06
 
 ---
 
@@ -53,23 +53,25 @@
 
 ## Current Focus
 
-### Status (2026-08-31)
-The original 3-phase plan (41 issues) is **fully delivered**. Latest release: **v0.71.2** (2026-08-31, manual cut ahead of the train: E2E suite A1-A4 + MFA-enrollment fix). Before that v0.71.1 (train, review-003 wave 1, PRs #489-492). Releases are cut by Pilot autopilot's release train (daily 16:00 Europe/Berlin, semver from conventional-commit types), not manually, since 2026-08-03. Work is issue-driven: gaps found by consumers become `pilot`-labeled issues with `tasks/gh-NN.md` specs.
+### Status (2026-09-06)
+**The service is LIVE at `auth.quantflow.studio`** (AWS ECS `quantflow-svc-auth-service` behind a TLS-terminating ALB, deployed via the new "Deploy QuantFlow AWS" workflow — see Deployment). Latest release: **v0.72.0** (train 2026-09-01: E2E issue B #504 + smoke image #505). Before that: v0.71.2 (manual cut: E2E A1-A4 + MFA-enrollment fix), v0.71.1 (review-003 wave 1 fixes, PRs #489-492). Releases: train daily 16:00 Berlin; manual `v*` tag cuts are safe (train skips already-tagged content — verified 09-01).
 
-**Recently landed** (on main 2026-08-30, review-003 wave 1 — external feature-inventory audit, verified 0/39 claims wrong; specs `tasks/gh-485..488.md`):
-- GH-485 (PR #489): migration 000019 `api_keys` (table never existed!) + API-key hashing switched Argon2id→SHA-256 digest so indexed lookup works (validation previously always 401'd)
-- GH-486 (PR #492): refresh-token introspection fixed — `domain.RefreshTokenSignature` helper, login stores signature-only with configured TTL, rotation revokes-old/inserts-new in Postgres, logout takes optional `refresh_token` body field
-- GH-487 (PR #490): `deploy.sh` migrations now actually run (`compose run --rm --entrypoint /auth-migrate auth-service up`), hard-fail before restart
-- GH-488 (PR #491): post-MFA tokens carry roles (UserLookup injected), MFA status check fails closed (AAL2), TOTP digits validated at startup + honored in verify; `mfa.NewService` now returns error
-- Full suite green locally with `-race` incl. testcontainers (2026-08-31)
-- Review-003 confirmed-unissued backlog (wave 2 candidates): in-memory sessions, audit_logs never written, HIBP never called, no auth on :4001, RLS unarmed, webhook Dispatch uncalled, scope allow-list on dead DTO, Casbin vs tenant_id, retention
-- **E2E & canary strategy planned** — see [`tasks/TASK-01-e2e-canary-strategy.md`](./tasks/TASK-01-e2e-canary-strategy.md): 3 layers (PR-gated E2E booting the Docker image / 6h canary repo vs published artifacts / staging re-point), issues A–D awaiting approval. Wave-2 fixes should land after issue B so each flips a skipped acceptance test.
+**Recently landed** (2026-09-06, driven by the live AWS deployment):
+- GH-506 (PR #509): per-application `aud` — `Client.Audience` overrides global `JWT_AUDIENCE`; opt-in `JWT_AUDIENCE_ENFORCE`
+- GH-507 (PR #510): `TLS_ENABLED` no-op resolved (deprecation WARN; drop in v0.74 — #513)
+- GH-508 (PR #514): **review-003's DPoP `htu` proxy bug fixed for real** — `TRUSTED_PROXY_CIDRS` gates `X-Forwarded-Proto` trust (was breaking SSL at auth.quantflow.studio)
+- GH-512 (PR #515, in flight): refresh preserves per-client `aud` (`SetClientLookup` + client_id persisted in the Redis refresh value, legacy fallback)
+- E2E layers L1 complete: harness A1-A4 (PRs #500-503, v0.71.2) + wiring assertions/wave-2 skips/negatives B (#504) + smoke image C (#505) in v0.72.0. E2E already caught 1 prod bug (MFA enrollment 500). Next: canary D (#496, Navigator-executed — unblocked now that the smoke image ships)
+- Review-003 wave-2 backlog unchanged (in-memory sessions, audit_logs, HIBP, :4001 auth, RLS, webhooks, scopes DTO, Casbin, retention) — acceptance tests already written as `t.Skip("review-003: ...")` in `e2e/` via #504; each fix flips its skip
 
 **Open issues**:
 | # | Title | Notes |
 |---|---|---|
-| #447 | Move Pointer AWS deploy workflow to private infra repo | Security: self-hosted runner on public repo; needs infra-repo + org-admin access |
-| #465 | Pointer consumer actions (now targets v0.70.0) | Consolidated checklist in comments: deploy v0.70.0 directly (skip v0.69.0), aud two-step, SPA as public client, OIDC_LOGIN_UI_URL, iss warning. Live instance predates v0.69.0; Nelya pinged in Slack #pointer 2026-07-27 |
+| #512 | refresh drops per-client aud | PR #515 rebased+validated by Navigator 2026-09-06 |
+| #513 | drop TLS_ENABLED deprecation WARN | scheduled for one release after v0.73 |
+| #496 | canary repo (TASK-01 issue D) | Navigator-executed; smoke image now available |
+| #465 | Pointer consumer actions | STALE: predates AWS cutover — Pointer's auth copy is frozen until it switches to `auth.quantflow.studio` (see fa896d2); checklist needs a rewrite for the shared-instance model |
+| #447 | Pointer deploy workflow relocation | Largely OBE: `deploy-pointer-aws.yml` removed from this repo (fa896d2); close or repurpose |
 
 **Pilot operational notes** (instance at v2.271.2 as of 2026-08-30):
 0. Base-presence check (new, observed 2026-08-30): specs referencing a file path that doesn't exist on main verbatim get silently held ~2h then labeled `pilot-needs-human` with NO issue comment. Use full repo-relative paths in specs. Recovery: fix path, `gh issue edit NN --body-file <doc> --remove-label pilot-needs-human`, wait out repick backoff (~8-15 min).
@@ -77,11 +79,13 @@ The original 3-phase plan (41 issues) is **fully delivered**. Latest release: **
 2. ~~False completion via merged-PR title scan~~ **RESOLVED**: the title-based completion scan was removed in Pilot v2.237.0 (pilot PRs #4178/#4192); running instance is v2.246.1, so this can no longer occur. Historical remediation (needed only on pre-v2.237 instances): retitle merged PRs matching `"GH-NN" in:title`, then remove the bogus `pilot-done` once.
 3. Stale worker file state: PR branches can carry (a) reverts of files fixed on main after the branch was cut — #475 silently reverted a reviewed bugfix from #474 — and (b) polluted meta files (`.claude/settings.json` worker hook paths, stale `.agent/` doc restores). Before merging a Pilot PR: `git diff origin/main <branch>` (not the GitHub compare, which can show a stale merge base) and `git checkout origin/main -- <file>` the regressions on the branch. Unverified against v2.246.1 — keep checking.
 
-### Deployment
-- **Own strategy** (issue #40): Docker Compose on VPS, Caddy auto-TLS, `scripts/deploy.sh` / `rollback.sh`, manual `deploy-production.yml` (SSH). Staging disabled until infra exists (GH-416).
-- **Release**: push to main / `v*` tag → GHCR image (multi-arch, version tags) + **migration dry-run gate** on fresh Postgres 16. Never break this gate.
-- **Consumers** (Pointer): pin a `vX.Y.Z` tag, run `migrations/` from that same tag, deploy the image. `deploy-pointer-aws.yml` does this (temporarily in this repo — #447).
-- Migrations run via CLI before deploy, never at startup (runtime DB user has no ALTER).
+### Deployment (rewritten 2026-09-06 — AWS cutover)
+- **Production**: `auth.quantflow.studio` — AWS ECS service `quantflow-svc-auth-service` behind a TLS-terminating ALB. Deployed by `.github/workflows/deploy-quantflow-aws.yml` ("Deploy QuantFlow AWS"): after a successful `v*` Release (or manual dispatch with an image tag) → mirror GHCR→ECR `quantflow/auth-service` → deploy stack → run `/auth-migrate` in-VPC via the `quantflow-auth-service-migrate` task definition → verify. One deploy at a time (concurrency group); first-create path uses DesiredCount=0 → migrate → scale to 2.
+- Because the ALB terminates TLS, `TRUSTED_PROXY_CIDRS` must be set (VPC CIDRs) or DPoP `htu` validation fails (GH-508).
+- Old SSH deploy paths (`deploy-production.yml`/`deploy-staging.yml`) and `deploy-pointer-aws.yml` REMOVED 2026-09-06 (b3870b2, fa896d2). `scripts/deploy.sh` remains for local/VPS compose use only.
+- **Release**: push to main / `v*` tag → GHCR image (multi-arch) + **migration dry-run gate** on fresh Postgres 16 (never break this gate) + `auth-service-smoke:<tag>` image (#505) — run it against any live deployment: `docker run --rm -e SMOKE_BASE_URL=https://auth.quantflow.studio ghcr.io/qf-studio/auth-service-smoke:<tag>`.
+- **Consumers** (Pointer): its self-hosted auth copy is frozen; plan is to consume the shared `auth.quantflow.studio` instance (#465 checklist needs rewriting for that model).
+- Migrations run via CLI before scale-up, never at startup (runtime DB user has no ALTER).
 
 ---
 
