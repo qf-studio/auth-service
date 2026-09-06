@@ -836,6 +836,7 @@ func newTestClient() *domain.Client {
 		SecretHash:     "$argon2id$v=19$m=19456,t=2,p=1$salt$hash",
 		Scopes:         []string{"read:users"},
 		RedirectURIs:   []string{},
+		Audience:       []string{},
 		Owner:          "admin",
 		AccessTokenTTL: 900,
 		Status:         domain.ClientStatusActive,

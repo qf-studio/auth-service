@@ -27,6 +27,12 @@ var (
 	// of the client_type claim that every access token carries (GH-473).
 	ErrNotAccessToken = errors.New("token is not an access token")
 
+	// ErrInvalidAudience indicates a token's aud claim does not contain any
+	// of the validator's configured audience values. Only returned when
+	// JWT_AUDIENCE_ENFORCE is enabled (GH-506); with it disabled, ValidateToken
+	// never checks aud, matching the pre-GH-506 permissive behavior.
+	ErrInvalidAudience = errors.New("token audience does not match expected audience")
+
 	// Client errors.
 	ErrClientNotFound  = errors.New("client not found")
 	ErrClientSuspended = errors.New("client suspended")

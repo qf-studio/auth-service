@@ -421,6 +421,95 @@ func TestValidateToken_AcceptsAudiencelessTokenWhenAudienceConfigured(t *testing
 	assert.Empty(t, claims.Audience)
 }
 
+// ── Per-client audience override (GH-506) ───────────────────────────────────
+
+func TestIssueTokenPair_PerClientAudienceOverridesGlobal(t *testing.T) {
+	key := generateES256Key(t)
+	_, rc := newTestRedis(t)
+	cfg := defaultCfg()
+	cfg.Audience = []string{"https://global.qf.studio"}
+
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	result, err := svc.IssueTokenPair(ctx, "user-123", nil, nil, domain.ClientTypeUser, "https://client-a.example.com")
+	require.NoError(t, err)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://client-a.example.com"}, claims.Audience)
+}
+
+func TestIssueTokenPair_NoClientAudienceFallsBackToGlobal(t *testing.T) {
+	key := generateES256Key(t)
+	_, rc := newTestRedis(t)
+	cfg := defaultCfg()
+	cfg.Audience = []string{"https://global.qf.studio"}
+
+	svc, err := token.NewServiceFromKey(cfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	// No trailing audience argument: falls back to the service-wide config.
+	result, err := svc.IssueTokenPair(ctx, "user-123", nil, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+
+	rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+	claims, err := svc.ValidateToken(ctx, rawJWT)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://global.qf.studio"}, claims.Audience)
+}
+
+func TestValidateToken_AudienceEnforce(t *testing.T) {
+	key := generateES256Key(t)
+	_, rc := newTestRedis(t)
+
+	enforcingCfg := defaultCfg()
+	enforcingCfg.Audience = []string{"https://api.qf.studio"}
+	enforcingCfg.AudienceEnforce = true
+	svc, err := token.NewServiceFromKey(enforcingCfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	t.Run("accepts token with matching audience", func(t *testing.T) {
+		result, err := svc.IssueTokenPair(ctx, "user-123", nil, nil, domain.ClientTypeUser, "https://api.qf.studio")
+		require.NoError(t, err)
+		rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+
+		claims, err := svc.ValidateToken(ctx, rawJWT)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"https://api.qf.studio"}, claims.Audience)
+	})
+
+	t.Run("rejects token with non-matching audience", func(t *testing.T) {
+		result, err := svc.IssueTokenPair(ctx, "user-456", nil, nil, domain.ClientTypeUser, "https://other.example.com")
+		require.NoError(t, err)
+		rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+
+		_, err = svc.ValidateToken(ctx, rawJWT)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, domain.ErrInvalidAudience)
+	})
+
+	t.Run("rejects audience-less token when enforcement is on", func(t *testing.T) {
+		// Issued by a service instance with no configured/overridden audience.
+		bareCfg := defaultCfg()
+		bareSvc, err := token.NewServiceFromKey(bareCfg, defaultOIDCCfg(), key, rc, testLogger(), audit.NopLogger{})
+		require.NoError(t, err)
+
+		result, err := bareSvc.IssueTokenPair(ctx, "user-789", nil, nil, domain.ClientTypeUser)
+		require.NoError(t, err)
+		rawJWT := strings.TrimPrefix(result.AccessToken, "qf_at_")
+
+		_, err = svc.ValidateToken(ctx, rawJWT)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, domain.ErrInvalidAudience)
+	})
+}
+
 // ── Issuer (GH-468) ──────────────────────────────────────────────────────────
 
 // TestIssueAccessToken_IssuerFromOIDCConfig verifies the `iss` claim on

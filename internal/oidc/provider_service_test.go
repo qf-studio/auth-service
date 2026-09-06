@@ -331,7 +331,7 @@ func TestProviderService_ExchangeCode_Success_WithOpenIDScope(t *testing.T) {
 	}
 	var issuedNonce, issuedClientID string
 	tokens := &fakeTokenIssuer{
-		issueTokenPairFn: func(_ context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error) {
+		issueTokenPairFn: func(_ context.Context, subject string, roles, scopes []string, clientType domain.ClientType, _ ...string) (*api.AuthResult, error) {
 			assert.Equal(t, user.ID, subject)
 			assert.Equal(t, domain.ClientTypeUser, clientType)
 			return &api.AuthResult{AccessToken: "at", TokenType: "Bearer", ExpiresIn: 900, RefreshToken: "rt"}, nil
@@ -376,6 +376,51 @@ func TestProviderService_ExchangeCode_Success_WithOpenIDScope(t *testing.T) {
 	assert.Equal(t, client.ID.String(), issuedClientID)
 }
 
+func TestProviderService_ExchangeCode_PassesClientAudience(t *testing.T) {
+	client := testConfidentialClient()
+	client.Audience = []string{"https://api.example.com"}
+	user := testUserForOIDC()
+	clients := &fakeClientLookup{
+		findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return client, nil },
+	}
+	users := &fakeUserLookup{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) { return user, nil },
+	}
+	var capturedAudience []string
+	tokens := &fakeTokenIssuer{
+		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, audience ...string) (*api.AuthResult, error) {
+			capturedAudience = audience
+			return &api.AuthResult{AccessToken: "at", TokenType: "Bearer", ExpiresIn: 900}, nil
+		},
+	}
+
+	svc, store := newTestProviderService(t, testOIDCConfig(), clients, users, tokens, nil)
+
+	code := &oidc.AuthorizationCode{
+		Code:                "auth-code-aud",
+		Subject:             user.ID,
+		ClientID:            client.ID.String(),
+		RedirectURI:         client.RedirectURIs[0],
+		Scopes:              []string{"profile"},
+		CodeChallenge:       oauth.S256Challenge("verifier-aud"),
+		CodeChallengeMethod: "S256",
+		AuthTime:            time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(time.Minute),
+	}
+	seedAuthCode(t, store, code)
+
+	_, err := svc.ExchangeCode(context.Background(), &api.CodeExchangeRequest{
+		GrantType:    "authorization_code",
+		Code:         "auth-code-aud",
+		RedirectURI:  client.RedirectURIs[0],
+		ClientID:     client.ID.String(),
+		ClientSecret: "correct-secret",
+		CodeVerifier: "verifier-aud",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://api.example.com"}, capturedAudience)
+}
+
 func TestProviderService_ExchangeCode_Success_WithoutOpenIDScope_NoIDToken(t *testing.T) {
 	client := testConfidentialClient()
 	user := testUserForOIDC()
@@ -386,7 +431,7 @@ func TestProviderService_ExchangeCode_Success_WithoutOpenIDScope_NoIDToken(t *te
 		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) { return user, nil },
 	}
 	tokens := &fakeTokenIssuer{
-		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType) (*api.AuthResult, error) {
+		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ ...string) (*api.AuthResult, error) {
 			return &api.AuthResult{AccessToken: "at", TokenType: "Bearer", ExpiresIn: 900}, nil
 		},
 		issueIDTokenFn: func(_ context.Context, _, _, _ string, _ time.Time) (string, error) {
@@ -510,7 +555,7 @@ func TestProviderService_ExchangeCode_ClientSecretVerification(t *testing.T) {
 			findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) { return user, nil },
 		}
 		tokens := &fakeTokenIssuer{
-			issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType) (*api.AuthResult, error) {
+			issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ ...string) (*api.AuthResult, error) {
 				return &api.AuthResult{AccessToken: "at", TokenType: "Bearer", ExpiresIn: 900}, nil
 			},
 		}
@@ -577,7 +622,7 @@ func TestProviderService_ExchangeCode_PublicClient_NoSecretRequired(t *testing.T
 		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) { return user, nil },
 	}
 	tokens := &fakeTokenIssuer{
-		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType) (*api.AuthResult, error) {
+		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ ...string) (*api.AuthResult, error) {
 			return &api.AuthResult{AccessToken: "at", TokenType: "Bearer", ExpiresIn: 900}, nil
 		},
 	}

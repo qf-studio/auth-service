@@ -30,12 +30,12 @@ func (f *fakeUserLookup) FindByID(ctx context.Context, tenantID uuid.UUID, id st
 
 // fakeTokenIssuer is a configurable fake for oidc.TokenIssuer.
 type fakeTokenIssuer struct {
-	issueTokenPairFn func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error)
+	issueTokenPairFn func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error)
 	issueIDTokenFn   func(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
 }
 
-func (f *fakeTokenIssuer) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType) (*api.AuthResult, error) {
-	return f.issueTokenPairFn(ctx, subject, roles, scopes, clientType)
+func (f *fakeTokenIssuer) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error) {
+	return f.issueTokenPairFn(ctx, subject, roles, scopes, clientType, audience...)
 }
 
 func (f *fakeTokenIssuer) IssueIDToken(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error) {

@@ -45,10 +45,15 @@ type Client struct {
 	RedirectURIs            []string   `json:"redirect_uris"               db:"redirect_uris"`
 	Owner                   string     `json:"owner"                       db:"owner"`
 	AccessTokenTTL          int        `json:"access_token_ttl"            db:"access_token_ttl"` // seconds
-	Status                  string     `json:"status"                      db:"status"`
-	CreatedAt               time.Time  `json:"created_at"                  db:"created_at"`
-	UpdatedAt               time.Time  `json:"updated_at"                  db:"updated_at"`
-	LastUsedAt              *time.Time `json:"last_used_at"                db:"last_used_at"`
+	// Audience overrides JWT_AUDIENCE for access tokens issued to this client
+	// (GH-506): empty/nil means inherit the service-wide JWT_AUDIENCE, non-empty
+	// replaces it entirely. Mirrors the AccessTokenTTL per-client-override
+	// pattern above.
+	Audience   []string   `json:"audience,omitempty"          db:"audience"`
+	Status     string     `json:"status"                      db:"status"`
+	CreatedAt  time.Time  `json:"created_at"                  db:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"                  db:"updated_at"`
+	LastUsedAt *time.Time `json:"last_used_at"                db:"last_used_at"`
 }
 
 // AccessTokenDuration returns the access token TTL as a time.Duration.

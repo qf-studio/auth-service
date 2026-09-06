@@ -125,6 +125,10 @@ func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientR
 	if redirectURIs == nil {
 		redirectURIs = []string{}
 	}
+	audience := req.Audience
+	if audience == nil {
+		audience = []string{}
+	}
 
 	client := &domain.Client{
 		ID:             uuid.New(),
@@ -134,6 +138,7 @@ func (s *ClientService) CreateClient(ctx context.Context, req *api.CreateClientR
 		SecretHash:     hash,
 		Scopes:         scopes,
 		RedirectURIs:   redirectURIs,
+		Audience:       audience,
 		Owner:          "admin",
 		AccessTokenTTL: 900,
 		Status:         domain.ClientStatusActive,
@@ -187,6 +192,9 @@ func (s *ClientService) UpdateClient(ctx context.Context, clientID string, req *
 	}
 	if req.RedirectURIs != nil {
 		existing.RedirectURIs = req.RedirectURIs
+	}
+	if req.Audience != nil {
+		existing.Audience = req.Audience
 	}
 
 	updated, err := s.repo.Update(ctx, existing)
@@ -315,6 +323,7 @@ func domainClientToAdmin(c *domain.Client) api.AdminClient {
 		ClientType:   string(c.ClientType),
 		Scopes:       c.Scopes,
 		RedirectURIs: c.RedirectURIs,
+		Audience:     c.Audience,
 		CreatedAt:    c.CreatedAt,
 		UpdatedAt:    c.UpdatedAt,
 	}

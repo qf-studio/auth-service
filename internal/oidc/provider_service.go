@@ -239,7 +239,7 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
 
-	result, err := s.tokens.IssueTokenPair(ctx, user.ID, user.Roles, code.Scopes, domain.ClientTypeUser)
+	result, err := s.tokens.IssueTokenPair(ctx, user.ID, user.Roles, code.Scopes, domain.ClientTypeUser, client.Audience...)
 	if err != nil {
 		s.logger.Error("exchange code: issue token pair failed", zap.Error(err))
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)

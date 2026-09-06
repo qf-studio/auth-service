@@ -713,7 +713,8 @@ Full list of configuration variables. See `.env.staging.example` and `.env.produ
 | `ACCESS_TOKEN_TTL` | Access token lifetime | `15m` | `15m` |
 | `REFRESH_TOKEN_TTL` | Refresh token lifetime | `24h` | `7d` |
 | `SYSTEM_SECRETS` | Client credential secrets (comma-separated) | *(required)* | *(required)* |
-| `JWT_AUDIENCE` | Comma-separated list of `aud` values to set on issued access tokens. Empty/unset (default) means no `aud` claim is added and audience validation is disabled — `ValidateToken` accepts audience-less tokens regardless of this setting, to avoid a rotation hazard when the value is first configured. | *(empty)* | *(empty)* |
+| `JWT_AUDIENCE` | Comma-separated list of `aud` values to set on issued access tokens. Empty/unset (default) means no `aud` claim is added. This is the service-wide default; a client can override it per-application via the `audience` field on the admin client API (GH-506) — an empty override means that client inherits this value. | *(empty)* | *(empty)* |
+| `JWT_AUDIENCE_ENFORCE` | When `true`, `ValidateToken` rejects tokens whose `aud` claim does not intersect with `JWT_AUDIENCE` (GH-506). Default `false` preserves the pre-GH-506 behavior of accepting audience-less or mismatched tokens, to avoid a rotation hazard when `JWT_AUDIENCE` is first configured. Only takes effect when `JWT_AUDIENCE` is also set. | `false` | `false` |
 
 ### OIDC Provider
 

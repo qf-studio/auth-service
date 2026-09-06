@@ -153,6 +153,11 @@ type JWTConfig struct {
 	RefreshTokenTTL time.Duration
 	SystemSecrets   []string // Comma-separated in env; newest first for rotation.
 	Audience        []string // JWT_AUDIENCE: comma-separated aud values for access tokens; empty means no aud claim.
+	// AudienceEnforce gates aud validation in ValidateToken (JWT_AUDIENCE_ENFORCE,
+	// GH-506). Default false: existing consumers (e.g. Pointer, integrated
+	// before per-app audiences existed) keep validating tokens regardless of
+	// aud until they confirm their expected audience and flip this on.
+	AudienceEnforce bool
 }
 
 // Argon2Config holds Argon2id password hashing parameters.
@@ -440,6 +445,11 @@ func loadJWT(l *loader) (JWTConfig, error) {
 	audienceRaw := l.optStr("JWT_AUDIENCE", "")
 	audience := splitCSV(audienceRaw)
 
+	audienceEnforce, err := l.optBool("JWT_AUDIENCE_ENFORCE", false)
+	if err != nil {
+		return JWTConfig{}, err
+	}
+
 	if jwtAlg != "ES256" && jwtAlg != "EdDSA" {
 		return JWTConfig{}, fmt.Errorf("JWT_ALGORITHM: unsupported algorithm %q (must be ES256 or EdDSA)", jwtAlg)
 	}
@@ -451,6 +461,7 @@ func loadJWT(l *loader) (JWTConfig, error) {
 		RefreshTokenTTL: refreshTTL,
 		SystemSecrets:   secrets,
 		Audience:        audience,
+		AudienceEnforce: audienceEnforce,
 	}, nil
 }
 

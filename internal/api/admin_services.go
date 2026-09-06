@@ -38,6 +38,7 @@ type AdminClient struct {
 	ClientType   string     `json:"client_type"`
 	Scopes       []string   `json:"scopes"`
 	RedirectURIs []string   `json:"redirect_uris,omitempty"`
+	Audience     []string   `json:"audience,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
@@ -168,6 +169,10 @@ type CreateClientRequest struct {
 	ClientType   string   `json:"client_type"   validate:"required,oneof=service agent public"`
 	Scopes       []string `json:"scopes"        validate:"omitempty"`
 	RedirectURIs []string `json:"redirect_uris" validate:"required_if=ClientType public,omitempty,dive,http_url_no_fragment"`
+	// Audience overrides the service-wide JWT_AUDIENCE for tokens issued to
+	// this client (GH-506). Empty/omitted means the client inherits the
+	// global audience.
+	Audience []string `json:"audience" validate:"omitempty"`
 }
 
 // UpdateClientRequest is the request body for updating an OAuth2 client.
@@ -175,6 +180,9 @@ type UpdateClientRequest struct {
 	Name         *string  `json:"name"          validate:"omitempty,min=1,max=255"`
 	Scopes       []string `json:"scopes"        validate:"omitempty"`
 	RedirectURIs []string `json:"redirect_uris" validate:"omitempty,dive,http_url_no_fragment"`
+	// Audience, when non-nil, replaces the client's audience override.
+	// Pass an empty slice ([]) to clear it back to inheriting JWT_AUDIENCE.
+	Audience []string `json:"audience" validate:"omitempty"`
 }
 
 // IntrospectRequest is the request body for RFC 7662 token introspection.

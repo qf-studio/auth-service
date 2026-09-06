@@ -419,6 +419,43 @@ func TestLoad_JWTAudience(t *testing.T) {
 	}
 }
 
+func TestLoad_JWTAudienceEnforce(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want bool
+	}{
+		{name: "unset defaults to false", env: "", want: false},
+		{name: "true", env: "true", want: true},
+		{name: "false", env: "false", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := requiredEnv()
+			if tt.env != "" {
+				env["JWT_AUDIENCE_ENFORCE"] = tt.env
+			}
+			setEnv(t, env)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.JWT.AudienceEnforce)
+		})
+	}
+}
+
+func TestLoad_InvalidJWTAudienceEnforce(t *testing.T) {
+	env := requiredEnv()
+	env["JWT_AUDIENCE_ENFORCE"] = "maybe"
+	setEnv(t, env)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "JWT_AUDIENCE_ENFORCE")
+	assert.Contains(t, err.Error(), "invalid boolean")
+}
+
 func TestLoad_CORSMultipleOrigins(t *testing.T) {
 	env := requiredEnv()
 	env["CORS_ALLOWED_ORIGINS"] = "https://a.com,https://b.com,https://c.com"
