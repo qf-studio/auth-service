@@ -173,3 +173,28 @@ jobs:
             echo "schema still dirty after force recovery" >&2
             exit 1
           fi
+
+  # GH-496 (canary, TASK-01 issue D): after a successful tag release, fire
+  # the auth-service-canary run so the just-published artifacts get an
+  # end-to-end consumer-style verification within minutes, not at the next
+  # daily cron. Non-blocking by design — a canary-dispatch failure must
+  # never fail the release itself (continue-on-error + the canary repo also
+  # runs on its own schedule as a backstop).
+  trigger-canary:
+    name: Trigger canary
+    needs: [release, migration-dry-run]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Fire repository_dispatch on qf-studio/auth-service-canary
+        env:
+          GH_TOKEN: ${{ secrets.CANARY_GH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "CANARY_GH_TOKEN not set — skipping canary dispatch (daily cron will cover)"
+            exit 0
+          fi
+          gh api repos/qf-studio/auth-service-canary/dispatches \
+            -f event_type=auth-service-release \
+            -F 'client_payload[tag]=${{ github.ref_name }}'
