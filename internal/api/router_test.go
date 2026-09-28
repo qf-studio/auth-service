@@ -834,7 +834,11 @@ func TestConfirmEmailChange_UnknownToken(t *testing.T) {
 	body := map[string]string{"token": "unknown-token"}
 	w := doRequest(router, http.MethodPost, "/auth/email-change/confirm", body)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeBadRequest, resp.Code)
 }
 
 func TestConfirmEmailChange_ExpiredToken(t *testing.T) {
@@ -896,7 +900,11 @@ func TestRevertEmailChange_UnknownToken(t *testing.T) {
 	body := map[string]string{"token": "unknown-token"}
 	w := doRequest(router, http.MethodPost, "/auth/email-change/revert", body)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeBadRequest, resp.Code)
 }
 
 func TestRevertEmailChange_ExpiredToken(t *testing.T) {

@@ -794,13 +794,28 @@ func (s *Service) LogoutAll(ctx context.Context, userID string) error {
 // the change takes effect (see ConfirmEmailChange); a link mailed to the
 // current address allows reverting the change (see RevertEmailChange), since
 // an email change is an account-takeover lever. Rate limited to
-// emailChangeRateLimit requests per emailChangeRateWindow per user. A second
-// request while one is already pending replaces both pending tokens.
+// emailChangeRateLimit requests per emailChangeRateWindow per user — every
+// call counts against the limit, including ones that go on to fail the
+// password check, so the limit can't be bypassed by guessing passwords. A
+// second request while one is already pending replaces both pending tokens.
 func (s *Service) RequestEmailChange(ctx context.Context, userID, newEmail, pwd string) (*api.EmailChangeResult, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
 
 	if s.emailEnabled && (s.emailChangeConfirmURLBase == "" || s.emailChangeRevertURLBase == "") {
 		return nil, fmt.Errorf("email change confirm/revert URL bases not configured: %w", api.ErrEmailChangeUnconfigured)
+	}
+
+	// Count every request against the per-user rate limit before doing any
+	// other work, including the password check — otherwise an attacker can
+	// probe passwords indefinitely by supplying a wrong one each time, since
+	// a failed password check would never trip the limiter.
+	allowed, err := s.checkEmailChangeRateLimit(ctx, tenantID, userID)
+	if err != nil {
+		s.logger.Error("failed to check email change rate limit", zap.String("user_id", userID), zap.Error(err))
+		return nil, fmt.Errorf("check rate limit: %w", err)
+	}
+	if !allowed {
+		return nil, fmt.Errorf("too many email change requests: %w", api.ErrRateLimited)
 	}
 
 	user, err := s.users.FindByID(ctx, tenantID, userID)
@@ -826,15 +841,6 @@ func (s *Service) RequestEmailChange(ctx context.Context, userID, newEmail, pwd 
 		}
 	} else if !errors.Is(findErr, storage.ErrNotFound) {
 		return nil, fmt.Errorf("find user by email: %w", findErr)
-	}
-
-	allowed, err := s.checkEmailChangeRateLimit(ctx, tenantID, userID)
-	if err != nil {
-		s.logger.Error("failed to check email change rate limit", zap.String("user_id", userID), zap.Error(err))
-		return nil, fmt.Errorf("check rate limit: %w", err)
-	}
-	if !allowed {
-		return nil, fmt.Errorf("too many email change requests: %w", api.ErrRateLimited)
 	}
 
 	changeToken, err := generateResetToken()
@@ -864,22 +870,22 @@ func (s *Service) RequestEmailChange(ctx context.Context, userID, newEmail, pwd 
 }
 
 // checkEmailChangeRateLimit increments a per-tenant-per-user Redis counter
-// keyed with a 1-hour expiry set on the first increment, and reports whether
-// the caller is still under emailChangeRateLimit.
+// and (re)sets its 1-hour expiry in a single pipeline on every call — the
+// same INCR+EXPIRE-together pattern AccountRateLimiter.RecordFailure uses —
+// so the key can never end up persisted without a TTL (e.g. if a crash landed
+// between two separate round trips). Reports whether the caller is still
+// under emailChangeRateLimit.
 func (s *Service) checkEmailChangeRateLimit(ctx context.Context, tenantID uuid.UUID, userID string) (bool, error) {
 	key := fmt.Sprintf("%s%s:%s", emailChangeRatePrefix, tenantID, userID)
 
-	count, err := s.redis.Incr(ctx, key).Result()
-	if err != nil {
-		return false, fmt.Errorf("incr rate limit counter: %w", err)
-	}
-	if count == 1 {
-		if err := s.redis.Expire(ctx, key, emailChangeRateWindow).Err(); err != nil {
-			return false, fmt.Errorf("set rate limit counter expiry: %w", err)
-		}
+	pipe := s.redis.Pipeline()
+	incrCmd := pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, emailChangeRateWindow)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return false, fmt.Errorf("check rate limit: %w", err)
 	}
 
-	return count <= emailChangeRateLimit, nil
+	return incrCmd.Val() <= emailChangeRateLimit, nil
 }
 
 // sendEmailChangeEmails sends the two notification emails for a requested

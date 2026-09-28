@@ -182,6 +182,14 @@ func (h *AuthHandlers) ConfirmEmailChange(c *gin.Context) {
 	req := c.MustGet("validated_request").(*domain.EmailChangeConfirmRequest)
 
 	if err := h.auth.ConfirmEmailChange(c.Request.Context(), req.Token); err != nil {
+		// An unknown or already-consumed token isn't an enumeration risk (the
+		// caller already has a token, valid or not), so it's reported the
+		// same way VerifyEmail reports a bad token: 400, not 404. Expired
+		// still falls through to handleServiceError's 410.
+		if errors.Is(err, ErrNotFound) {
+			domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid or already-used email change token")
+			return
+		}
 		handleServiceError(c, err)
 		return
 	}
@@ -196,6 +204,12 @@ func (h *AuthHandlers) RevertEmailChange(c *gin.Context) {
 	req := c.MustGet("validated_request").(*domain.EmailChangeRevertRequest)
 
 	if err := h.auth.RevertEmailChange(c.Request.Context(), req.Token); err != nil {
+		// Same reasoning as ConfirmEmailChange above: unknown/consumed -> 400,
+		// expired stays 410 via handleServiceError.
+		if errors.Is(err, ErrNotFound) {
+			domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid or already-used email revert token")
+			return
+		}
 		handleServiceError(c, err)
 		return
 	}

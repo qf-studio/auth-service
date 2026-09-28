@@ -6,15 +6,25 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
+	"github.com/qf-studio/auth-service/internal/auth"
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/middleware"
+	"github.com/qf-studio/auth-service/internal/password"
+	"github.com/qf-studio/auth-service/internal/storage"
+	"github.com/qf-studio/auth-service/internal/storage/mocks"
 )
 
 // mockTokenValidator implements middleware.TokenValidator for integration tests.
@@ -318,5 +328,115 @@ func TestIntegrationFlow_LoginUseTokenRefreshLogout(t *testing.T) {
 
 	// Step 5: Verify that without token, protected route rejects
 	w = doRequest(router, http.MethodGet, "/auth/me", nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// TestEmailChangeFlow_ConfirmRevokesOldRefreshToken exercises the real
+// auth.Service (not mockAuthService) through the full request -> confirm
+// flow: POST /auth/me/email mints a change token, POST
+// /auth/email-change/confirm consumes it, and the test asserts that
+// RevokeAllForUser was called exactly once with the user's tenant and id —
+// then simulates the token service's resulting behavior: a refresh with the
+// pre-change refresh token now answers 401 (TASK-501 leg B, GH-520).
+func TestEmailChangeFlow_ConfirmRevokesOldRefreshToken(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+
+	hasher := password.New(nil)
+	passwordHash, err := hasher.Hash("correct-password-flow")
+	require.NoError(t, err)
+
+	const (
+		userID          = "user-flow-77"
+		oldRefreshToken = "qf_rt_old_before_email_change" //nolint:gosec // fake, test-only
+	)
+	user := &domain.User{ID: userID, Email: "old@example.com", PasswordHash: passwordHash}
+
+	var capturedChangeToken string
+	users := &mocks.MockUserRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
+			require.Equal(t, userID, id)
+			return user, nil
+		},
+		FindByEmailFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+		SetPendingEmailChangeFn: func(_ context.Context, _ uuid.UUID, _, _, changeToken string, _ time.Time, _ string, _ time.Time) error {
+			capturedChangeToken = changeToken
+			return nil
+		},
+		ConsumeEmailChangeTokenFn: func(_ context.Context, _ uuid.UUID, token string) (*domain.User, error) {
+			if token != capturedChangeToken {
+				return nil, storage.ErrNotFound
+			}
+			return &domain.User{ID: userID, Email: "new@example.com"}, nil
+		},
+	}
+
+	var revokeCalls int
+	var gotTenantID uuid.UUID
+	var gotUserID string
+	revoked := false
+	tokens := &mocks.MockRefreshTokenRepository{
+		RevokeAllForUserFn: func(_ context.Context, tenantID uuid.UUID, uid string) error {
+			revokeCalls++
+			gotTenantID = tenantID
+			gotUserID = uid
+			revoked = true
+			return nil
+		},
+	}
+
+	logger, _ := zap.NewDevelopment()
+	authSvc := auth.NewService(auth.ServiceDeps{
+		Redis:   rdb,
+		Logger:  logger,
+		Auditor: audit.NopLogger{},
+		Users:   users,
+		Tokens:  tokens,
+		Hasher:  hasher,
+	})
+
+	tokenSvc := &mockTokenService{
+		refreshFn: func(_ context.Context, refreshToken string) (*api.AuthResult, error) {
+			if refreshToken == oldRefreshToken && revoked {
+				return nil, api.ErrUnauthorized
+			}
+			return &api.AuthResult{
+				AccessToken:  "qf_at_new",
+				RefreshToken: "qf_rt_new",
+				TokenType:    "Bearer",
+				ExpiresIn:    3600,
+			}, nil
+		},
+	}
+
+	router := newTestRouter(authSvc, tokenSvc)
+
+	// Step 1: request the email change (authenticated).
+	reqBody := map[string]string{
+		"new_email": "new@example.com",
+		"password":  "correct-password-flow",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", reqBody, "X-User-ID", userID)
+	require.Equal(t, http.StatusAccepted, w.Code)
+	require.NotEmpty(t, capturedChangeToken, "RequestEmailChange should have minted a change token")
+
+	// Step 2: confirm it (public) with the minted token.
+	confirmBody := map[string]string{"token": capturedChangeToken}
+	w = doRequest(router, http.MethodPost, "/auth/email-change/confirm", confirmBody)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	assert.Equal(t, 1, revokeCalls, "RevokeAllForUser should be called exactly once")
+	assert.Equal(t, domain.DefaultTenantID, gotTenantID)
+	assert.Equal(t, userID, gotUserID)
+
+	// Step 3: a refresh attempt with the pre-change refresh token must now
+	// be rejected.
+	refreshBody := map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": oldRefreshToken,
+	}
+	w = doRequest(router, http.MethodPost, "/auth/token", refreshBody)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }

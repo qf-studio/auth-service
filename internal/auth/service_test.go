@@ -1775,7 +1775,22 @@ func TestRequestEmailChange_RateLimited(t *testing.T) {
 			return nil, storage.ErrNotFound
 		},
 	}
-	svc := newEmailChangeService(t, users, &mockEmailSender{}, &spyAuditor{})
+	client := newRedisClient(t)
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:                     client,
+		Logger:                    logger,
+		Auditor:                   &spyAuditor{},
+		Users:                     users,
+		Tokens:                    &mockRefreshTokenRepository{},
+		Issuer:                    &mockTokenIssuer{},
+		Hasher:                    &mockHasher{},
+		Breaches:                  &mockBreachChecker{},
+		Email:                     &mockEmailSender{},
+		EmailEnabled:              true,
+		EmailChangeConfirmURLBase: "https://app.example.com/email-change/confirm",
+		EmailChangeRevertURLBase:  "https://app.example.com/email-change/revert",
+	})
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
@@ -1786,6 +1801,63 @@ func TestRequestEmailChange_RateLimited(t *testing.T) {
 	_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrRateLimited)
+
+	// INCR and EXPIRE must have landed together on every call (see
+	// checkEmailChangeRateLimit) so the key can never exist without a TTL.
+	key := fmt.Sprintf("%s%s:%s", emailChangeRatePrefix, domain.DefaultTenantID, "user-1")
+	ttl, err := client.TTL(ctx, key).Result()
+	require.NoError(t, err)
+	assert.Greater(t, ttl, time.Duration(0), "rate limit key must have a TTL")
+	assert.LessOrEqual(t, ttl, emailChangeRateWindow, "TTL should be at most one hour after the first call")
+}
+
+// TestRequestEmailChange_RateLimitCountsEveryRequest asserts that failed
+// (wrong-password) attempts count against the rate limit exactly like
+// successful ones, since checkEmailChangeRateLimit runs before the password
+// check. Otherwise an attacker could brute-force the password indefinitely
+// by never supplying a correct one.
+func TestRequestEmailChange_RateLimitCountsEveryRequest(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	hasher := &mockHasher{
+		verifyFn: func(pwd, _ string) (bool, error) { return pwd == "correct-password", nil },
+	}
+	sender := &mockEmailSender{}
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:                     newRedisClient(t),
+		Logger:                    logger,
+		Auditor:                   &spyAuditor{},
+		Users:                     users,
+		Tokens:                    &mockRefreshTokenRepository{},
+		Issuer:                    &mockTokenIssuer{},
+		Hasher:                    hasher,
+		Breaches:                  &mockBreachChecker{},
+		Email:                     sender,
+		EmailEnabled:              true,
+		EmailChangeConfirmURLBase: "https://app.example.com/email-change/confirm",
+		EmailChangeRevertURLBase:  "https://app.example.com/email-change/revert",
+	})
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "wrong-password")
+		require.Error(t, err, "request %d should fail the password check", i+1)
+		assert.ErrorIs(t, err, api.ErrInvalidPassword)
+	}
+
+	// The fourth call supplies the correct password, but the three prior
+	// wrong-password calls should already have exhausted the limit.
+	_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrRateLimited)
+	assert.Empty(t, sender.sent, "no email should have been sent")
 }
 
 func TestRequestEmailChange_Unconfigured(t *testing.T) {
@@ -1933,6 +2005,33 @@ func TestConfirmEmailChange_UnknownToken(t *testing.T) {
 
 	err := svc.ConfirmEmailChange(context.Background(), "bogus-token")
 	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrNotFound)
+}
+
+// TestConfirmEmailChange_ConsumedToken mimics the real repository's
+// one-time-use semantics: the token works on the first confirm and looks
+// unknown on any subsequent one, since ConsumeEmailChangeToken deletes it on
+// success. The second call must report api.ErrNotFound just like an
+// unknown token (mapped to 400 by the handler, never 404).
+func TestConfirmEmailChange_ConsumedToken(t *testing.T) {
+	consumed := false
+	users := &mockUserRepository{
+		consumeEmailChangeTokenFn: func(_ context.Context, token string) (*domain.User, error) {
+			assert.Equal(t, "once-only-token", token)
+			if consumed {
+				return nil, fmt.Errorf("email change token: %w", storage.ErrNotFound)
+			}
+			consumed = true
+			return &domain.User{ID: "user-1", Email: "new@example.com"}, nil
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	err := svc.ConfirmEmailChange(context.Background(), "once-only-token")
+	require.NoError(t, err, "first confirm should succeed")
+
+	err = svc.ConfirmEmailChange(context.Background(), "once-only-token")
+	require.Error(t, err, "second confirm with the same token must fail")
 	assert.ErrorIs(t, err, api.ErrNotFound)
 }
 
