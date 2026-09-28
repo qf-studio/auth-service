@@ -51,6 +51,31 @@ type UserRepository interface {
 
 	// AddPasswordHistory appends a password hash to the user's history.
 	AddPasswordHistory(ctx context.Context, tenantID uuid.UUID, userID, passwordHash string) error
+
+	// SetPendingEmailChange stores a pending email change: the requested new
+	// address, a confirmation token (sent to the new address) with its
+	// expiry, and a revert token (sent to the current address) with its own,
+	// longer expiry. A second call while a change is already pending
+	// replaces both tokens and the pending address.
+	SetPendingEmailChange(ctx context.Context, tenantID uuid.UUID, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error
+
+	// ConsumeEmailChangeToken applies a pending email change: promotes
+	// pending_email to email, marks the address verified, records the old
+	// address as previous_email, and clears pending_email/email_change_token
+	// (the revert token is left in place). Returns ErrNotFound if the token
+	// doesn't match any user, ErrTokenExpired if it matched but expired, or
+	// ErrDuplicateEmail if the new address was claimed by another user in
+	// the meantime (the row is left unchanged in that case).
+	ConsumeEmailChangeToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error)
+
+	// ConsumeEmailRevertToken reverts an email change using the token sent to
+	// the original address. If previous_email is set (the change was already
+	// confirmed), email is restored to it; either way pending_email and both
+	// tokens/expiries are cleared. Returns ErrNotFound if the token doesn't
+	// match any user, ErrTokenExpired if it matched but expired, or
+	// ErrDuplicateEmail if the previous address was claimed by another user
+	// in the meantime (the row is left unchanged in that case).
+	ConsumeEmailRevertToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error)
 }
 
 // PostgresUserRepository implements UserRepository using pgx against PostgreSQL.
@@ -293,4 +318,190 @@ func (r *PostgresUserRepository) AddPasswordHistory(ctx context.Context, tenantI
 		return fmt.Errorf("add password history: %w", err)
 	}
 	return nil
+}
+
+// SetPendingEmailChange stores a pending email change and its two tokens.
+func (r *PostgresUserRepository) SetPendingEmailChange(ctx context.Context, tenantID uuid.UUID, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error {
+	query := `UPDATE users
+		SET pending_email = $1, email_change_token = $2, email_change_token_expires_at = $3,
+		    email_revert_token = $4, email_revert_token_expires_at = $5, updated_at = $6
+		WHERE id = $7 AND tenant_id = $8 AND deleted_at IS NULL`
+
+	tag, err := r.pool.Exec(ctx, query, pendingEmail, changeToken, changeExpiresAt, revertToken, revertExpiresAt, time.Now().UTC(), userID, tenantID)
+	if err != nil {
+		return fmt.Errorf("set pending email change: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user %s: %w", userID, ErrNotFound)
+	}
+	return nil
+}
+
+// emailChangeSelectColumns lists the columns needed to evaluate and apply an
+// email-change or email-revert token, shared by both consume methods below.
+const emailChangeSelectColumns = `id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason,
+	       email_verified, email_verify_token, email_verify_token_expires_at,
+	       last_login_at, force_password_change, password_changed_at,
+	       pending_email, email_change_token, email_change_token_expires_at,
+	       email_revert_token, email_revert_token_expires_at, previous_email,
+	       created_at, updated_at, deleted_at`
+
+// scanUserForEmailChange scans a row (from either the users table directly or
+// a transaction snapshot) that includes the email-change columns.
+func scanUserForEmailChange(row pgx.Row, user *domain.User) error {
+	return row.Scan(
+		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
+		&user.Locked, &user.LockedAt, &user.LockedReason,
+		&user.EmailVerified, &user.EmailVerifyToken, &user.EmailVerifyTokenExpiresAt,
+		&user.LastLoginAt, &user.ForcePasswordChange, &user.PasswordChangedAt,
+		&user.PendingEmail, &user.EmailChangeToken, &user.EmailChangeTokenExpiresAt,
+		&user.EmailRevertToken, &user.EmailRevertTokenExpiresAt, &user.PreviousEmail,
+		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
+	)
+}
+
+// ConsumeEmailChangeToken applies a pending email change inside a single
+// transaction (SELECT ... FOR UPDATE followed by the UPDATE) so a concurrent
+// request against the same row can't race the expiry/uniqueness checks.
+func (r *PostgresUserRepository) ConsumeEmailChangeToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	selectQuery := fmt.Sprintf(`
+		SELECT %s
+		FROM users
+		WHERE email_change_token = $1 AND tenant_id = $2 AND deleted_at IS NULL
+		FOR UPDATE`, emailChangeSelectColumns)
+
+	user := &domain.User{}
+	if err := scanUserForEmailChange(tx.QueryRow(ctx, selectQuery, token, tenantID), user); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("email change token: %w", ErrNotFound)
+		}
+		return nil, fmt.Errorf("consume email change token: %w", err)
+	}
+
+	now := time.Now().UTC()
+	if user.EmailChangeTokenExpiresAt == nil || now.After(*user.EmailChangeTokenExpiresAt) {
+		return nil, fmt.Errorf("email change token: %w", ErrTokenExpired)
+	}
+
+	pendingEmail := ""
+	if user.PendingEmail != nil {
+		pendingEmail = *user.PendingEmail
+	}
+	previousEmail := user.Email
+
+	updateQuery := `UPDATE users
+		SET email = $1, previous_email = $2, email_verified = TRUE,
+		    pending_email = NULL, email_change_token = NULL, email_change_token_expires_at = NULL,
+		    updated_at = $3
+		WHERE id = $4 AND tenant_id = $5`
+
+	if _, err := tx.Exec(ctx, updateQuery, pendingEmail, previousEmail, now, user.ID, tenantID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, fmt.Errorf("email %s: %w", pendingEmail, ErrDuplicateEmail)
+		}
+		return nil, fmt.Errorf("apply email change: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit email change: %w", err)
+	}
+
+	user.Email = pendingEmail
+	user.PreviousEmail = &previousEmail
+	user.EmailVerified = true
+	user.PendingEmail = nil
+	user.EmailChangeToken = nil
+	user.EmailChangeTokenExpiresAt = nil
+	user.UpdatedAt = now
+
+	return user, nil
+}
+
+// ConsumeEmailRevertToken reverts a pending or already-confirmed email
+// change inside a single transaction, mirroring ConsumeEmailChangeToken's
+// SELECT ... FOR UPDATE + UPDATE pattern.
+func (r *PostgresUserRepository) ConsumeEmailRevertToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	selectQuery := fmt.Sprintf(`
+		SELECT %s
+		FROM users
+		WHERE email_revert_token = $1 AND tenant_id = $2 AND deleted_at IS NULL
+		FOR UPDATE`, emailChangeSelectColumns)
+
+	user := &domain.User{}
+	if err := scanUserForEmailChange(tx.QueryRow(ctx, selectQuery, token, tenantID), user); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("email revert token: %w", ErrNotFound)
+		}
+		return nil, fmt.Errorf("consume email revert token: %w", err)
+	}
+
+	now := time.Now().UTC()
+	if user.EmailRevertTokenExpiresAt == nil || now.After(*user.EmailRevertTokenExpiresAt) {
+		return nil, fmt.Errorf("email revert token: %w", ErrTokenExpired)
+	}
+
+	var updateQuery string
+	var args []interface{}
+	if user.PreviousEmail != nil {
+		// The change had already been confirmed: restore the previous address.
+		updateQuery = `UPDATE users
+			SET email = $1, previous_email = NULL, pending_email = NULL,
+			    email_change_token = NULL, email_change_token_expires_at = NULL,
+			    email_revert_token = NULL, email_revert_token_expires_at = NULL,
+			    updated_at = $2
+			WHERE id = $3 AND tenant_id = $4`
+		args = []interface{}{*user.PreviousEmail, now, user.ID, tenantID}
+	} else {
+		// The change was only requested, never confirmed: the current email
+		// is untouched, just clear the pending state.
+		updateQuery = `UPDATE users
+			SET pending_email = NULL,
+			    email_change_token = NULL, email_change_token_expires_at = NULL,
+			    email_revert_token = NULL, email_revert_token_expires_at = NULL,
+			    updated_at = $1
+			WHERE id = $2 AND tenant_id = $3`
+		args = []interface{}{now, user.ID, tenantID}
+	}
+
+	if _, err := tx.Exec(ctx, updateQuery, args...); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			restoredEmail := ""
+			if user.PreviousEmail != nil {
+				restoredEmail = *user.PreviousEmail
+			}
+			return nil, fmt.Errorf("email %s: %w", restoredEmail, ErrDuplicateEmail)
+		}
+		return nil, fmt.Errorf("apply email revert: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit email revert: %w", err)
+	}
+
+	if user.PreviousEmail != nil {
+		user.Email = *user.PreviousEmail
+		user.PreviousEmail = nil
+	}
+	user.PendingEmail = nil
+	user.EmailChangeToken = nil
+	user.EmailChangeTokenExpiresAt = nil
+	user.EmailRevertToken = nil
+	user.EmailRevertTokenExpiresAt = nil
+	user.UpdatedAt = now
+
+	return user, nil
 }

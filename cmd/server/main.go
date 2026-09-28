@@ -123,18 +123,21 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	authSvc := auth.NewService(auth.ServiceDeps{
-		Redis:           redisClient,
-		Logger:          log,
-		Auditor:         auditSvc,
-		Users:           userRepo,
-		Tokens:          refreshTokenRepo,
-		Issuer:          tokenSvc,
-		Hasher:          hasher,
-		Breaches:        hibpClient,
-		Email:           emailSender,
-		ResetURLBase:    cfg.Email.PasswordResetURLBase,
-		VerifyURLBase:   cfg.Email.EmailVerifyURLBase,
-		RefreshTokenTTL: cfg.JWT.RefreshTokenTTL,
+		Redis:                     redisClient,
+		Logger:                    log,
+		Auditor:                   auditSvc,
+		Users:                     userRepo,
+		Tokens:                    refreshTokenRepo,
+		Issuer:                    tokenSvc,
+		Hasher:                    hasher,
+		Breaches:                  hibpClient,
+		Email:                     emailSender,
+		ResetURLBase:              cfg.Email.PasswordResetURLBase,
+		VerifyURLBase:             cfg.Email.EmailVerifyURLBase,
+		EmailEnabled:              cfg.Email.Enabled,
+		EmailChangeConfirmURLBase: cfg.Email.EmailChangeConfirmURLBase,
+		EmailChangeRevertURLBase:  cfg.Email.EmailChangeRevertURLBase,
+		RefreshTokenTTL:           cfg.JWT.RefreshTokenTTL,
 	})
 
 	// ── Session ──────────────────────────────────────────────────────────

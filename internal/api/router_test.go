@@ -36,6 +36,9 @@ type mockAuthService struct {
 	changePasswordFn       func(ctx context.Context, userID, oldPassword, newPassword string) error
 	logoutFn               func(ctx context.Context, userID, token, refreshToken string) error
 	logoutAllFn            func(ctx context.Context, userID string) error
+	requestEmailChangeFn   func(ctx context.Context, userID, newEmail, password string) (*api.EmailChangeResult, error)
+	confirmEmailChangeFn   func(ctx context.Context, token string) error
+	revertEmailChangeFn    func(ctx context.Context, token string) error
 }
 
 func (m *mockAuthService) Register(ctx context.Context, email, password, name string) (*api.UserInfo, error) {
@@ -109,6 +112,27 @@ func (m *mockAuthService) Logout(ctx context.Context, userID, token, refreshToke
 func (m *mockAuthService) LogoutAll(ctx context.Context, userID string) error {
 	if m.logoutAllFn != nil {
 		return m.logoutAllFn(ctx, userID)
+	}
+	return nil
+}
+
+func (m *mockAuthService) RequestEmailChange(ctx context.Context, userID, newEmail, password string) (*api.EmailChangeResult, error) {
+	if m.requestEmailChangeFn != nil {
+		return m.requestEmailChangeFn(ctx, userID, newEmail, password)
+	}
+	return &api.EmailChangeResult{Status: "pending", PendingEmail: newEmail}, nil
+}
+
+func (m *mockAuthService) ConfirmEmailChange(ctx context.Context, token string) error {
+	if m.confirmEmailChangeFn != nil {
+		return m.confirmEmailChangeFn(ctx, token)
+	}
+	return nil
+}
+
+func (m *mockAuthService) RevertEmailChange(ctx context.Context, token string) error {
+	if m.revertEmailChangeFn != nil {
+		return m.revertEmailChangeFn(ctx, token)
 	}
 	return nil
 }
@@ -663,6 +687,261 @@ func TestLogoutAll_Success(t *testing.T) {
 	w := doRequest(router, http.MethodPost, "/auth/logout/all", nil, "X-User-ID", "user-42")
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- POST /auth/me/email tests ---
+
+func TestRequestEmailChange_Success(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "new@example.com",
+		"password":  "correct-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+
+	var resp api.EmailChangeResult
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "pending", resp.Status)
+	assert.Equal(t, "new@example.com", resp.PendingEmail)
+}
+
+func TestRequestEmailChange_Unauthorized(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "new@example.com",
+		"password":  "correct-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestRequestEmailChange_ValidationError_InvalidEmail(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "not-an-email",
+		"password":  "correct-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeValidationError, resp.Code)
+}
+
+func TestRequestEmailChange_WrongPassword(t *testing.T) {
+	authSvc := &mockAuthService{
+		requestEmailChangeFn: func(_ context.Context, _, _, _ string) (*api.EmailChangeResult, error) {
+			return nil, api.ErrInvalidPassword
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "new@example.com",
+		"password":  "wrong-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeInvalidPassword, resp.Code)
+}
+
+func TestRequestEmailChange_Conflict(t *testing.T) {
+	authSvc := &mockAuthService{
+		requestEmailChangeFn: func(_ context.Context, _, _, _ string) (*api.EmailChangeResult, error) {
+			return nil, api.ErrConflict
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "taken@example.com",
+		"password":  "correct-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+func TestRequestEmailChange_RateLimited(t *testing.T) {
+	authSvc := &mockAuthService{
+		requestEmailChangeFn: func(_ context.Context, _, _, _ string) (*api.EmailChangeResult, error) {
+			return nil, api.ErrRateLimited
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "new@example.com",
+		"password":  "correct-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+}
+
+func TestRequestEmailChange_Unconfigured(t *testing.T) {
+	authSvc := &mockAuthService{
+		requestEmailChangeFn: func(_ context.Context, _, _, _ string) (*api.EmailChangeResult, error) {
+			return nil, api.ErrEmailChangeUnconfigured
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "new@example.com",
+		"password":  "correct-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeEmailChangeUnconfigured, resp.Code)
+}
+
+// --- POST /auth/email-change/confirm tests ---
+
+func TestConfirmEmailChange_Success(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"token": "valid-token"}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/confirm", body)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestConfirmEmailChange_UnknownToken(t *testing.T) {
+	authSvc := &mockAuthService{
+		confirmEmailChangeFn: func(_ context.Context, _ string) error {
+			return api.ErrNotFound
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "unknown-token"}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/confirm", body)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeBadRequest, resp.Code)
+}
+
+func TestConfirmEmailChange_ExpiredToken(t *testing.T) {
+	authSvc := &mockAuthService{
+		confirmEmailChangeFn: func(_ context.Context, _ string) error {
+			return api.ErrGone
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "expired-token"}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/confirm", body)
+
+	assert.Equal(t, http.StatusGone, w.Code)
+}
+
+func TestConfirmEmailChange_EmailTakenMeanwhile(t *testing.T) {
+	authSvc := &mockAuthService{
+		confirmEmailChangeFn: func(_ context.Context, _ string) error {
+			return api.ErrConflict
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "valid-token"}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/confirm", body)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+func TestConfirmEmailChange_ValidationError_MissingToken(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"token": ""}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/confirm", body)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
+
+// --- POST /auth/email-change/revert tests ---
+
+func TestRevertEmailChange_Success(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"token": "valid-token"}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/revert", body)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestRevertEmailChange_UnknownToken(t *testing.T) {
+	authSvc := &mockAuthService{
+		revertEmailChangeFn: func(_ context.Context, _ string) error {
+			return api.ErrNotFound
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "unknown-token"}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/revert", body)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeBadRequest, resp.Code)
+}
+
+func TestRevertEmailChange_ExpiredToken(t *testing.T) {
+	authSvc := &mockAuthService{
+		revertEmailChangeFn: func(_ context.Context, _ string) error {
+			return api.ErrGone
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "expired-token"}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/revert", body)
+
+	assert.Equal(t, http.StatusGone, w.Code)
+}
+
+func TestRevertEmailChange_EmailTakenMeanwhile(t *testing.T) {
+	authSvc := &mockAuthService{
+		revertEmailChangeFn: func(_ context.Context, _ string) error {
+			return api.ErrConflict
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"token": "valid-token"}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/revert", body)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+func TestRevertEmailChange_ValidationError_MissingToken(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"token": ""}
+	w := doRequest(router, http.MethodPost, "/auth/email-change/revert", body)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
 // --- Full auth flow integration test ---

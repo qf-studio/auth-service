@@ -83,10 +83,21 @@ func createTables(t *testing.T, pool *pgxpool.Pool) {
 			last_login_at TIMESTAMPTZ,
 			force_password_change BOOLEAN NOT NULL DEFAULT FALSE,
 			password_changed_at   TIMESTAMPTZ,
+			pending_email                    TEXT,
+			email_change_token               TEXT,
+			email_change_token_expires_at    TIMESTAMPTZ,
+			email_revert_token               TEXT,
+			email_revert_token_expires_at    TIMESTAMPTZ,
+			previous_email                   TEXT,
 			created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			deleted_at    TIMESTAMPTZ
 		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_change_token
+			ON users (email_change_token) WHERE email_change_token IS NOT NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_revert_token
+			ON users (email_revert_token) WHERE email_revert_token IS NOT NULL;
 
 		CREATE TABLE IF NOT EXISTS refresh_tokens (
 			signature  TEXT PRIMARY KEY,
@@ -403,6 +414,247 @@ func TestPostgresUserRepository_ConsumeEmailVerifyToken_AlreadyVerified_Idempote
 	verified, err := repo.ConsumeEmailVerifyToken(ctx, domain.DefaultTenantID, "reused-token")
 	require.NoError(t, err)
 	assert.True(t, verified.EmailVerified)
+}
+
+// queryPendingEmail reads the pending_email and previous_email columns
+// directly via SQL, since findByColumn (backing FindByID/FindByEmail) doesn't
+// select the email-change columns.
+func queryPendingEmail(t *testing.T, pool *pgxpool.Pool, userID string) (pendingEmail, previousEmail *string) {
+	t.Helper()
+	ctx := context.Background()
+	err := pool.QueryRow(ctx, `SELECT pending_email, previous_email FROM users WHERE id = $1`, userID).Scan(&pendingEmail, &previousEmail)
+	require.NoError(t, err)
+	return
+}
+
+func TestPostgresUserRepository_SetPendingEmailChange(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	changeExpiry := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Microsecond)
+	revertExpiry := time.Now().UTC().Add(7 * 24 * time.Hour).Truncate(time.Microsecond)
+	err = repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, user.ID, "new@test.com", "change-token", changeExpiry, "revert-token", revertExpiry)
+	require.NoError(t, err)
+
+	pendingEmail, _ := queryPendingEmail(t, pool, user.ID)
+	require.NotNil(t, pendingEmail)
+	assert.Equal(t, "new@test.com", *pendingEmail)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, user.Email, found.Email, "current email must not change until confirmed")
+}
+
+func TestPostgresUserRepository_SetPendingEmailChange_NotFound(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	err := repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, "nonexistent-id", "new@test.com", "change-token", time.Now().UTC().Add(24*time.Hour), "revert-token", time.Now().UTC().Add(7*24*time.Hour))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestPostgresUserRepository_ConsumeEmailChangeToken_Valid(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	err = repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, user.ID, "new@test.com", "change-token", time.Now().UTC().Add(24*time.Hour), "revert-token", time.Now().UTC().Add(7*24*time.Hour))
+	require.NoError(t, err)
+
+	changed, err := repo.ConsumeEmailChangeToken(ctx, domain.DefaultTenantID, "change-token")
+	require.NoError(t, err)
+	assert.Equal(t, "new@test.com", changed.Email)
+	assert.True(t, changed.EmailVerified)
+	require.NotNil(t, changed.PreviousEmail)
+	assert.Equal(t, user.Email, *changed.PreviousEmail)
+	assert.Nil(t, changed.PendingEmail)
+	assert.Nil(t, changed.EmailChangeToken)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "new@test.com", found.Email)
+	assert.True(t, found.EmailVerified)
+
+	pendingEmail, previousEmail := queryPendingEmail(t, pool, user.ID)
+	assert.Nil(t, pendingEmail)
+	require.NotNil(t, previousEmail)
+	assert.Equal(t, user.Email, *previousEmail)
+}
+
+func TestPostgresUserRepository_ConsumeEmailChangeToken_Expired(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	err = repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, user.ID, "new@test.com", "change-token", time.Now().UTC().Add(-1*time.Hour), "revert-token", time.Now().UTC().Add(7*24*time.Hour))
+	require.NoError(t, err)
+
+	_, err = repo.ConsumeEmailChangeToken(ctx, domain.DefaultTenantID, "change-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrTokenExpired)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, user.Email, found.Email, "expired token must not change the email")
+}
+
+func TestPostgresUserRepository_ConsumeEmailChangeToken_Invalid(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.ConsumeEmailChangeToken(ctx, domain.DefaultTenantID, "bogus-token-nobody-has")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestPostgresUserRepository_ConsumeEmailChangeToken_DuplicateEmail(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	taken := newTestUser()
+	_, err := repo.Create(ctx, taken)
+	require.NoError(t, err)
+
+	user := newTestUser()
+	_, err = repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	// Someone else claims the target address after the change was requested.
+	err = repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, user.ID, taken.Email, "change-token", time.Now().UTC().Add(24*time.Hour), "revert-token", time.Now().UTC().Add(7*24*time.Hour))
+	require.NoError(t, err)
+
+	_, err = repo.ConsumeEmailChangeToken(ctx, domain.DefaultTenantID, "change-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrDuplicateEmail)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, user.Email, found.Email, "row must be unchanged when the target email is taken")
+}
+
+func TestPostgresUserRepository_ConsumeEmailRevertToken_AfterOnlyRequested(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	err = repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, user.ID, "new@test.com", "change-token", time.Now().UTC().Add(24*time.Hour), "revert-token", time.Now().UTC().Add(7*24*time.Hour))
+	require.NoError(t, err)
+
+	reverted, err := repo.ConsumeEmailRevertToken(ctx, domain.DefaultTenantID, "revert-token")
+	require.NoError(t, err)
+	assert.Equal(t, user.Email, reverted.Email, "email was never confirmed, so it should be untouched")
+	assert.Nil(t, reverted.PendingEmail)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, user.Email, found.Email)
+
+	pendingEmail, _ := queryPendingEmail(t, pool, user.ID)
+	assert.Nil(t, pendingEmail)
+}
+
+func TestPostgresUserRepository_ConsumeEmailRevertToken_AfterConfirmedChange(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+	originalEmail := user.Email
+
+	err = repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, user.ID, "new@test.com", "change-token", time.Now().UTC().Add(24*time.Hour), "revert-token", time.Now().UTC().Add(7*24*time.Hour))
+	require.NoError(t, err)
+
+	_, err = repo.ConsumeEmailChangeToken(ctx, domain.DefaultTenantID, "change-token")
+	require.NoError(t, err)
+
+	reverted, err := repo.ConsumeEmailRevertToken(ctx, domain.DefaultTenantID, "revert-token")
+	require.NoError(t, err)
+	assert.Equal(t, originalEmail, reverted.Email, "confirmed change should be rolled back to the original address")
+	assert.Nil(t, reverted.PreviousEmail)
+	assert.Nil(t, reverted.PendingEmail)
+
+	found, err := repo.FindByID(ctx, domain.DefaultTenantID, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, originalEmail, found.Email)
+}
+
+func TestPostgresUserRepository_ConsumeEmailRevertToken_Expired(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	err = repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, user.ID, "new@test.com", "change-token", time.Now().UTC().Add(24*time.Hour), "revert-token", time.Now().UTC().Add(-1*time.Hour))
+	require.NoError(t, err)
+
+	_, err = repo.ConsumeEmailRevertToken(ctx, domain.DefaultTenantID, "revert-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrTokenExpired)
+}
+
+func TestPostgresUserRepository_ConsumeEmailRevertToken_Invalid(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.ConsumeEmailRevertToken(ctx, domain.DefaultTenantID, "bogus-token-nobody-has")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestPostgresUserRepository_ConsumeEmailRevertToken_DuplicateEmail(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	taken := newTestUser()
+	_, err := repo.Create(ctx, taken)
+	require.NoError(t, err)
+
+	user := newTestUser()
+	_, err = repo.Create(ctx, user)
+	require.NoError(t, err)
+	originalEmail := user.Email
+
+	err = repo.SetPendingEmailChange(ctx, domain.DefaultTenantID, user.ID, "new@test.com", "change-token", time.Now().UTC().Add(24*time.Hour), "revert-token", time.Now().UTC().Add(7*24*time.Hour))
+	require.NoError(t, err)
+
+	_, err = repo.ConsumeEmailChangeToken(ctx, domain.DefaultTenantID, "change-token")
+	require.NoError(t, err)
+
+	// The original address gets claimed by someone else before the revert link is used.
+	_, err = pool.Exec(ctx, `UPDATE users SET email = $1 WHERE id = $2`, originalEmail, taken.ID)
+	require.NoError(t, err)
+
+	_, err = repo.ConsumeEmailRevertToken(ctx, domain.DefaultTenantID, "revert-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrDuplicateEmail)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

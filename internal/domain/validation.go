@@ -102,6 +102,26 @@ type ProfileUpdateRequest struct {
 	Name string `json:"name" validate:"required,profile_name"`
 }
 
+// EmailChangeRequest is the validated request body for POST /auth/me/email,
+// which requests changing the authenticated user's account email. The new
+// address must be confirmed from a link sent to it before it takes effect.
+type EmailChangeRequest struct {
+	NewEmail string `json:"new_email" validate:"required,email"`
+	Password string `json:"password"  validate:"required"`
+}
+
+// EmailChangeConfirmRequest is the validated request body for
+// POST /auth/email-change/confirm.
+type EmailChangeConfirmRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
+// EmailChangeRevertRequest is the validated request body for
+// POST /auth/email-change/revert.
+type EmailChangeRevertRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
 // --- Validator setup ---
 
 // NewValidator creates a validator.Validate instance with custom NIST password validation registered.
