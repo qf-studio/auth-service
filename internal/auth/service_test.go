@@ -1641,7 +1641,7 @@ func emailChangeTestUser() *domain.User {
 func TestRequestEmailChange_Success(t *testing.T) {
 	var (
 		gotUserID, gotPendingEmail, gotChangeToken, gotRevertToken string
-		gotChangeExpiresAt, gotRevertExpiresAt                    time.Time
+		gotChangeExpiresAt, gotRevertExpiresAt                     time.Time
 	)
 	users := &mockUserRepository{
 		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
