@@ -174,6 +174,29 @@ paths:
                 $ref: "#/components/schemas/UserInfo"
         "401":
           $ref: "#/components/responses/Unauthorized"
+    put:
+      operationId: updateProfile
+      summary: Update current user's display name
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileUpdateRequest"
+      responses:
+        "200":
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserInfo"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /auth/me/password:
     put:
@@ -338,6 +361,15 @@ components:
           type: string
           minLength: 15
       required: [old_password, new_password]
+
+    ProfileUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+      required: [name]
 
     UserInfo:
       type: object

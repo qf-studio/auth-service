@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -108,6 +109,26 @@ func (h *AuthHandlers) Me(c *gin.Context) {
 	}
 
 	user, err := h.auth.GetMe(c.Request.Context(), userID)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, user)
+}
+
+// UpdateProfile handles PUT /auth/me.
+func (h *AuthHandlers) UpdateProfile(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized, "missing user identity")
+		return
+	}
+
+	req := c.MustGet("validated_request").(*domain.ProfileUpdateRequest)
+	name := strings.TrimSpace(req.Name)
+
+	user, err := h.auth.UpdateProfile(c.Request.Context(), userID, name)
 	if err != nil {
 		handleServiceError(c, err)
 		return

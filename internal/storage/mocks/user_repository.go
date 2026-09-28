@@ -18,6 +18,7 @@ type MockUserRepository struct {
 	SetEmailVerifyTokenFn     func(ctx context.Context, tenantID uuid.UUID, userID string, token string, expiresAt time.Time) error
 	ConsumeEmailVerifyTokenFn func(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error)
 	UpdatePasswordHashFn      func(ctx context.Context, tenantID uuid.UUID, userID, newHash string) error
+	UpdateNameFn              func(ctx context.Context, tenantID uuid.UUID, userID, name string) error
 	SetForcePasswordChangeFn  func(ctx context.Context, tenantID uuid.UUID, userID string, force bool) error
 	GetPasswordHistoryFn      func(ctx context.Context, tenantID uuid.UUID, userID string, limit int) ([]domain.PasswordHistoryEntry, error)
 	AddPasswordHistoryFn      func(ctx context.Context, tenantID uuid.UUID, userID, passwordHash string) error
@@ -57,6 +58,14 @@ func (m *MockUserRepository) ConsumeEmailVerifyToken(ctx context.Context, tenant
 func (m *MockUserRepository) UpdatePasswordHash(ctx context.Context, tenantID uuid.UUID, userID, newHash string) error {
 	if m.UpdatePasswordHashFn != nil {
 		return m.UpdatePasswordHashFn(ctx, tenantID, userID, newHash)
+	}
+	return nil
+}
+
+// UpdateName delegates to UpdateNameFn.
+func (m *MockUserRepository) UpdateName(ctx context.Context, tenantID uuid.UUID, userID, name string) error {
+	if m.UpdateNameFn != nil {
+		return m.UpdateNameFn(ctx, tenantID, userID, name)
 	}
 	return nil
 }

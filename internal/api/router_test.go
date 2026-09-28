@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -31,6 +32,7 @@ type mockAuthService struct {
 	confirmPasswordResetFn func(ctx context.Context, token, newPassword string) error
 	verifyEmailFn          func(ctx context.Context, token string) error
 	getMeFn                func(ctx context.Context, userID string) (*api.UserInfo, error)
+	updateProfileFn        func(ctx context.Context, userID, name string) (*api.UserInfo, error)
 	changePasswordFn       func(ctx context.Context, userID, oldPassword, newPassword string) error
 	logoutFn               func(ctx context.Context, userID, token, refreshToken string) error
 	logoutAllFn            func(ctx context.Context, userID string) error
@@ -81,6 +83,13 @@ func (m *mockAuthService) GetMe(ctx context.Context, userID string) (*api.UserIn
 		return m.getMeFn(ctx, userID)
 	}
 	return &api.UserInfo{ID: userID, Email: "user@example.com", Name: "Test User"}, nil
+}
+
+func (m *mockAuthService) UpdateProfile(ctx context.Context, userID, name string) (*api.UserInfo, error) {
+	if m.updateProfileFn != nil {
+		return m.updateProfileFn(ctx, userID, name)
+	}
+	return &api.UserInfo{ID: userID, Email: "user@example.com", Name: name}, nil
 }
 
 func (m *mockAuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
@@ -535,6 +544,80 @@ func TestMe_Unauthorized(t *testing.T) {
 
 	// No X-User-ID header → auth middleware rejects.
 	w := doRequest(router, http.MethodGet, "/auth/me", nil)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestUpdateProfile_Success(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"name": "New Name"}
+	w := doRequest(router, http.MethodPut, "/auth/me", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.UserInfo
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "user-42", resp.ID)
+	assert.Equal(t, "New Name", resp.Name)
+}
+
+func TestUpdateProfile_GetMeReflectsUpdatedName(t *testing.T) {
+	var storedName string
+	authSvc := &mockAuthService{
+		updateProfileFn: func(_ context.Context, userID, name string) (*api.UserInfo, error) {
+			storedName = name
+			return &api.UserInfo{ID: userID, Email: "user@example.com", Name: name}, nil
+		},
+		getMeFn: func(_ context.Context, userID string) (*api.UserInfo, error) {
+			return &api.UserInfo{ID: userID, Email: "user@example.com", Name: storedName}, nil
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{"name": "Updated Name"}
+	w := doRequest(router, http.MethodPut, "/auth/me", body, "X-User-ID", "user-42")
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	w = doRequest(router, http.MethodGet, "/auth/me", nil, "X-User-ID", "user-42")
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.UserInfo
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Updated Name", resp.Name)
+}
+
+func TestUpdateProfile_ValidationError_EmptyName(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"name": ""}
+	w := doRequest(router, http.MethodPut, "/auth/me", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeValidationError, resp.Code)
+}
+
+func TestUpdateProfile_ValidationError_NameTooLong(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"name": strings.Repeat("a", 81)}
+	w := doRequest(router, http.MethodPut, "/auth/me", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeValidationError, resp.Code)
+}
+
+func TestUpdateProfile_Unauthorized(t *testing.T) {
+	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
+
+	body := map[string]string{"name": "New Name"}
+	w := doRequest(router, http.MethodPut, "/auth/me", body)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }

@@ -579,6 +579,36 @@ func (s *Service) GetMe(ctx context.Context, userID string) (*api.UserInfo, erro
 	}, nil
 }
 
+// UpdateProfile updates the authenticated user's display name.
+func (s *Service) UpdateProfile(ctx context.Context, userID, name string) (*api.UserInfo, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	user, err := s.users.FindByID(ctx, tenantID, userID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("user not found: %w", api.ErrNotFound)
+		}
+		return nil, fmt.Errorf("find user: %w", err)
+	}
+
+	if err := s.users.UpdateName(ctx, tenantID, userID, name); err != nil {
+		return nil, fmt.Errorf("update name: %w", err)
+	}
+	user.Name = name
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventProfileUpdated,
+		ActorID:  userID,
+		TargetID: userID,
+	})
+
+	return &api.UserInfo{
+		ID:    user.ID,
+		Email: user.Email,
+		Name:  user.Name,
+	}, nil
+}
+
 // ChangePassword changes the authenticated user's password.
 // Validates old password, checks policy, checks history, then updates.
 func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {

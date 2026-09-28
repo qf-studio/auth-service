@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -94,6 +96,12 @@ type VerifyEmailRequest struct {
 	Token string `json:"token" validate:"required"`
 }
 
+// ProfileUpdateRequest is the validated request body for updating the
+// authenticated user's display name via PUT /auth/me.
+type ProfileUpdateRequest struct {
+	Name string `json:"name" validate:"required,profile_name"`
+}
+
 // --- Validator setup ---
 
 // NewValidator creates a validator.Validate instance with custom NIST password validation registered.
@@ -102,6 +110,7 @@ func NewValidator() *validator.Validate {
 	_ = v.RegisterValidation("nist_password", validateNistPassword)
 	_ = v.RegisterValidation("client_type", validateClientType)
 	_ = v.RegisterValidation("valid_scope", validateScope)
+	_ = v.RegisterValidation("profile_name", validateProfileName)
 	return v
 }
 
@@ -120,6 +129,21 @@ func validateScope(fl validator.FieldLevel) bool {
 func validateNistPassword(fl validator.FieldLevel) bool {
 	password := fl.Field().String()
 	return len(password) >= NistMinPasswordLength
+}
+
+// validateProfileName enforces the display name policy for PUT /auth/me:
+// 1 to 80 characters after trimming surrounding whitespace, and no control
+// characters anywhere in the value.
+func validateProfileName(fl validator.FieldLevel) bool {
+	name := fl.Field().String()
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	trimmed := strings.TrimSpace(name)
+	length := utf8.RuneCountInString(trimmed)
+	return length >= 1 && length <= 80
 }
 
 // --- Validation middleware ---
@@ -186,6 +210,8 @@ func validationMessage(fe validator.FieldError) string {
 		return "must be one of: service, agent, public"
 	case "valid_scope":
 		return "invalid scope"
+	case "profile_name":
+		return "must be 1-80 characters after trimming, with no control characters"
 	default:
 		return fmt.Sprintf("failed validation: %s", fe.Tag())
 	}

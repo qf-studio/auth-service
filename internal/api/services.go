@@ -44,6 +44,7 @@ type AuthService interface {
 	ConfirmPasswordReset(ctx context.Context, token, newPassword string) error
 	VerifyEmail(ctx context.Context, token string) error
 	GetMe(ctx context.Context, userID string) (*UserInfo, error)
+	UpdateProfile(ctx context.Context, userID, name string) (*UserInfo, error)
 	ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error
 	Logout(ctx context.Context, userID, token, refreshToken string) error
 	LogoutAll(ctx context.Context, userID string) error

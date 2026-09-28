@@ -123,6 +123,9 @@ func (m *mockUserRepo) ConsumeEmailVerifyToken(_ context.Context, _ uuid.UUID, _
 func (m *mockUserRepo) UpdatePasswordHash(_ context.Context, _ uuid.UUID, _, _ string) error {
 	return nil
 }
+func (m *mockUserRepo) UpdateName(_ context.Context, _ uuid.UUID, _, _ string) error {
+	return nil
+}
 func (m *mockUserRepo) SetForcePasswordChange(_ context.Context, _ uuid.UUID, _ string, _ bool) error {
 	return nil
 }

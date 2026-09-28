@@ -28,6 +28,7 @@ type mockUserRepository struct {
 	createFn                  func(ctx context.Context, user *domain.User) (*domain.User, error)
 	updateLastLogin           func(ctx context.Context, userID string, ts time.Time) error
 	updatePasswordHashFn      func(ctx context.Context, userID, newHash string) error
+	updateNameFn              func(ctx context.Context, userID, name string) error
 	getPasswordHistoryFn      func(ctx context.Context, userID string, limit int) ([]domain.PasswordHistoryEntry, error)
 	addPasswordHistoryFn      func(ctx context.Context, userID, hash string) error
 	setEmailVerifyTokenFn     func(ctx context.Context, userID, token string, expiresAt time.Time) error
@@ -79,6 +80,13 @@ func (m *mockUserRepository) ConsumeEmailVerifyToken(ctx context.Context, _ uuid
 func (m *mockUserRepository) UpdatePasswordHash(ctx context.Context, _ uuid.UUID, userID, newHash string) error {
 	if m.updatePasswordHashFn != nil {
 		return m.updatePasswordHashFn(ctx, userID, newHash)
+	}
+	return nil
+}
+
+func (m *mockUserRepository) UpdateName(ctx context.Context, _ uuid.UUID, userID, name string) error {
+	if m.updateNameFn != nil {
+		return m.updateNameFn(ctx, userID, name)
 	}
 	return nil
 }
@@ -1159,6 +1167,94 @@ func TestGetMe_UserNotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrNotFound)
 	assert.Nil(t, user)
+}
+
+// ── UpdateProfile Tests ──────────────────────────────────────────────────────
+
+func TestUpdateProfile_Success(t *testing.T) {
+	var (
+		updatedUserID, updatedName string
+		updateCalls                int
+	)
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, id string) (*domain.User, error) {
+			assert.Equal(t, "user-42", id)
+			return &domain.User{
+				ID:    "user-42",
+				Email: "aleks@example.com",
+				Name:  "Old Name",
+			}, nil
+		},
+		updateNameFn: func(_ context.Context, userID, name string) error {
+			updateCalls++
+			updatedUserID = userID
+			updatedName = name
+			return nil
+		},
+	}
+	auditor := &spyAuditor{}
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:    nil,
+		Logger:   logger,
+		Auditor:  auditor,
+		Users:    users,
+		Tokens:   &mockRefreshTokenRepository{},
+		Issuer:   &mockTokenIssuer{},
+		Hasher:   &mockHasher{},
+		Breaches: &mockBreachChecker{},
+		Email:    &mockEmailSender{},
+	})
+
+	info, err := svc.UpdateProfile(context.Background(), "user-42", "New Name")
+	require.NoError(t, err)
+	assert.Equal(t, "user-42", info.ID)
+	assert.Equal(t, "aleks@example.com", info.Email)
+	assert.Equal(t, "New Name", info.Name)
+
+	assert.Equal(t, 1, updateCalls, "UpdateName should be called exactly once")
+	assert.Equal(t, "user-42", updatedUserID)
+	assert.Equal(t, "New Name", updatedName)
+
+	var profileEvents []audit.Event
+	for _, e := range auditor.events {
+		if e.Type == audit.EventProfileUpdated {
+			profileEvents = append(profileEvents, e)
+		}
+	}
+	require.Len(t, profileEvents, 1, "expected exactly one profile_updated audit event")
+	assert.Equal(t, "user-42", profileEvents[0].ActorID)
+	assert.Equal(t, "user-42", profileEvents[0].TargetID)
+}
+
+func TestUpdateProfile_UserNotFound(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	info, err := svc.UpdateProfile(context.Background(), "user-missing", "New Name")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrNotFound)
+	assert.Nil(t, info)
+}
+
+func TestUpdateProfile_RepositoryError(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, id string) (*domain.User, error) {
+			return &domain.User{ID: id, Email: "aleks@example.com", Name: "Old Name"}, nil
+		},
+		updateNameFn: func(_ context.Context, _, _ string) error {
+			return fmt.Errorf("db unavailable")
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	info, err := svc.UpdateProfile(context.Background(), "user-42", "New Name")
+	require.Error(t, err)
+	assert.Nil(t, info)
 }
 
 // ── Register Tests ──────────────────────────────────────────────────────────
