@@ -219,6 +219,91 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /auth/me/email:
+    post:
+      operationId: requestEmailChange
+      summary: Request a change of the current user's account email
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailChangeRequest"
+      responses:
+        "202":
+          description: Email change pending confirmation from the new address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailChangeResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/email-change/confirm:
+    post:
+      operationId: confirmEmailChange
+      summary: Confirm an account email change from the new address
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailChangeConfirmRequest"
+      responses:
+        "200":
+          description: Email changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailChangeStatusResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+
+  /auth/email-change/revert:
+    post:
+      operationId: revertEmailChange
+      summary: Revert an account email change from the original address
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailChangeRevertRequest"
+      responses:
+        "200":
+          description: Email change reverted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailChangeStatusResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+
   /auth/logout:
     post:
       operationId: logout
@@ -274,6 +359,36 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     Unauthorized:
       description: Authentication required or invalid
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Request understood but not permitted (e.g. wrong password)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Request conflicts with existing state (e.g. email already in use)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Gone:
+      description: The referenced token has expired
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Feature not currently configured
       content:
         application/json:
           schema:
@@ -370,6 +485,49 @@ components:
           minLength: 1
           maxLength: 80
       required: [name]
+
+    EmailChangeRequest:
+      type: object
+      properties:
+        new_email:
+          type: string
+          format: email
+        password:
+          type: string
+      required: [new_email, password]
+
+    EmailChangeResult:
+      type: object
+      properties:
+        status:
+          type: string
+          example: pending
+        pending_email:
+          type: string
+          format: email
+      required: [status, pending_email]
+
+    EmailChangeConfirmRequest:
+      type: object
+      properties:
+        token:
+          type: string
+      required: [token]
+
+    EmailChangeRevertRequest:
+      type: object
+      properties:
+        token:
+          type: string
+      required: [token]
+
+    EmailChangeStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: changed
+      required: [status]
 
     UserInfo:
       type: object

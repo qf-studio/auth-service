@@ -115,6 +115,14 @@ type EmailConfig struct {
 	Enabled              bool   // EMAIL_ENABLED: false → skip delivery (useful in dev/test)
 	PasswordResetURLBase string // PASSWORD_RESET_URL_BASE: base URL the reset token is appended to (?token=<token>); required when Enabled
 	EmailVerifyURLBase   string // EMAIL_VERIFY_URL_BASE: base URL the verify token is appended to (?token=<token>); required when Enabled
+
+	// EmailChangeConfirmURLBase and EmailChangeRevertURLBase back the
+	// email-change confirm/revert links (GH-518). Unlike the fields above,
+	// these are optional even when Enabled: leaving them unset lets existing
+	// deployments keep booting, but POST /auth/me/email answers 503 until
+	// both are configured. A startup warning is logged in that case.
+	EmailChangeConfirmURLBase string // EMAIL_CHANGE_CONFIRM_URL_BASE
+	EmailChangeRevertURLBase  string // EMAIL_CHANGE_REVERT_URL_BASE
 }
 
 // AppConfig holds server-level settings.
@@ -627,13 +635,20 @@ func loadEmail(l *loader) (EmailConfig, error) {
 		verifyURLBase = l.optStr("EMAIL_VERIFY_URL_BASE", "")
 	}
 
+	// EmailChangeConfirmURLBase/EmailChangeRevertURLBase are optional even
+	// when Enabled, unlike the fields above — see EmailConfig's doc comment.
+	changeConfirmURLBase := l.optStr("EMAIL_CHANGE_CONFIRM_URL_BASE", "")
+	changeRevertURLBase := l.optStr("EMAIL_CHANGE_REVERT_URL_BASE", "")
+
 	return EmailConfig{
-		ServiceURL:           serviceURL,
-		APIKey:               apiKey,
-		SenderAddress:        senderAddress,
-		Enabled:              enabled,
-		PasswordResetURLBase: resetURLBase,
-		EmailVerifyURLBase:   verifyURLBase,
+		ServiceURL:                serviceURL,
+		APIKey:                    apiKey,
+		SenderAddress:             senderAddress,
+		Enabled:                   enabled,
+		PasswordResetURLBase:      resetURLBase,
+		EmailVerifyURLBase:        verifyURLBase,
+		EmailChangeConfirmURLBase: changeConfirmURLBase,
+		EmailChangeRevertURLBase:  changeRevertURLBase,
 	}, nil
 }
 

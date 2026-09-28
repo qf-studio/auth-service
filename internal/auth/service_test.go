@@ -33,6 +33,9 @@ type mockUserRepository struct {
 	addPasswordHistoryFn      func(ctx context.Context, userID, hash string) error
 	setEmailVerifyTokenFn     func(ctx context.Context, userID, token string, expiresAt time.Time) error
 	consumeEmailVerifyTokenFn func(ctx context.Context, token string) (*domain.User, error)
+	setPendingEmailChangeFn   func(ctx context.Context, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error
+	consumeEmailChangeTokenFn func(ctx context.Context, token string) (*domain.User, error)
+	consumeEmailRevertTokenFn func(ctx context.Context, token string) (*domain.User, error)
 }
 
 func (m *mockUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
@@ -107,6 +110,27 @@ func (m *mockUserRepository) AddPasswordHistory(ctx context.Context, _ uuid.UUID
 		return m.addPasswordHistoryFn(ctx, userID, hash)
 	}
 	return nil
+}
+
+func (m *mockUserRepository) SetPendingEmailChange(ctx context.Context, _ uuid.UUID, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error {
+	if m.setPendingEmailChangeFn != nil {
+		return m.setPendingEmailChangeFn(ctx, userID, pendingEmail, changeToken, changeExpiresAt, revertToken, revertExpiresAt)
+	}
+	return nil
+}
+
+func (m *mockUserRepository) ConsumeEmailChangeToken(ctx context.Context, _ uuid.UUID, token string) (*domain.User, error) {
+	if m.consumeEmailChangeTokenFn != nil {
+		return m.consumeEmailChangeTokenFn(ctx, token)
+	}
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockUserRepository) ConsumeEmailRevertToken(ctx context.Context, _ uuid.UUID, token string) (*domain.User, error) {
+	if m.consumeEmailRevertTokenFn != nil {
+		return m.consumeEmailRevertTokenFn(ctx, token)
+	}
+	return nil, fmt.Errorf("not implemented")
 }
 
 type mockRefreshTokenRepository struct {
@@ -311,6 +335,30 @@ func newIntegrationServiceWithDeps(t *testing.T, users *mockUserRepository, send
 		Breaches:     &mockBreachChecker{},
 		Email:        sender,
 		ResetURLBase: resetURLBase,
+	})
+}
+
+// newEmailChangeService creates a Service with a real Redis client (needed by
+// RequestEmailChange's rate limiter) and caller-supplied user repository,
+// email sender, and auditor. Email delivery is enabled with configured
+// confirm/revert URL bases, matching a fully-configured production deployment.
+func newEmailChangeService(t *testing.T, users *mockUserRepository, sender email.EmailSender, auditor audit.EventLogger) *Service {
+	t.Helper()
+	client := newRedisClient(t)
+	logger, _ := zap.NewDevelopment()
+	return NewService(ServiceDeps{
+		Redis:                     client,
+		Logger:                    logger,
+		Auditor:                   auditor,
+		Users:                     users,
+		Tokens:                    &mockRefreshTokenRepository{},
+		Issuer:                    &mockTokenIssuer{},
+		Hasher:                    &mockHasher{},
+		Breaches:                  &mockBreachChecker{},
+		Email:                     sender,
+		EmailEnabled:              true,
+		EmailChangeConfirmURLBase: "https://app.example.com/email-change/confirm",
+		EmailChangeRevertURLBase:  "https://app.example.com/email-change/revert",
 	})
 }
 
@@ -1578,4 +1626,467 @@ func TestLogin_PasswordExpired(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.True(t, result.ForcePasswordChange)
+}
+
+// ── RequestEmailChange Tests (integration, require Redis) ───────────────────
+
+func emailChangeTestUser() *domain.User {
+	return &domain.User{
+		ID:           "user-1",
+		Email:        "alice@example.com",
+		PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHQ$dGVzdGhhc2g",
+	}
+}
+
+func TestRequestEmailChange_Success(t *testing.T) {
+	var (
+		gotUserID, gotPendingEmail, gotChangeToken, gotRevertToken string
+		gotChangeExpiresAt, gotRevertExpiresAt                    time.Time
+	)
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+		setPendingEmailChangeFn: func(_ context.Context, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error {
+			gotUserID = userID
+			gotPendingEmail = pendingEmail
+			gotChangeToken = changeToken
+			gotChangeExpiresAt = changeExpiresAt
+			gotRevertToken = revertToken
+			gotRevertExpiresAt = revertExpiresAt
+			return nil
+		},
+	}
+	sender := &mockEmailSender{}
+	auditor := &spyAuditor{}
+	svc := newEmailChangeService(t, users, sender, auditor)
+
+	before := time.Now().UTC()
+	result, err := svc.RequestEmailChange(context.Background(), "user-1", "new@example.com", "correct-password")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "pending", result.Status)
+	assert.Equal(t, "new@example.com", result.PendingEmail)
+
+	assert.Equal(t, "user-1", gotUserID)
+	assert.Equal(t, "new@example.com", gotPendingEmail)
+	assert.Len(t, gotChangeToken, resetTokenBytes*2, "hex-encoded 32-byte token")
+	assert.Len(t, gotRevertToken, resetTokenBytes*2, "hex-encoded 32-byte token")
+	assert.NotEqual(t, gotChangeToken, gotRevertToken)
+	assert.WithinDuration(t, before.Add(emailChangeTokenTTL), gotChangeExpiresAt, 2*time.Second)
+	assert.WithinDuration(t, before.Add(emailRevertTokenTTL), gotRevertExpiresAt, 2*time.Second)
+
+	require.Len(t, sender.sent, 2, "expected a confirmation email to the new address and a notice to the old one")
+	confirmMsg := sender.sent[0]
+	assert.Equal(t, "new@example.com", confirmMsg.To)
+	assert.Equal(t, "Confirm your new email", confirmMsg.Subject)
+	assert.Contains(t, confirmMsg.Body, "https://app.example.com/email-change/confirm?token="+gotChangeToken)
+
+	noticeMsg := sender.sent[1]
+	assert.Equal(t, "alice@example.com", noticeMsg.To)
+	assert.Equal(t, "Your email is being changed", noticeMsg.Subject)
+	assert.Contains(t, noticeMsg.Body, "https://app.example.com/email-change/revert?token="+gotRevertToken)
+	assert.Contains(t, noticeMsg.Body, "example.com", "should name the new address's domain")
+	assert.NotContains(t, noticeMsg.Body, "new@example.com", "must not leak the full new address to the old inbox")
+
+	var reqEvents []audit.Event
+	for _, e := range auditor.events {
+		if e.Type == audit.EventEmailChangeRequested {
+			reqEvents = append(reqEvents, e)
+		}
+	}
+	require.Len(t, reqEvents, 1)
+	assert.Equal(t, "user-1", reqEvents[0].ActorID)
+	assert.Equal(t, "user-1", reqEvents[0].TargetID)
+	assert.Equal(t, "new@example.com", reqEvents[0].Metadata["new_email"])
+}
+
+func TestRequestEmailChange_WrongPassword(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+	}
+	hasher := &mockHasher{
+		verifyFn: func(pwd, _ string) (bool, error) { return pwd == "correct-password", nil },
+	}
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:                     newRedisClient(t),
+		Logger:                    logger,
+		Auditor:                   &spyAuditor{},
+		Users:                     users,
+		Tokens:                    &mockRefreshTokenRepository{},
+		Issuer:                    &mockTokenIssuer{},
+		Hasher:                    hasher,
+		Breaches:                  &mockBreachChecker{},
+		Email:                     &mockEmailSender{},
+		EmailEnabled:              true,
+		EmailChangeConfirmURLBase: "https://app.example.com/email-change/confirm",
+		EmailChangeRevertURLBase:  "https://app.example.com/email-change/revert",
+	})
+
+	result, err := svc.RequestEmailChange(context.Background(), "user-1", "new@example.com", "wrong-password")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInvalidPassword)
+	assert.Nil(t, result)
+}
+
+func TestRequestEmailChange_SameEmail(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+	}
+	svc := newEmailChangeService(t, users, &mockEmailSender{}, &spyAuditor{})
+
+	result, err := svc.RequestEmailChange(context.Background(), "user-1", "ALICE@example.com", "correct-password")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrConflict)
+	assert.Nil(t, result)
+}
+
+func TestRequestEmailChange_EmailTaken(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return &domain.User{ID: "someone-else"}, nil
+		},
+	}
+	svc := newEmailChangeService(t, users, &mockEmailSender{}, &spyAuditor{})
+
+	result, err := svc.RequestEmailChange(context.Background(), "user-1", "taken@example.com", "correct-password")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrConflict)
+	assert.Nil(t, result)
+}
+
+func TestRequestEmailChange_RateLimited(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	svc := newEmailChangeService(t, users, &mockEmailSender{}, &spyAuditor{})
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
+		require.NoError(t, err, "request %d should be within the rate limit", i+1)
+	}
+
+	_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrRateLimited)
+}
+
+func TestRequestEmailChange_Unconfigured(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:        nil,
+		Logger:       logger,
+		Auditor:      audit.NopLogger{},
+		Users:        &mockUserRepository{},
+		Tokens:       &mockRefreshTokenRepository{},
+		Issuer:       &mockTokenIssuer{},
+		Hasher:       &mockHasher{},
+		Breaches:     &mockBreachChecker{},
+		Email:        &mockEmailSender{},
+		EmailEnabled: true,
+		// EmailChangeConfirmURLBase / EmailChangeRevertURLBase left unset.
+	})
+
+	result, err := svc.RequestEmailChange(context.Background(), "user-1", "new@example.com", "correct-password")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrEmailChangeUnconfigured)
+	assert.Nil(t, result)
+}
+
+func TestRequestEmailChange_EmailSendFailure_StillSucceeds(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	sender := &mockEmailSender{
+		sendFn: func(_ context.Context, _ email.Message) error {
+			return fmt.Errorf("email service unreachable")
+		},
+	}
+	auditor := &spyAuditor{}
+	svc := newEmailChangeService(t, users, sender, auditor)
+
+	result, err := svc.RequestEmailChange(context.Background(), "user-1", "new@example.com", "correct-password")
+	require.NoError(t, err, "email delivery failure must not fail the request")
+	require.NotNil(t, result)
+	assert.Equal(t, "pending", result.Status)
+	assert.Len(t, sender.sent, 2, "both sends should still have been attempted")
+
+	var failedEvents []audit.Event
+	for _, e := range auditor.events {
+		if e.Type == audit.EventEmailChangeEmailFailed {
+			failedEvents = append(failedEvents, e)
+		}
+	}
+	require.Len(t, failedEvents, 2, "expected a failure audit event for each of the two emails")
+	stages := map[string]bool{}
+	for _, e := range failedEvents {
+		stages[e.Metadata["stage"]] = true
+	}
+	assert.True(t, stages["confirm"])
+	assert.True(t, stages["revert"])
+}
+
+func TestRequestEmailChange_SecondRequestReplacesTokens(t *testing.T) {
+	var seenChangeTokens, seenRevertTokens []string
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+		setPendingEmailChangeFn: func(_ context.Context, _, _, changeToken string, _ time.Time, revertToken string, _ time.Time) error {
+			seenChangeTokens = append(seenChangeTokens, changeToken)
+			seenRevertTokens = append(seenRevertTokens, revertToken)
+			return nil
+		},
+	}
+	svc := newEmailChangeService(t, users, &mockEmailSender{}, &spyAuditor{})
+	ctx := context.Background()
+
+	_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
+	require.NoError(t, err)
+	_, err = svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
+	require.NoError(t, err)
+
+	require.Len(t, seenChangeTokens, 2)
+	require.Len(t, seenRevertTokens, 2)
+	assert.NotEqual(t, seenChangeTokens[0], seenChangeTokens[1], "second request should mint a new change token")
+	assert.NotEqual(t, seenRevertTokens[0], seenRevertTokens[1], "second request should mint a new revert token")
+}
+
+// ── ConfirmEmailChange Tests ─────────────────────────────────────────────────
+
+func TestConfirmEmailChange_Success(t *testing.T) {
+	var revokedForUser string
+	users := &mockUserRepository{
+		consumeEmailChangeTokenFn: func(_ context.Context, token string) (*domain.User, error) {
+			assert.Equal(t, "valid-change-token", token)
+			return &domain.User{ID: "user-1", Email: "new@example.com"}, nil
+		},
+	}
+	tokens := &mockRefreshTokenRepository{
+		revokeAllForUser: func(_ context.Context, userID string) error {
+			revokedForUser = userID
+			return nil
+		},
+	}
+	auditor := &spyAuditor{}
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:    nil,
+		Logger:   logger,
+		Auditor:  auditor,
+		Users:    users,
+		Tokens:   tokens,
+		Issuer:   &mockTokenIssuer{},
+		Hasher:   &mockHasher{},
+		Breaches: &mockBreachChecker{},
+		Email:    &mockEmailSender{},
+	})
+
+	err := svc.ConfirmEmailChange(context.Background(), "valid-change-token")
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", revokedForUser, "sessions must be revoked after an email change")
+
+	var changedEvents []audit.Event
+	for _, e := range auditor.events {
+		if e.Type == audit.EventEmailChanged {
+			changedEvents = append(changedEvents, e)
+		}
+	}
+	require.Len(t, changedEvents, 1)
+	assert.Equal(t, "user-1", changedEvents[0].ActorID)
+	assert.Equal(t, "user-1", changedEvents[0].TargetID)
+	assert.Equal(t, "new@example.com", changedEvents[0].Metadata["email"])
+}
+
+func TestConfirmEmailChange_UnknownToken(t *testing.T) {
+	users := &mockUserRepository{
+		consumeEmailChangeTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, fmt.Errorf("email change token: %w", storage.ErrNotFound)
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	err := svc.ConfirmEmailChange(context.Background(), "bogus-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrNotFound)
+}
+
+func TestConfirmEmailChange_ExpiredToken(t *testing.T) {
+	users := &mockUserRepository{
+		consumeEmailChangeTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, fmt.Errorf("email change token: %w", storage.ErrTokenExpired)
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	err := svc.ConfirmEmailChange(context.Background(), "expired-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrGone)
+}
+
+func TestConfirmEmailChange_EmailTakenMeanwhile(t *testing.T) {
+	users := &mockUserRepository{
+		consumeEmailChangeTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, fmt.Errorf("email taken: %w", storage.ErrDuplicateEmail)
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	err := svc.ConfirmEmailChange(context.Background(), "some-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrConflict)
+}
+
+// ── RevertEmailChange Tests ──────────────────────────────────────────────────
+
+func TestRevertEmailChange_AfterOnlyRequested(t *testing.T) {
+	var revokedForUser string
+	users := &mockUserRepository{
+		consumeEmailRevertTokenFn: func(_ context.Context, token string) (*domain.User, error) {
+			assert.Equal(t, "valid-revert-token", token)
+			// previous_email was never set, so the current email is the
+			// original address and is left untouched by the repo layer.
+			return &domain.User{ID: "user-1", Email: "alice@example.com"}, nil
+		},
+	}
+	tokens := &mockRefreshTokenRepository{
+		revokeAllForUser: func(_ context.Context, userID string) error {
+			revokedForUser = userID
+			return nil
+		},
+	}
+	auditor := &spyAuditor{}
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:    nil,
+		Logger:   logger,
+		Auditor:  auditor,
+		Users:    users,
+		Tokens:   tokens,
+		Issuer:   &mockTokenIssuer{},
+		Hasher:   &mockHasher{},
+		Breaches: &mockBreachChecker{},
+		Email:    &mockEmailSender{},
+	})
+
+	err := svc.RevertEmailChange(context.Background(), "valid-revert-token")
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", revokedForUser)
+
+	var revertedEvents []audit.Event
+	for _, e := range auditor.events {
+		if e.Type == audit.EventEmailChangeReverted {
+			revertedEvents = append(revertedEvents, e)
+		}
+	}
+	require.Len(t, revertedEvents, 1)
+	assert.Equal(t, "user-1", revertedEvents[0].ActorID)
+	assert.Equal(t, "alice@example.com", revertedEvents[0].Metadata["email"])
+}
+
+func TestRevertEmailChange_AfterConfirmedChange(t *testing.T) {
+	var revokedForUser string
+	users := &mockUserRepository{
+		consumeEmailRevertTokenFn: func(_ context.Context, token string) (*domain.User, error) {
+			assert.Equal(t, "valid-revert-token", token)
+			// previous_email was set by a prior ConsumeEmailChangeToken call;
+			// the repo layer has already restored it onto Email.
+			return &domain.User{ID: "user-1", Email: "alice@example.com"}, nil
+		},
+	}
+	tokens := &mockRefreshTokenRepository{
+		revokeAllForUser: func(_ context.Context, userID string) error {
+			revokedForUser = userID
+			return nil
+		},
+	}
+	auditor := &spyAuditor{}
+	logger, _ := zap.NewDevelopment()
+	svc := NewService(ServiceDeps{
+		Redis:    nil,
+		Logger:   logger,
+		Auditor:  auditor,
+		Users:    users,
+		Tokens:   tokens,
+		Issuer:   &mockTokenIssuer{},
+		Hasher:   &mockHasher{},
+		Breaches: &mockBreachChecker{},
+		Email:    &mockEmailSender{},
+	})
+
+	err := svc.RevertEmailChange(context.Background(), "valid-revert-token")
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", revokedForUser, "sessions must be revoked after a revert too")
+
+	var revertedEvents []audit.Event
+	for _, e := range auditor.events {
+		if e.Type == audit.EventEmailChangeReverted {
+			revertedEvents = append(revertedEvents, e)
+		}
+	}
+	require.Len(t, revertedEvents, 1)
+}
+
+func TestRevertEmailChange_UnknownToken(t *testing.T) {
+	users := &mockUserRepository{
+		consumeEmailRevertTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, fmt.Errorf("email revert token: %w", storage.ErrNotFound)
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	err := svc.RevertEmailChange(context.Background(), "bogus-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrNotFound)
+}
+
+func TestRevertEmailChange_ExpiredToken(t *testing.T) {
+	users := &mockUserRepository{
+		consumeEmailRevertTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, fmt.Errorf("email revert token: %w", storage.ErrTokenExpired)
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	err := svc.RevertEmailChange(context.Background(), "expired-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrGone)
+}
+
+func TestRevertEmailChange_EmailTakenMeanwhile(t *testing.T) {
+	users := &mockUserRepository{
+		consumeEmailRevertTokenFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, fmt.Errorf("previous email taken: %w", storage.ErrDuplicateEmail)
+		},
+	}
+	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
+
+	err := svc.RevertEmailChange(context.Background(), "some-token")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrConflict)
 }

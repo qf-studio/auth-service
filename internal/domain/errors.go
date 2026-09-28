@@ -15,6 +15,17 @@ const (
 	CodeRateLimitExceded = "RATE_LIMIT_EXCEEDED"
 	CodeInternalError    = "INTERNAL_ERROR"
 	CodeBadRequest       = "BAD_REQUEST"
+	CodeGone             = "GONE"
+
+	// CodeInvalidPassword is returned when a password-verification step (e.g.
+	// confirming an email change) fails. Lowercase per the email-change API
+	// contract (GH-518), unlike the other, longer-standing UPPER_SNAKE_CASE codes.
+	CodeInvalidPassword = "invalid_password"
+
+	// CodeEmailChangeUnconfigured is returned by POST /auth/me/email when
+	// EMAIL_ENABLED=true but the confirm/revert URL bases haven't been
+	// configured (GH-518).
+	CodeEmailChangeUnconfigured = "email_change_unconfigured"
 )
 
 // ErrorResponse is the standard JSON error envelope returned by all API endpoints.

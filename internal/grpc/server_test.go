@@ -135,6 +135,15 @@ func (m *mockUserRepo) GetPasswordHistory(_ context.Context, _ uuid.UUID, _ stri
 func (m *mockUserRepo) AddPasswordHistory(_ context.Context, _ uuid.UUID, _, _ string) error {
 	return nil
 }
+func (m *mockUserRepo) SetPendingEmailChange(_ context.Context, _ uuid.UUID, _, _, _ string, _ time.Time, _ string, _ time.Time) error {
+	return nil
+}
+func (m *mockUserRepo) ConsumeEmailChangeToken(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockUserRepo) ConsumeEmailRevertToken(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
 
 // mockMetricsRecorder implements grpc.MetricsRecorder for testing.
 type mockMetricsRecorder struct {

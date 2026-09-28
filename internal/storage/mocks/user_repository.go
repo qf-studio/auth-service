@@ -22,6 +22,9 @@ type MockUserRepository struct {
 	SetForcePasswordChangeFn  func(ctx context.Context, tenantID uuid.UUID, userID string, force bool) error
 	GetPasswordHistoryFn      func(ctx context.Context, tenantID uuid.UUID, userID string, limit int) ([]domain.PasswordHistoryEntry, error)
 	AddPasswordHistoryFn      func(ctx context.Context, tenantID uuid.UUID, userID, passwordHash string) error
+	SetPendingEmailChangeFn   func(ctx context.Context, tenantID uuid.UUID, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error
+	ConsumeEmailChangeTokenFn func(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error)
+	ConsumeEmailRevertTokenFn func(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error)
 }
 
 // Create delegates to CreateFn.
@@ -92,4 +95,22 @@ func (m *MockUserRepository) AddPasswordHistory(ctx context.Context, tenantID uu
 		return m.AddPasswordHistoryFn(ctx, tenantID, userID, passwordHash)
 	}
 	return nil
+}
+
+// SetPendingEmailChange delegates to SetPendingEmailChangeFn.
+func (m *MockUserRepository) SetPendingEmailChange(ctx context.Context, tenantID uuid.UUID, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error {
+	if m.SetPendingEmailChangeFn != nil {
+		return m.SetPendingEmailChangeFn(ctx, tenantID, userID, pendingEmail, changeToken, changeExpiresAt, revertToken, revertExpiresAt)
+	}
+	return nil
+}
+
+// ConsumeEmailChangeToken delegates to ConsumeEmailChangeTokenFn.
+func (m *MockUserRepository) ConsumeEmailChangeToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error) {
+	return m.ConsumeEmailChangeTokenFn(ctx, tenantID, token)
+}
+
+// ConsumeEmailRevertToken delegates to ConsumeEmailRevertTokenFn.
+func (m *MockUserRepository) ConsumeEmailRevertToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error) {
+	return m.ConsumeEmailRevertTokenFn(ctx, tenantID, token)
 }

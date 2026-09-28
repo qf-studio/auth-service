@@ -23,6 +23,12 @@ type User struct {
 	LastLoginAt               *time.Time
 	ForcePasswordChange       bool
 	PasswordChangedAt         *time.Time
+	PendingEmail              *string
+	EmailChangeToken          *string
+	EmailChangeTokenExpiresAt *time.Time
+	EmailRevertToken          *string
+	EmailRevertTokenExpiresAt *time.Time
+	PreviousEmail             *string
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
 	DeletedAt                 *time.Time

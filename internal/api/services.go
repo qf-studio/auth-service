@@ -36,6 +36,13 @@ type JWKSResponse struct {
 	Keys []interface{} `json:"keys"`
 }
 
+// EmailChangeResult is returned when an email change is requested, reporting
+// the pending state while the new address awaits confirmation.
+type EmailChangeResult struct {
+	Status       string `json:"status"`
+	PendingEmail string `json:"pending_email"`
+}
+
 // AuthService defines the operations for authentication and user management.
 type AuthService interface {
 	Register(ctx context.Context, email, password, name string) (*UserInfo, error)
@@ -48,6 +55,9 @@ type AuthService interface {
 	ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error
 	Logout(ctx context.Context, userID, token, refreshToken string) error
 	LogoutAll(ctx context.Context, userID string) error
+	RequestEmailChange(ctx context.Context, userID, newEmail, password string) (*EmailChangeResult, error)
+	ConfirmEmailChange(ctx context.Context, token string) error
+	RevertEmailChange(ctx context.Context, token string) error
 }
 
 // TokenService defines the operations for token management.

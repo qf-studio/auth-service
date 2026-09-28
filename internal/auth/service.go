@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,27 @@ const (
 
 	// verifyTokenTTL is how long an email verification token remains valid.
 	verifyTokenTTL = 24 * time.Hour
+
+	// emailChangeTokenTTL is how long an email-change confirmation token
+	// (mailed to the new address) remains valid.
+	emailChangeTokenTTL = 24 * time.Hour
+
+	// emailRevertTokenTTL is how long an email-change revert token (mailed to
+	// the original address) remains valid. Longer than the change token so a
+	// user who doesn't check their old inbox promptly still has a window to
+	// undo an unauthorized change after it's been confirmed.
+	emailRevertTokenTTL = 7 * 24 * time.Hour
+
+	// emailChangeRatePrefix is the Redis key prefix for the email-change
+	// request rate limiter.
+	emailChangeRatePrefix = "email_change_rl:"
+
+	// emailChangeRateLimit is the maximum number of email-change requests
+	// allowed per user per emailChangeRateWindow.
+	emailChangeRateLimit = 3
+
+	// emailChangeRateWindow is the window emailChangeRateLimit applies over.
+	emailChangeRateWindow = time.Hour
 )
 
 // TokenIssuer abstracts token pair creation for the auth service.
@@ -68,6 +90,14 @@ type Service struct {
 	resetURLBase  string
 	verifyURLBase string
 
+	// emailEnabled mirrors cfg.Email.Enabled: gates the startup warning and
+	// the POST /auth/me/email 503 check below, since s.email is always
+	// non-nil (a ConsoleSender is wired up in dev even when email delivery
+	// is disabled — see cmd/server/main.go).
+	emailEnabled              bool
+	emailChangeConfirmURLBase string
+	emailChangeRevertURLBase  string
+
 	// refreshTokenTTL is the configured lifetime for newly stored refresh
 	// token DB rows. Falls back to defaultRefreshTokenTTL when unset (e.g.
 	// tests that don't configure it), matching the previous hardcoded value.
@@ -93,6 +123,22 @@ type ServiceDeps struct {
 	ResetURLBase  string // base URL password-reset links are built from: "<ResetURLBase>?token=<token>"
 	VerifyURLBase string // base URL email-verification links are built from: "<VerifyURLBase>?token=<token>"
 
+	// EmailEnabled mirrors cfg.Email.Enabled. Needed because Email itself is
+	// always non-nil (main.go wires a ConsoleSender when delivery is
+	// disabled), so it can't be used to detect whether delivery is "really"
+	// enabled for the EmailChangeConfirmURLBase/EmailChangeRevertURLBase
+	// startup-warning and 503 checks below.
+	EmailEnabled bool
+
+	// EmailChangeConfirmURLBase and EmailChangeRevertURLBase back the
+	// email-change confirm/revert links. Optional even when EmailEnabled is
+	// true: if either is empty, NewService logs a startup warning and
+	// RequestEmailChange returns ErrEmailChangeUnconfigured (503) until both
+	// are set, but nothing else about startup or the rest of the API is
+	// affected.
+	EmailChangeConfirmURLBase string
+	EmailChangeRevertURLBase  string
+
 	// RefreshTokenTTL is the lifetime used for refresh token DB rows stored
 	// at login. Should match the token service's configured refresh TTL
 	// (cfg.JWT.RefreshTokenTTL) so the DB row doesn't outlive or expire
@@ -102,20 +148,27 @@ type ServiceDeps struct {
 
 // NewService creates a new auth Service.
 func NewService(deps ServiceDeps) *Service {
+	if deps.EmailEnabled && (deps.EmailChangeConfirmURLBase == "" || deps.EmailChangeRevertURLBase == "") && deps.Logger != nil {
+		deps.Logger.Warn("email change confirm/revert URL bases are not configured; POST /auth/me/email will respond 503 until EMAIL_CHANGE_CONFIRM_URL_BASE and EMAIL_CHANGE_REVERT_URL_BASE are set")
+	}
+
 	return &Service{
-		redis:           deps.Redis,
-		logger:          deps.Logger,
-		audit:           deps.Auditor,
-		users:           deps.Users,
-		tokens:          deps.Tokens,
-		issuer:          deps.Issuer,
-		hasher:          deps.Hasher,
-		breaches:        deps.Breaches,
-		email:           deps.Email,
-		resetURLBase:    deps.ResetURLBase,
-		verifyURLBase:   deps.VerifyURLBase,
-		refreshTokenTTL: deps.RefreshTokenTTL,
-		policy:          password.NewPolicyValidator(password.DefaultPolicy(), deps.Hasher),
+		redis:                     deps.Redis,
+		logger:                    deps.Logger,
+		audit:                     deps.Auditor,
+		users:                     deps.Users,
+		tokens:                    deps.Tokens,
+		issuer:                    deps.Issuer,
+		hasher:                    deps.Hasher,
+		breaches:                  deps.Breaches,
+		email:                     deps.Email,
+		resetURLBase:              deps.ResetURLBase,
+		verifyURLBase:             deps.VerifyURLBase,
+		emailEnabled:              deps.EmailEnabled,
+		emailChangeConfirmURLBase: deps.EmailChangeConfirmURLBase,
+		emailChangeRevertURLBase:  deps.EmailChangeRevertURLBase,
+		refreshTokenTTL:           deps.RefreshTokenTTL,
+		policy:                    password.NewPolicyValidator(password.DefaultPolicy(), deps.Hasher),
 	}
 }
 
@@ -733,6 +786,221 @@ func (s *Service) LogoutAll(ctx context.Context, userID string) error {
 	})
 
 	s.logger.Info("all sessions terminated", zap.String("user_id", userID))
+	return nil
+}
+
+// RequestEmailChange initiates a change of the authenticated user's account
+// email. The new address must be confirmed via a link mailed to it before
+// the change takes effect (see ConfirmEmailChange); a link mailed to the
+// current address allows reverting the change (see RevertEmailChange), since
+// an email change is an account-takeover lever. Rate limited to
+// emailChangeRateLimit requests per emailChangeRateWindow per user. A second
+// request while one is already pending replaces both pending tokens.
+func (s *Service) RequestEmailChange(ctx context.Context, userID, newEmail, pwd string) (*api.EmailChangeResult, error) {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	if s.emailEnabled && (s.emailChangeConfirmURLBase == "" || s.emailChangeRevertURLBase == "") {
+		return nil, fmt.Errorf("email change confirm/revert URL bases not configured: %w", api.ErrEmailChangeUnconfigured)
+	}
+
+	user, err := s.users.FindByID(ctx, tenantID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("find user: %w", err)
+	}
+
+	match, err := s.hasher.Verify(pwd, user.PasswordHash)
+	if err != nil {
+		return nil, fmt.Errorf("verify password: %w", err)
+	}
+	if !match {
+		return nil, fmt.Errorf("password incorrect: %w", api.ErrInvalidPassword)
+	}
+
+	if strings.EqualFold(newEmail, user.Email) {
+		return nil, fmt.Errorf("new email matches current email: %w", api.ErrConflict)
+	}
+
+	if existing, findErr := s.users.FindByEmail(ctx, tenantID, newEmail); findErr == nil {
+		if existing.ID != userID {
+			return nil, fmt.Errorf("email already in use: %w", api.ErrConflict)
+		}
+	} else if !errors.Is(findErr, storage.ErrNotFound) {
+		return nil, fmt.Errorf("find user by email: %w", findErr)
+	}
+
+	allowed, err := s.checkEmailChangeRateLimit(ctx, tenantID, userID)
+	if err != nil {
+		s.logger.Error("failed to check email change rate limit", zap.String("user_id", userID), zap.Error(err))
+		return nil, fmt.Errorf("check rate limit: %w", err)
+	}
+	if !allowed {
+		return nil, fmt.Errorf("too many email change requests: %w", api.ErrRateLimited)
+	}
+
+	changeToken, err := generateResetToken()
+	if err != nil {
+		return nil, fmt.Errorf("generate change token: %w", err)
+	}
+	revertToken, err := generateResetToken()
+	if err != nil {
+		return nil, fmt.Errorf("generate revert token: %w", err)
+	}
+
+	now := time.Now().UTC()
+	if err := s.users.SetPendingEmailChange(ctx, tenantID, userID, newEmail, changeToken, now.Add(emailChangeTokenTTL), revertToken, now.Add(emailRevertTokenTTL)); err != nil {
+		return nil, fmt.Errorf("set pending email change: %w", err)
+	}
+
+	s.sendEmailChangeEmails(ctx, user, newEmail, changeToken, revertToken)
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventEmailChangeRequested,
+		ActorID:  userID,
+		TargetID: userID,
+		Metadata: map[string]string{"new_email": newEmail},
+	})
+
+	return &api.EmailChangeResult{Status: "pending", PendingEmail: newEmail}, nil
+}
+
+// checkEmailChangeRateLimit increments a per-tenant-per-user Redis counter
+// keyed with a 1-hour expiry set on the first increment, and reports whether
+// the caller is still under emailChangeRateLimit.
+func (s *Service) checkEmailChangeRateLimit(ctx context.Context, tenantID uuid.UUID, userID string) (bool, error) {
+	key := fmt.Sprintf("%s%s:%s", emailChangeRatePrefix, tenantID, userID)
+
+	count, err := s.redis.Incr(ctx, key).Result()
+	if err != nil {
+		return false, fmt.Errorf("incr rate limit counter: %w", err)
+	}
+	if count == 1 {
+		if err := s.redis.Expire(ctx, key, emailChangeRateWindow).Err(); err != nil {
+			return false, fmt.Errorf("set rate limit counter expiry: %w", err)
+		}
+	}
+
+	return count <= emailChangeRateLimit, nil
+}
+
+// sendEmailChangeEmails sends the two notification emails for a requested
+// email change: a confirmation link to the new address, and a revert link
+// (naming only the new address's domain, not the full address) to the
+// current one. Send failures are logged and audited but otherwise swallowed
+// — the request has already succeeded and been persisted.
+func (s *Service) sendEmailChangeEmails(ctx context.Context, user *domain.User, newEmail, changeToken, revertToken string) {
+	if s.email == nil {
+		return
+	}
+
+	changeLink := s.emailChangeConfirmURLBase + "?token=" + changeToken
+	newMsg := email.Message{
+		To:      newEmail,
+		Subject: "Confirm your new email",
+		Body:    fmt.Sprintf("Use the link below to confirm this is your new email address:\n\n%s\n\nThis link expires in %s.", changeLink, emailChangeTokenTTL),
+	}
+	if sendErr := s.email.Send(ctx, newMsg); sendErr != nil {
+		s.logger.Error("failed to send email change confirmation email", zap.String("user_id", user.ID), zap.Error(sendErr))
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventEmailChangeEmailFailed,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"email": newEmail, "stage": "confirm"},
+		})
+	}
+
+	revertLink := s.emailChangeRevertURLBase + "?token=" + revertToken
+	oldMsg := email.Message{
+		To:      user.Email,
+		Subject: "Your email is being changed",
+		Body: fmt.Sprintf(
+			"Your account email is being changed to a new address at %s.\n\nIf you did not request this, use the link below to revert it:\n\n%s\n\nThis link expires in %s.",
+			emailDomain(newEmail), revertLink, emailRevertTokenTTL,
+		),
+	}
+	if sendErr := s.email.Send(ctx, oldMsg); sendErr != nil {
+		s.logger.Error("failed to send email change notice email", zap.String("user_id", user.ID), zap.Error(sendErr))
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventEmailChangeEmailFailed,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"email": user.Email, "stage": "revert"},
+		})
+	}
+}
+
+// emailDomain returns the domain portion of an email address, or the whole
+// string unchanged if it doesn't contain "@".
+func emailDomain(addr string) string {
+	if i := strings.LastIndex(addr, "@"); i >= 0 && i+1 < len(addr) {
+		return addr[i+1:]
+	}
+	return addr
+}
+
+// ConfirmEmailChange completes a pending email change using the token mailed
+// to the new address by RequestEmailChange. Revokes all sessions since the
+// account's email — a primary recovery/identity credential — has changed.
+func (s *Service) ConfirmEmailChange(ctx context.Context, token string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	user, err := s.users.ConsumeEmailChangeToken(ctx, tenantID, token)
+	if err != nil {
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			return fmt.Errorf("email change token: %w", api.ErrNotFound)
+		case errors.Is(err, storage.ErrTokenExpired):
+			return fmt.Errorf("email change token expired: %w", api.ErrGone)
+		case errors.Is(err, storage.ErrDuplicateEmail):
+			return fmt.Errorf("email already in use: %w", api.ErrConflict)
+		default:
+			return fmt.Errorf("confirm email change: %w", err)
+		}
+	}
+
+	if err := s.tokens.RevokeAllForUser(ctx, tenantID, user.ID); err != nil {
+		s.logger.Error("failed to revoke sessions after email change", zap.String("user_id", user.ID), zap.Error(err))
+	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventEmailChanged,
+		ActorID:  user.ID,
+		TargetID: user.ID,
+		Metadata: map[string]string{"email": user.Email},
+	})
+
+	return nil
+}
+
+// RevertEmailChange reverts a pending or already-confirmed email change
+// using the token mailed to the original address by RequestEmailChange.
+func (s *Service) RevertEmailChange(ctx context.Context, token string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	user, err := s.users.ConsumeEmailRevertToken(ctx, tenantID, token)
+	if err != nil {
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			return fmt.Errorf("email revert token: %w", api.ErrNotFound)
+		case errors.Is(err, storage.ErrTokenExpired):
+			return fmt.Errorf("email revert token expired: %w", api.ErrGone)
+		case errors.Is(err, storage.ErrDuplicateEmail):
+			return fmt.Errorf("previous email already in use: %w", api.ErrConflict)
+		default:
+			return fmt.Errorf("revert email change: %w", err)
+		}
+	}
+
+	if err := s.tokens.RevokeAllForUser(ctx, tenantID, user.ID); err != nil {
+		s.logger.Error("failed to revoke sessions after email revert", zap.String("user_id", user.ID), zap.Error(err))
+	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventEmailChangeReverted,
+		ActorID:  user.ID,
+		TargetID: user.ID,
+		Metadata: map[string]string{"email": user.Email},
+	})
+
 	return nil
 }
 

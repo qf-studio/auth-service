@@ -93,6 +93,8 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		auth.POST("/token", ValidateReq(v, &domain.TokenRequest{}), tokenH.Token)
 		auth.POST("/revoke", ValidateReq(v, &domain.RevokeRequest{}), tokenH.Revoke)
 		auth.POST("/verify-email", ValidateReq(v, &domain.VerifyEmailRequest{}), authH.VerifyEmail)
+		auth.POST("/email-change/confirm", ValidateReq(v, &domain.EmailChangeConfirmRequest{}), authH.ConfirmEmailChange)
+		auth.POST("/email-change/revert", ValidateReq(v, &domain.EmailChangeRevertRequest{}), authH.RevertEmailChange)
 
 		pw := auth.Group("/password")
 		pw.POST("/reset", ValidateReq(v, &domain.PasswordResetRequest{}), authH.ResetPassword)
@@ -138,6 +140,7 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 	protected.GET("/me", authH.Me)
 	protected.PUT("/me", ValidateReq(v, &domain.ProfileUpdateRequest{}), authH.UpdateProfile)
 	protected.PUT("/me/password", ValidateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)
+	protected.POST("/me/email", ValidateReq(v, &domain.EmailChangeRequest{}), authH.RequestEmailChange)
 	protected.POST("/logout", authH.Logout)
 	protected.POST("/logout/all", authH.LogoutAll)
 
@@ -197,6 +200,12 @@ func ValidateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
 		return domain.ValidateRequest(v, func() interface{} { return &domain.ProfileUpdateRequest{} })
 	case *domain.VerifyEmailRequest:
 		return domain.ValidateRequest(v, func() interface{} { return &domain.VerifyEmailRequest{} })
+	case *domain.EmailChangeRequest:
+		return domain.ValidateRequest(v, func() interface{} { return &domain.EmailChangeRequest{} })
+	case *domain.EmailChangeConfirmRequest:
+		return domain.ValidateRequest(v, func() interface{} { return &domain.EmailChangeConfirmRequest{} })
+	case *domain.EmailChangeRevertRequest:
+		return domain.ValidateRequest(v, func() interface{} { return &domain.EmailChangeRevertRequest{} })
 	default:
 		log.Printf("ERROR: unsupported request type for validation middleware: %T", zero)
 		return func(c *gin.Context) {

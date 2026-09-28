@@ -69,6 +69,10 @@ func TestProtectedRoutes_RequireAuth(t *testing.T) {
 			"old_password": "old-password-here!!",
 			"new_password": "brand-new-secure-password",
 		}},
+		{http.MethodPost, "/auth/me/email", map[string]string{
+			"new_email": "new@example.com",
+			"password":  "old-password-here!!",
+		}},
 		{http.MethodPost, "/auth/logout", nil},
 		{http.MethodPost, "/auth/logout/all", nil},
 	}
@@ -216,6 +220,12 @@ func TestPublicRoutes_NoAuthRequired(t *testing.T) {
 		}},
 		{http.MethodPost, "/auth/password/reset", map[string]string{
 			"email": "alice@example.com",
+		}},
+		{http.MethodPost, "/auth/email-change/confirm", map[string]string{
+			"token": "some-token",
+		}},
+		{http.MethodPost, "/auth/email-change/revert", map[string]string{
+			"token": "some-token",
 		}},
 	}
 

@@ -80,10 +80,12 @@ func columnExists(t *testing.T, dsn, table, column string) bool {
 }
 
 // TestMigration_ConsentGrantsUpDown proves 000018_consent_grants,
-// 000019_create_api_keys_table, and 000020_add_client_audience apply and
-// revert cleanly: after `up` both tables exist and clients has an audience
-// column; reverting the newest migration (000020) drops that column, and
-// reverting the next one (`steps -1` again, undoing 000019) drops api_keys
+// 000019_create_api_keys_table, 000020_add_client_audience, and
+// 000021_add_email_change apply and revert cleanly: after `up` both tables
+// exist, clients has an audience column, and users has a pending_email
+// column; reverting the newest migration (000021) drops that column,
+// reverting the next one (000020) drops the audience column, and reverting
+// the one after that (`steps -1` again, undoing 000019) drops api_keys
 // while consent_grants — applied by the earlier, non-reverted 000018 — is
 // untouched. Restores the schema to head afterward so other integration
 // tests sharing TEST_DATABASE_URL see a fully-migrated database.
@@ -103,11 +105,20 @@ func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	version, dirty, err := m.Version()
 	require.NoError(t, err)
 	require.False(t, dirty, "schema should not be dirty after a clean up")
-	require.Equal(t, uint(20), version, "expected embedded migrations to be at head version 20")
+	require.Equal(t, uint(21), version, "expected embedded migrations to be at head version 21")
 
 	require.True(t, tableExists(t, dsn, "consent_grants"), "consent_grants table should exist after migrate up")
 	require.True(t, tableExists(t, dsn, "api_keys"), "api_keys table should exist after migrate up")
 	require.True(t, columnExists(t, dsn, "clients", "audience"), "clients.audience column should exist after migrate up")
+	require.True(t, columnExists(t, dsn, "users", "pending_email"), "users.pending_email column should exist after migrate up")
+
+	require.NoError(t, m.Steps(-1), "migrate down one step (000021 down)")
+	require.False(t, columnExists(t, dsn, "users", "pending_email"), "users.pending_email column should be dropped after reverting 000021")
+
+	version, dirty, err = m.Version()
+	require.NoError(t, err)
+	require.False(t, dirty)
+	require.Equal(t, uint(20), version, "expected version 20 after reverting 000021")
 
 	require.NoError(t, m.Steps(-1), "migrate down one step (000020 down)")
 	require.False(t, columnExists(t, dsn, "clients", "audience"), "clients.audience column should be dropped after reverting 000020")

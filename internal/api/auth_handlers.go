@@ -155,6 +155,54 @@ func (h *AuthHandlers) ChangePassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Password changed"})
 }
 
+// RequestEmailChange handles POST /auth/me/email. It initiates a change of
+// the authenticated user's account email, pending confirmation from the new
+// address (see AuthHandlers.ConfirmEmailChange).
+func (h *AuthHandlers) RequestEmailChange(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized, "missing user identity")
+		return
+	}
+
+	req := c.MustGet("validated_request").(*domain.EmailChangeRequest)
+
+	result, err := h.auth.RequestEmailChange(c.Request.Context(), userID, req.NewEmail, req.Password)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusAccepted, result)
+}
+
+// ConfirmEmailChange handles POST /auth/email-change/confirm. The token is
+// the one sent to the new address by RequestEmailChange.
+func (h *AuthHandlers) ConfirmEmailChange(c *gin.Context) {
+	req := c.MustGet("validated_request").(*domain.EmailChangeConfirmRequest)
+
+	if err := h.auth.ConfirmEmailChange(c.Request.Context(), req.Token); err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "changed"})
+}
+
+// RevertEmailChange handles POST /auth/email-change/revert. The token is the
+// one sent to the original address by RequestEmailChange; it reverts a
+// pending or already-confirmed email change.
+func (h *AuthHandlers) RevertEmailChange(c *gin.Context) {
+	req := c.MustGet("validated_request").(*domain.EmailChangeRevertRequest)
+
+	if err := h.auth.RevertEmailChange(c.Request.Context(), req.Token); err != nil {
+		handleServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "reverted"})
+}
+
 // Logout handles POST /auth/logout.
 func (h *AuthHandlers) Logout(c *gin.Context) {
 	userID := c.GetString("user_id")
@@ -211,6 +259,25 @@ var (
 	ErrConflict      = errors.New("conflict")
 	ErrForbidden     = errors.New("forbidden")
 	ErrInternalError = errors.New("internal error")
+
+	// ErrInvalidPassword indicates a password-verification step failed (e.g.
+	// the password supplied to POST /auth/me/email didn't match). Distinct
+	// from ErrUnauthorized: this maps to 403, not 401, since the caller is
+	// already authenticated.
+	ErrInvalidPassword = errors.New("invalid password")
+
+	// ErrRateLimited indicates the caller has exceeded a service-level rate
+	// limit (e.g. email-change requests per hour).
+	ErrRateLimited = errors.New("rate limited")
+
+	// ErrGone indicates the resource a token pointed to is no longer valid
+	// because it has expired (as opposed to ErrNotFound's "never existed").
+	ErrGone = errors.New("gone")
+
+	// ErrEmailChangeUnconfigured indicates POST /auth/me/email was called
+	// while EMAIL_ENABLED=true but the email-change confirm/revert URL
+	// bases haven't been configured.
+	ErrEmailChangeUnconfigured = errors.New("email change unconfigured")
 )
 
 // handleServiceError maps service-layer sentinel errors to HTTP error responses.
@@ -224,6 +291,14 @@ func handleServiceError(c *gin.Context, err error) {
 		domain.RespondWithError(c, http.StatusConflict, domain.CodeBadRequest, err.Error())
 	case errors.Is(err, ErrForbidden):
 		domain.RespondWithError(c, http.StatusForbidden, domain.CodeForbidden, err.Error())
+	case errors.Is(err, ErrInvalidPassword):
+		domain.RespondWithError(c, http.StatusForbidden, domain.CodeInvalidPassword, err.Error())
+	case errors.Is(err, ErrRateLimited):
+		domain.RespondWithError(c, http.StatusTooManyRequests, domain.CodeRateLimitExceded, err.Error())
+	case errors.Is(err, ErrGone):
+		domain.RespondWithError(c, http.StatusGone, domain.CodeGone, err.Error())
+	case errors.Is(err, ErrEmailChangeUnconfigured):
+		domain.RespondWithError(c, http.StatusServiceUnavailable, domain.CodeEmailChangeUnconfigured, err.Error())
 	default:
 		domain.RespondWithError(c, http.StatusInternalServerError, domain.CodeInternalError, "internal server error")
 	}
