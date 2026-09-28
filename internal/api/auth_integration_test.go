@@ -64,6 +64,7 @@ func TestProtectedRoutes_RequireAuth(t *testing.T) {
 		body   interface{}
 	}{
 		{http.MethodGet, "/auth/me", nil},
+		{http.MethodPut, "/auth/me", map[string]string{"name": "New Name"}},
 		{http.MethodPut, "/auth/me/password", map[string]string{
 			"old_password": "old-password-here!!",
 			"new_password": "brand-new-secure-password",
@@ -101,6 +102,18 @@ func TestProtectedRoutes_AcceptValidToken(t *testing.T) {
 		var resp api.UserInfo
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, "user-42", resp.ID)
+	})
+
+	t.Run("PUT /auth/me updates profile", func(t *testing.T) {
+		body := map[string]string{"name": "New Name"}
+		w := doRequest(router, http.MethodPut, "/auth/me", body,
+			"Authorization", "Bearer qf_at_valid_token")
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp api.UserInfo
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "user-42", resp.ID)
+		assert.Equal(t, "New Name", resp.Name)
 	})
 
 	t.Run("PUT /auth/me/password succeeds", func(t *testing.T) {

@@ -39,6 +39,9 @@ type UserRepository interface {
 	// Also clears force_password_change flag.
 	UpdatePasswordHash(ctx context.Context, tenantID uuid.UUID, userID, newHash string) error
 
+	// UpdateName updates a user's display name.
+	UpdateName(ctx context.Context, tenantID uuid.UUID, userID, name string) error
+
 	// SetForcePasswordChange sets the force_password_change flag for a user.
 	SetForcePasswordChange(ctx context.Context, tenantID uuid.UUID, userID string, force bool) error
 
@@ -223,6 +226,20 @@ func (r *PostgresUserRepository) UpdatePasswordHash(ctx context.Context, tenantI
 	tag, err := r.pool.Exec(ctx, query, newHash, now, userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("update password hash: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user %s: %w", userID, ErrNotFound)
+	}
+	return nil
+}
+
+// UpdateName updates a user's display name.
+func (r *PostgresUserRepository) UpdateName(ctx context.Context, tenantID uuid.UUID, userID, name string) error {
+	query := `UPDATE users SET name = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4 AND deleted_at IS NULL`
+
+	tag, err := r.pool.Exec(ctx, query, name, time.Now().UTC(), userID, tenantID)
+	if err != nil {
+		return fmt.Errorf("update name: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("user %s: %w", userID, ErrNotFound)

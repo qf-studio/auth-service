@@ -18,6 +18,7 @@ const (
 	EventLogout                   = "logout"
 	EventLogoutAll                = "logout_all"
 	EventPasswordChange           = "password_change"
+	EventProfileUpdated           = "profile_updated"
 	EventPasswordReset            = "password_reset"
 	EventPasswordResetConfm       = "password_reset_confirm"
 	EventPasswordResetEmailFailed = "password_reset_email_failed"

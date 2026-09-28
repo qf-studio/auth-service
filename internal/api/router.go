@@ -136,6 +136,7 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		protected.Use(mw.DPoP)
 	}
 	protected.GET("/me", authH.Me)
+	protected.PUT("/me", ValidateReq(v, &domain.ProfileUpdateRequest{}), authH.UpdateProfile)
 	protected.PUT("/me/password", ValidateReq(v, &domain.PasswordChangeRequest{}), authH.ChangePassword)
 	protected.POST("/logout", authH.Logout)
 	protected.POST("/logout/all", authH.LogoutAll)
@@ -192,6 +193,8 @@ func ValidateReq(v *validator.Validate, zero interface{}) gin.HandlerFunc {
 		return domain.ValidateRequest(v, func() interface{} { return &domain.PasswordResetConfirmRequest{} })
 	case *domain.PasswordChangeRequest:
 		return domain.ValidateRequest(v, func() interface{} { return &domain.PasswordChangeRequest{} })
+	case *domain.ProfileUpdateRequest:
+		return domain.ValidateRequest(v, func() interface{} { return &domain.ProfileUpdateRequest{} })
 	case *domain.VerifyEmailRequest:
 		return domain.ValidateRequest(v, func() interface{} { return &domain.VerifyEmailRequest{} })
 	default:
