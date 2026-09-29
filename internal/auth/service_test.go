@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -2188,4 +2189,219 @@ func TestRevertEmailChange_EmailTakenMeanwhile(t *testing.T) {
 	err := svc.RevertEmailChange(context.Background(), "some-token")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrConflict)
+}
+
+// ── Email-change rate limiter (miniredis; no external Redis needed) ─────────
+
+// newMiniredisService returns a Service backed by an in-process miniredis, plus
+// the miniredis handle for TTL inspection and FastForward.
+func newMiniredisService(t *testing.T, users *mockUserRepository, sender email.EmailSender) (*Service, *miniredis.Miniredis) {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	logger, _ := zap.NewDevelopment()
+	return NewService(ServiceDeps{
+		Redis:                     client,
+		Logger:                    logger,
+		Auditor:                   audit.NopLogger{},
+		Users:                     users,
+		Tokens:                    &mockRefreshTokenRepository{},
+		Issuer:                    &mockTokenIssuer{},
+		Hasher:                    &mockHasher{},
+		Breaches:                  &mockBreachChecker{},
+		Email:                     sender,
+		EmailEnabled:              true,
+		VerifyURLBase:             "https://app.example.com/verify-email",
+		ResetURLBase:              "https://app.example.com/reset",
+		EmailChangeConfirmURLBase: "https://app.example.com/email-change/confirm",
+		EmailChangeRevertURLBase:  "https://app.example.com/email-change/revert",
+	}), mr
+}
+
+func TestCheckEmailChangeRateLimit_FixedWindow(t *testing.T) {
+	tests := []struct {
+		name string
+		// calls is the number of checkEmailChangeRateLimit calls to make.
+		calls int
+		// wantAllowed is the result of the last call.
+		wantAllowed bool
+		// advance is how far to fast-forward the fake clock after the calls.
+		advance time.Duration
+		// wantAllowedAfter is the result of one further call after advance.
+		wantAllowedAfter bool
+	}{
+		{name: "first call passes", calls: 1, wantAllowed: true, advance: emailChangeRateWindow + time.Second, wantAllowedAfter: true},
+		{name: "third call passes", calls: emailChangeRateLimit, wantAllowed: true, advance: emailChangeRateWindow + time.Second, wantAllowedAfter: true},
+		{name: "fourth call rejected", calls: emailChangeRateLimit + 1, wantAllowed: false, advance: emailChangeRateWindow + time.Second, wantAllowedAfter: true},
+		{name: "many rejected calls do not extend lockout", calls: emailChangeRateLimit + 5, wantAllowed: false, advance: emailChangeRateWindow + time.Second, wantAllowedAfter: true},
+		{name: "still locked before window elapses", calls: emailChangeRateLimit + 1, wantAllowed: false, advance: emailChangeRateWindow - time.Minute, wantAllowedAfter: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, mr := newMiniredisService(t, &mockUserRepository{}, &mockEmailSender{})
+			ctx := context.Background()
+			tenantID := domain.DefaultTenantID
+			key := fmt.Sprintf("%s%s:%s", emailChangeRatePrefix, tenantID, "user-1")
+
+			var allowed bool
+			for i := 0; i < tt.calls; i++ {
+				var err error
+				allowed, err = svc.checkEmailChangeRateLimit(ctx, tenantID, "user-1")
+				require.NoError(t, err)
+				assert.Greater(t, mr.TTL(key), time.Duration(0), "key must carry a TTL after call %d", i+1)
+			}
+			assert.Equal(t, tt.wantAllowed, allowed)
+
+			mr.FastForward(tt.advance)
+
+			allowedAfter, err := svc.checkEmailChangeRateLimit(ctx, tenantID, "user-1")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowedAfter, allowedAfter)
+		})
+	}
+}
+
+func TestCheckEmailChangeRateLimit_RejectedCallDoesNotExtendTTL(t *testing.T) {
+	svc, mr := newMiniredisService(t, &mockUserRepository{}, &mockEmailSender{})
+	ctx := context.Background()
+	tenantID := domain.DefaultTenantID
+	key := fmt.Sprintf("%s%s:%s", emailChangeRatePrefix, tenantID, "user-1")
+
+	for i := 0; i < emailChangeRateLimit; i++ {
+		ok, err := svc.checkEmailChangeRateLimit(ctx, tenantID, "user-1")
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+	mr.FastForward(20 * time.Minute)
+	before := mr.TTL(key)
+	require.Equal(t, emailChangeRateWindow-20*time.Minute, before)
+
+	ok, err := svc.checkEmailChangeRateLimit(ctx, tenantID, "user-1")
+	require.NoError(t, err)
+	assert.False(t, ok, "fourth request must be rejected")
+	assert.Equal(t, before, mr.TTL(key), "rejected call must not extend the TTL")
+
+	// The window is anchored at the first request: 40 more minutes clears it.
+	mr.FastForward(40*time.Minute + time.Second)
+	ok, err = svc.checkEmailChangeRateLimit(ctx, tenantID, "user-1")
+	require.NoError(t, err)
+	assert.True(t, ok, "fifth request succeeds once the original window has elapsed")
+}
+
+func TestRequestEmailChange_RateLimited_ReturnsErrRateLimited(t *testing.T) {
+	users := &mockUserRepository{
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+		findByEmailFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	svc, _ := newMiniredisService(t, users, &mockEmailSender{})
+	ctx := context.Background()
+
+	for i := 0; i < emailChangeRateLimit; i++ {
+		_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
+		require.NoError(t, err, "request %d should be within the rate limit", i+1)
+	}
+	_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
+	assert.ErrorIs(t, err, api.ErrRateLimited)
+}
+
+// ── humanizeDuration / mail copy ────────────────────────────────────────────
+
+func TestHumanizeDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{7 * 24 * time.Hour, "7 days"},
+		{24 * time.Hour, "1 day"},
+		{48 * time.Hour, "2 days"},
+		{36 * time.Hour, "36 hours"},
+		{23 * time.Hour, "23 hours"},
+		{time.Hour, "1 hour"},
+		{2 * time.Hour, "2 hours"},
+		{90 * time.Minute, "90 minutes"},
+		{time.Minute, "1 minute"},
+		{30 * time.Second, "1 minute"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			assert.Equal(t, tt.want, humanizeDuration(tt.d))
+		})
+	}
+}
+
+func TestMailBodies_HumanizedExpiry(t *testing.T) {
+	users := &mockUserRepository{
+		createFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+			u.ID = "user-1"
+			return u, nil
+		},
+		findByEmailFn: func(_ context.Context, addr string) (*domain.User, error) {
+			if addr == "new@example.com" {
+				return nil, storage.ErrNotFound
+			}
+			return &domain.User{ID: "user-1", Email: addr}, nil
+		},
+		findByIDFn: func(_ context.Context, _ string) (*domain.User, error) {
+			return emailChangeTestUser(), nil
+		},
+	}
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		// trigger runs the flow and returns the mail bodies it produced.
+		trigger func(t *testing.T, svc *Service, sender *mockEmailSender)
+		want    []string
+	}{
+		{
+			name: "verify",
+			trigger: func(t *testing.T, svc *Service, _ *mockEmailSender) {
+				_, err := svc.Register(ctx, "test@example.com", "valid-password-12345", "Test User")
+				require.NoError(t, err)
+			},
+			want: []string{"expires in " + humanizeDuration(verifyTokenTTL)},
+		},
+		{
+			name: "password reset",
+			trigger: func(t *testing.T, svc *Service, _ *mockEmailSender) {
+				require.NoError(t, svc.ResetPassword(ctx, "alice@example.com"))
+			},
+			want: []string{"expires in " + humanizeDuration(resetTokenTTL)},
+		},
+		{
+			name: "email change confirm and revert",
+			trigger: func(t *testing.T, svc *Service, _ *mockEmailSender) {
+				_, err := svc.RequestEmailChange(ctx, "user-1", "new@example.com", "correct-password")
+				require.NoError(t, err)
+			},
+			want: []string{
+				"expires in " + humanizeDuration(emailChangeTokenTTL),
+				"expires in " + humanizeDuration(emailRevertTokenTTL),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sender := &mockEmailSender{}
+			svc, _ := newMiniredisService(t, users, sender)
+			tt.trigger(t, svc, sender)
+
+			require.Len(t, sender.sent, len(tt.want))
+			for i, msg := range sender.sent {
+				assert.Contains(t, msg.Body, tt.want[i])
+				assert.NotContains(t, msg.Body, "h0m0s")
+			}
+		})
+	}
+
+	// Pin the configured values so a TTL change is a deliberate copy change.
+	assert.Equal(t, "1 day", humanizeDuration(verifyTokenTTL))
+	assert.Equal(t, "7 days", humanizeDuration(emailRevertTokenTTL))
 }
