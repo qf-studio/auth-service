@@ -265,7 +265,7 @@ func (s *Service) issueEmailVerification(ctx context.Context, tenantID uuid.UUID
 	msg := email.Message{
 		To:      user.Email,
 		Subject: "Verify your email",
-		Body:    fmt.Sprintf("Use the link below to verify your email address:\n\n%s\n\nThis link expires in %s.", link, verifyTokenTTL),
+		Body:    fmt.Sprintf("Use the link below to verify your email address:\n\n%s\n\nThis link expires in %s.", link, humanizeDuration(verifyTokenTTL)),
 	}
 	if sendErr := s.email.Send(ctx, msg); sendErr != nil {
 		s.logger.Error("failed to send email verification email", zap.String("user_id", user.ID), zap.Error(sendErr))
@@ -520,7 +520,7 @@ func (s *Service) ResetPassword(ctx context.Context, emailAddr string) error {
 		msg := email.Message{
 			To:      emailAddr,
 			Subject: "Reset your password",
-			Body:    fmt.Sprintf("Use the link below to reset your password:\n\n%s\n\nThis link expires in %s.", link, resetTokenTTL),
+			Body:    fmt.Sprintf("Use the link below to reset your password:\n\n%s\n\nThis link expires in %s.", link, humanizeDuration(resetTokenTTL)),
 		}
 		if sendErr := s.email.Send(ctx, msg); sendErr != nil {
 			// Delivery failure must not become an enumeration oracle: log and
@@ -869,18 +869,22 @@ func (s *Service) RequestEmailChange(ctx context.Context, userID, newEmail, pwd 
 	return &api.EmailChangeResult{Status: "pending", PendingEmail: newEmail}, nil
 }
 
-// checkEmailChangeRateLimit increments a per-tenant-per-user Redis counter
-// and (re)sets its 1-hour expiry in a single pipeline on every call — the
-// same INCR+EXPIRE-together pattern AccountRateLimiter.RecordFailure uses —
-// so the key can never end up persisted without a TTL (e.g. if a crash landed
-// between two separate round trips). Reports whether the caller is still
-// under emailChangeRateLimit.
+// checkEmailChangeRateLimit is a fixed-window limiter over a per-tenant-per-user
+// Redis counter. A single pipeline runs SET key 0 EX window NX followed by
+// INCR: the SETNX creates the key with its TTL only on the first request of a
+// window, so the window is fixed at the first attempt and later calls —
+// including rejected ones — never extend it. The key also can never exist
+// without a TTL (a crash between two separate round trips cannot leave one
+// behind). Reports whether the caller is still under emailChangeRateLimit.
+//
+// Decision: SetNX rather than ExpireNX, which requires Redis 7 and the
+// ElastiCache engine version is not pinned.
 func (s *Service) checkEmailChangeRateLimit(ctx context.Context, tenantID uuid.UUID, userID string) (bool, error) {
 	key := fmt.Sprintf("%s%s:%s", emailChangeRatePrefix, tenantID, userID)
 
 	pipe := s.redis.Pipeline()
+	pipe.SetNX(ctx, key, 0, emailChangeRateWindow)
 	incrCmd := pipe.Incr(ctx, key)
-	pipe.Expire(ctx, key, emailChangeRateWindow)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return false, fmt.Errorf("check rate limit: %w", err)
 	}
@@ -902,7 +906,7 @@ func (s *Service) sendEmailChangeEmails(ctx context.Context, user *domain.User, 
 	newMsg := email.Message{
 		To:      newEmail,
 		Subject: "Confirm your new email",
-		Body:    fmt.Sprintf("Use the link below to confirm this is your new email address:\n\n%s\n\nThis link expires in %s.", changeLink, emailChangeTokenTTL),
+		Body:    fmt.Sprintf("Use the link below to confirm this is your new email address:\n\n%s\n\nThis link expires in %s.", changeLink, humanizeDuration(emailChangeTokenTTL)),
 	}
 	if sendErr := s.email.Send(ctx, newMsg); sendErr != nil {
 		s.logger.Error("failed to send email change confirmation email", zap.String("user_id", user.ID), zap.Error(sendErr))
@@ -920,7 +924,7 @@ func (s *Service) sendEmailChangeEmails(ctx context.Context, user *domain.User, 
 		Subject: "Your email is being changed",
 		Body: fmt.Sprintf(
 			"Your account email is being changed to a new address at %s.\n\nIf you did not request this, use the link below to revert it:\n\n%s\n\nThis link expires in %s.",
-			emailDomain(newEmail), revertLink, emailRevertTokenTTL,
+			emailDomain(newEmail), revertLink, humanizeDuration(emailRevertTokenTTL),
 		),
 	}
 	if sendErr := s.email.Send(ctx, oldMsg); sendErr != nil {
@@ -941,6 +945,30 @@ func emailDomain(addr string) string {
 		return addr[i+1:]
 	}
 	return addr
+}
+
+// humanizeDuration renders d for user-facing mail copy: whole days ("7 days",
+// "1 day"), else whole hours ("24 hours", "1 hour"), else minutes ("90
+// minutes", "1 minute"). Durations under a minute round up to 1 minute.
+func humanizeDuration(d time.Duration) string {
+	plural := func(n int64, unit string) string {
+		if n == 1 {
+			return fmt.Sprintf("%d %s", n, unit)
+		}
+		return fmt.Sprintf("%d %ss", n, unit)
+	}
+	switch {
+	case d >= 24*time.Hour && d%(24*time.Hour) == 0:
+		return plural(int64(d/(24*time.Hour)), "day")
+	case d >= time.Hour && d%time.Hour == 0:
+		return plural(int64(d/time.Hour), "hour")
+	default:
+		m := int64((d + time.Minute - 1) / time.Minute)
+		if m < 1 {
+			m = 1
+		}
+		return plural(m, "minute")
+	}
 }
 
 // ConfirmEmailChange completes a pending email change using the token mailed
