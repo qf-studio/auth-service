@@ -1803,7 +1803,7 @@ func TestRequestEmailChange_RateLimited(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrRateLimited)
 
-	// INCR and EXPIRE must have landed together on every call (see
+	// SETNX (with TTL) and INCR land together in one pipeline (see
 	// checkEmailChangeRateLimit) so the key can never exist without a TTL.
 	key := fmt.Sprintf("%s%s:%s", emailChangeRatePrefix, domain.DefaultTenantID, "user-1")
 	ttl, err := client.TTL(ctx, key).Result()
