@@ -1,5 +1,5 @@
 {
-  "version": "6.2.1",
+  "version": "8.4.11",
   "project_name": "auth-service",
   "tech_stack": "Go 1.24+, Gin, PostgreSQL, Redis, JWT (ES256/EdDSA)",
   "project_management": "github",
@@ -10,5 +10,109 @@
   "auto_update": {
     "enabled": true,
     "check_interval_hours": 1
+  },
+  "session_start_hook": {
+    "enabled": true,
+    "include_sections": [
+      "navigator",
+      "marker",
+      "config",
+      "graph",
+      "profile",
+      "tasks",
+      "auto_update"
+    ],
+    "char_budget": 9500
+  },
+  "compact_hook": {
+    "enabled": true,
+    "include_transcript_summary": true,
+    "include_git_state": true,
+    "char_budget": 8000,
+    "append_post_compact_summary": true
+  },
+  "task_graph_sync_hook": {
+    "enabled": true
+  },
+  "workflow_state_hook": {
+    "enabled": true
+  },
+  "profile_sync_hook": {
+    "enabled": true
+  },
+  "workflow_enforcer_hook": {
+    "enabled": true,
+    "strict_block": true
+  },
+  "read_guard_hook": {
+    "enabled": true,
+    "warn_threshold": 3,
+    "escalate_threshold": 5,
+    "strict_block": true,
+    "allowlist": [
+      "DEVELOPMENT-README.md",
+      ".nav-config.json",
+      ".user-profile.json",
+      "knowledge/graph.json"
+    ]
+  },
+  "dispatcher": {
+    "enabled": true
+  },
+  "tier1": {
+    "enabled": false,
+    "rules": {
+      "nav_stats": true,
+      "show_features": true,
+      "list_markers": true,
+      "graph_health": true,
+      "nav_version": true
+    }
+  },
+  "stop_completion": {
+    "enabled": false,
+    "continue_enabled": false,
+    "max_continues": 2
+  },
+  "jit_memory": {
+    "enabled": false
+  },
+  "subagent_context": {
+    "enabled": false,
+    "budget_chars": 2000
+  },
+  "failure_diagnosis": {
+    "enabled": false
+  },
+  "config_guard": {
+    "enabled": true
+  },
+  "setup_hook": {
+    "enabled": true
+  },
+  "deep_research": {
+    "enabled": false,
+    "max_sources": 30,
+    "min_sources": 8,
+    "fetchers": 4,
+    "max_full_reads": 10,
+    "critic_enabled": true,
+    "models": {
+      "fetcher": "sonnet",
+      "writer": "opus",
+      "critic": "opus",
+      "patcher": "opus"
+    }
+  },
+  "adhd_mode": {
+    "enabled": true,
+    "on": null
+  },
+  "reply_modes": {
+    "enabled": true
+  },
+  "ste_mode": {
+    "enabled": true,
+    "on": null
   }
 }

@@ -9,8 +9,23 @@ Serves two client types: **Users** (humans) and **Systems** (services + AI agent
 **Security Target**: NIST SP 800-63-4 AAL2
 **Repo**: github.com/qf-studio/auth-service
 
-**Last Updated**: 2026-02-24
-**Navigator Version**: 6.2.1
+**Last Updated**: 2026-10-23
+**Navigator Version**: 8.4.11
+
+---
+
+## Navigator
+
+**Navigator runtime**: workflow enforcement (session context, workflow gating, read
+guarding, intent briefs, completion gating, compact markers) lives in the hook runtime,
+not in prose in this file. Off-switches live in `.agent/.nav-config.json`: every hook
+block has `enabled` (e.g. `workflow_enforcer_hook.enabled: false`), gating blocks also
+take `strict_block: false` to warn instead of block, Tier-1 instant answers toggle per
+rule under `tier1.rules` (feature-wide: `tier1.enabled`), and forced continuation stays
+off unless `stop_completion.continue_enabled: true`. Setting the `PILOT_EXECUTOR`
+environment variable disables interactive/blocking hook behavior for non-interactive
+executors. Project docs live in `.agent/` — start from `.agent/DEVELOPMENT-README.md`
+and load task/system/SOP docs on demand, not upfront.
 
 ---
 
@@ -161,18 +176,10 @@ go build -o bin/auth-service cmd/server/main.go
 
 ## Configuration
 
-Navigator config in `.agent/.nav-config.json`:
-
-```json
-{
-  "version": "6.2.1",
-  "project_management": "github",
-  "task_prefix": "TASK",
-  "team_chat": "none",
-  "auto_load_navigator": true,
-  "compact_strategy": "conservative"
-}
-```
+Navigator config lives in `.agent/.nav-config.json` (source of truth — not duplicated here).
+Project keys: `project_management: github`, `task_prefix: TASK`, `team_chat: none`,
+`compact_strategy: conservative`. Hook blocks (`*_hook`, `tier1`, `stop_completion`, …)
+carry their own `enabled` / `strict_block` switches.
 
 ---
 
