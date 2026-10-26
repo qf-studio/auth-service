@@ -253,7 +253,7 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 	// proof must match it. Checked before anything is consumed or deleted so a
 	// failed attempt cannot burn the legitimate client's token, and the error
 	// is identical to an invalid token so the binding is not disclosed.
-	// Decision: unbound records (empty JKT) keep the pre-existing behaviour,
+	// Decision: unbound records (empty JKT) keep the pre-existing behavior,
 	// and with a proof the rotated pair becomes bound.
 	if record.JKT != "" {
 		if subtle.ConstantTimeCompare([]byte(record.JKT), []byte(jktThumbprint)) != 1 {
