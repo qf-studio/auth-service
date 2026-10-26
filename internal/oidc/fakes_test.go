@@ -2,11 +2,13 @@ package oidc_test
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
 )
 
@@ -86,3 +88,27 @@ func (f *fakeHasher) Verify(password, hash string) (bool, error) {
 }
 
 func (f *fakeHasher) NeedsUpgrade(_ string) bool { return false }
+
+// recordingAuditor is an audit.EventLogger that keeps every event it sees.
+type recordingAuditor struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (r *recordingAuditor) LogEvent(_ context.Context, ev audit.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+}
+
+func (r *recordingAuditor) byType(typ string) []audit.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []audit.Event
+	for _, ev := range r.events {
+		if ev.Type == typ {
+			out = append(out, ev)
+		}
+	}
+	return out
+}

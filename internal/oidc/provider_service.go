@@ -249,6 +249,10 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 		s.logger.Error("exchange code: find user failed", zap.Error(err))
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
+	// The user may have been locked or deleted after the code was issued.
+	if !user.IsActive() {
+		return nil, fmt.Errorf("user %s is not active: %w", code.Subject, api.ErrUnauthorized)
+	}
 
 	// GH-512: persist the client id alongside the refresh token (via
 	// IssueTokenPairForClient instead of IssueTokenPair) so a later refresh

@@ -81,6 +81,9 @@ const (
 	// OIDC provider events.
 	EventOIDCCodeExchange   = "oidc_code_exchange"
 	EventOIDCConsentGrant   = "oidc_consent_grant"
+	EventOIDCConsentReject  = "oidc_consent_reject"
+	EventOIDCLoginAccept    = "oidc_login_accept"
+	EventOIDCLoginReject    = "oidc_login_reject"
 	EventAdminClientApprove = "admin_client_approve"
 )
 

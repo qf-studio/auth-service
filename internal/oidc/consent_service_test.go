@@ -2,6 +2,10 @@ package oidc_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -18,11 +22,25 @@ import (
 	"github.com/qf-studio/auth-service/internal/storage"
 )
 
+// activeUserLookup resolves every subject to an active user.
+func activeUserLookup() *fakeUserLookup {
+	return &fakeUserLookup{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
+			return &domain.User{ID: id}, nil
+		},
+	}
+}
+
 func newTestConsentService(t *testing.T, clients oidc.ClientLookup, grants oidc.ConsentGrantStore) (*oidc.ConsentService, oidc.Store) {
+	t.Helper()
+	return newTestConsentServiceWith(t, clients, activeUserLookup(), grants, audit.NopLogger{})
+}
+
+func newTestConsentServiceWith(t *testing.T, clients oidc.ClientLookup, users oidc.UserLookup, grants oidc.ConsentGrantStore, auditor audit.EventLogger) (*oidc.ConsentService, oidc.Store) {
 	t.Helper()
 	_, redisClient := newTestRedis(t)
 	store := oidc.NewRedisStore(redisClient)
-	svc := oidc.NewConsentService(testOIDCConfig(), store, clients, grants, zap.NewNop(), audit.NopLogger{})
+	svc := oidc.NewConsentService(testOIDCConfig(), store, clients, users, grants, zap.NewNop(), auditor)
 	return svc, store
 }
 
@@ -82,6 +100,7 @@ func TestConsentService_AcceptLogin_FirstPartyAutoConsent(t *testing.T) {
 		ID:           uuid.New(),
 		ClientType:   domain.ClientTypeService,
 		Owner:        "admin",
+		Status:       domain.ClientStatusActive,
 		RedirectURIs: []string{"https://app.example.com/callback"},
 	}
 	clients := &fakeClientLookup{
@@ -125,6 +144,7 @@ func TestConsentService_AcceptLogin_ThirdPartyNoGrant_RedirectsToConsent(t *test
 		ID:           uuid.New(),
 		ClientType:   domain.ClientTypeService,
 		Owner:        "third-party",
+		Status:       domain.ClientStatusActive,
 		RedirectURIs: []string{"https://app.example.com/callback"},
 	}
 	clients := &fakeClientLookup{
@@ -160,6 +180,7 @@ func TestConsentService_AcceptLogin_ThirdPartyCoveringGrant_AutoConsent(t *testi
 		ID:           uuid.New(),
 		ClientType:   domain.ClientTypeService,
 		Owner:        "third-party",
+		Status:       domain.ClientStatusActive,
 		RedirectURIs: []string{"https://app.example.com/callback"},
 	}
 	clients := &fakeClientLookup{
@@ -193,6 +214,7 @@ func TestConsentService_AcceptLogin_ThirdPartyNonCoveringGrant_RedirectsToConsen
 		ID:           uuid.New(),
 		ClientType:   domain.ClientTypeService,
 		Owner:        "third-party",
+		Status:       domain.ClientStatusActive,
 		RedirectURIs: []string{"https://app.example.com/callback"},
 	}
 	clients := &fakeClientLookup{
@@ -221,6 +243,142 @@ func TestConsentService_AcceptLogin_ThirdPartyNonCoveringGrant_RedirectsToConsen
 	assert.NotEmpty(t, u.Query().Get("consent_challenge"))
 }
 
+func firstPartyClientLookup(client *domain.Client) *fakeClientLookup {
+	return &fakeClientLookup{
+		findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return client, nil },
+	}
+}
+
+func seedFirstPartyLogin(t *testing.T, store oidc.Store, client *domain.Client, challenge string) {
+	t.Helper()
+	seedLoginRequest(t, store, &oidc.LoginRequest{
+		Challenge:   challenge,
+		ClientID:    client.ID.String(),
+		RedirectURI: client.RedirectURIs[0],
+		Scopes:      []string{"openid"},
+		ExpiresAt:   time.Now().UTC().Add(time.Minute),
+	})
+}
+
+func testFirstPartyClient() *domain.Client {
+	return &domain.Client{
+		ID:           uuid.New(),
+		ClientType:   domain.ClientTypeService,
+		Owner:        "admin",
+		Status:       domain.ClientStatusActive,
+		RedirectURIs: []string{"https://app.example.com/callback"},
+	}
+}
+
+func TestConsentService_AcceptLogin_SubjectChecks(t *testing.T) {
+	deletedAt := time.Now().UTC()
+	tests := []struct {
+		name    string
+		lookup  func(context.Context, uuid.UUID, string) (*domain.User, error)
+		wantErr error
+	}{
+		{
+			name: "unknown subject",
+			lookup: func(context.Context, uuid.UUID, string) (*domain.User, error) {
+				return nil, storage.ErrNotFound
+			},
+			wantErr: api.ErrNotFound,
+		},
+		{
+			name: "locked subject",
+			lookup: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
+				return &domain.User{ID: id, Locked: true}, nil
+			},
+			wantErr: api.ErrForbidden,
+		},
+		{
+			name: "deleted subject",
+			lookup: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
+				return &domain.User{ID: id, DeletedAt: &deletedAt}, nil
+			},
+			wantErr: api.ErrForbidden,
+		},
+		{
+			name: "lookup failure",
+			lookup: func(context.Context, uuid.UUID, string) (*domain.User, error) {
+				return nil, errors.New("db down")
+			},
+			wantErr: api.ErrInternalError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := testFirstPartyClient()
+			rec := &recordingAuditor{}
+			svc, store := newTestConsentServiceWith(t, firstPartyClientLookup(client), &fakeUserLookup{findByIDFn: tt.lookup}, nil, rec)
+			seedFirstPartyLogin(t, store, client, "chal-subject")
+
+			resp, err := svc.AcceptLogin(context.Background(), "chal-subject", &api.AcceptLoginRequest{Subject: "user-x"})
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Empty(t, rec.byType(audit.EventOIDCLoginAccept), "no accept event for a rejected subject")
+		})
+	}
+}
+
+func TestConsentService_AcceptLogin_InactiveClient(t *testing.T) {
+	for _, status := range []string{domain.ClientStatusSuspended, domain.ClientStatusRevoked} {
+		t.Run(status, func(t *testing.T) {
+			client := testFirstPartyClient()
+			client.Status = status
+			svc, store := newTestConsentService(t, firstPartyClientLookup(client), nil)
+			seedFirstPartyLogin(t, store, client, "chal-inactive")
+
+			_, err := svc.AcceptLogin(context.Background(), "chal-inactive", &api.AcceptLoginRequest{Subject: "user-1"})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, api.ErrForbidden)
+		})
+	}
+}
+
+func TestConsentService_AcceptLogin_AuditsWithoutChallenge(t *testing.T) {
+	client := testFirstPartyClient()
+	rec := &recordingAuditor{}
+	svc, store := newTestConsentServiceWith(t, firstPartyClientLookup(client), activeUserLookup(), nil, rec)
+	const challenge = "chal-audit-secret"
+	seedFirstPartyLogin(t, store, client, challenge)
+
+	resp, err := svc.AcceptLogin(context.Background(), challenge, &api.AcceptLoginRequest{Subject: "user-1"})
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.RedirectTo)
+
+	events := rec.byType(audit.EventOIDCLoginAccept)
+	require.Len(t, events, 1)
+	ev := events[0]
+	assert.Equal(t, "user-1", ev.ActorID)
+	assert.Equal(t, client.ID.String(), ev.TargetID)
+	assert.Equal(t, "true", ev.Metadata["consent_skipped"])
+	sum := sha256.Sum256([]byte(challenge))
+	assert.Equal(t, hex.EncodeToString(sum[:])[:8], ev.Metadata["challenge_ref"])
+	assert.NotContains(t, fmt.Sprintf("%+v", ev), challenge)
+}
+
+func TestConsentService_AcceptLogin_ThirdPartyAuditsConsentNotSkipped(t *testing.T) {
+	client := testFirstPartyClient()
+	client.Owner = "third-party"
+	rec := &recordingAuditor{}
+	grants := &fakeConsentGrantStore{
+		findActiveFn: func(_ context.Context, _ uuid.UUID, _ string, _ uuid.UUID) (*domain.ConsentGrant, error) {
+			return nil, storage.ErrNotFound
+		},
+	}
+	svc, store := newTestConsentServiceWith(t, firstPartyClientLookup(client), activeUserLookup(), grants, rec)
+	seedFirstPartyLogin(t, store, client, "chal-3p")
+
+	_, err := svc.AcceptLogin(context.Background(), "chal-3p", &api.AcceptLoginRequest{Subject: "user-1"})
+	require.NoError(t, err)
+
+	events := rec.byType(audit.EventOIDCLoginAccept)
+	require.Len(t, events, 1)
+	assert.Equal(t, "false", events[0].Metadata["consent_skipped"])
+}
+
 func TestConsentService_AcceptLogin_NotFound(t *testing.T) {
 	svc, _ := newTestConsentService(t, nil, nil)
 
@@ -234,7 +392,8 @@ func TestConsentService_AcceptLogin_NotFound(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestConsentService_RejectLogin(t *testing.T) {
-	svc, store := newTestConsentService(t, nil, nil)
+	rec := &recordingAuditor{}
+	svc, store := newTestConsentServiceWith(t, nil, activeUserLookup(), nil, rec)
 
 	lr := &oidc.LoginRequest{
 		Challenge:   "chal-6",
@@ -254,6 +413,13 @@ func TestConsentService_RejectLogin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "access_denied", u.Query().Get("error"))
 	assert.Equal(t, "state-6", u.Query().Get("state"))
+
+	events := rec.byType(audit.EventOIDCLoginReject)
+	require.Len(t, events, 1)
+	assert.Equal(t, lr.ClientID, events[0].TargetID)
+	assert.Equal(t, "access_denied", events[0].Metadata["error"])
+	assert.NotEqual(t, "chal-6", events[0].Metadata["challenge_ref"])
+	assert.Len(t, events[0].Metadata["challenge_ref"], 8)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -407,7 +573,8 @@ func TestConsentService_AcceptConsent_NotFound(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestConsentService_RejectConsent(t *testing.T) {
-	svc, store := newTestConsentService(t, nil, nil)
+	rec := &recordingAuditor{}
+	svc, store := newTestConsentServiceWith(t, nil, activeUserLookup(), nil, rec)
 
 	cr := &oidc.ConsentRequest{
 		Challenge:   "cchal-4",
@@ -427,4 +594,11 @@ func TestConsentService_RejectConsent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "access_denied", u.Query().Get("error"))
 	assert.Equal(t, "state-c4", u.Query().Get("state"))
+
+	events := rec.byType(audit.EventOIDCConsentReject)
+	require.Len(t, events, 1)
+	assert.Equal(t, "user-1", events[0].ActorID)
+	assert.Equal(t, cr.ClientID, events[0].TargetID)
+	assert.Equal(t, "access_denied", events[0].Metadata["error"])
+	assert.NotEqual(t, "cchal-4", events[0].Metadata["challenge_ref"])
 }

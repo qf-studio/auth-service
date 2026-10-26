@@ -127,7 +127,7 @@ func setupOIDCStack(t *testing.T) *oidcStack {
 
 	return &oidcStack{
 		provider: oidc.NewProviderService(oidcCfg, jwtCfg.Algorithm, oidcStore, clientRepo, userRepo, tokenSvc, hasher, logger, auditor),
-		consent:  oidc.NewConsentService(oidcCfg, oidcStore, clientRepo, consentRepo, logger, auditor),
+		consent:  oidc.NewConsentService(oidcCfg, oidcStore, clientRepo, userRepo, consentRepo, logger, auditor),
 		approval: oidc.NewApprovalService(clientRepo, hasher, logger, auditor),
 		admin:    admin.NewClientService(clientRepo, hasher, logger, auditor),
 		users:    userRepo,

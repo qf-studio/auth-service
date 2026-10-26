@@ -286,7 +286,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	// ── Consent and client approval ──────────────────────────────────────
-	consentSvc := oidc.NewConsentService(cfg.OIDC, oidcStore, clientRepo, consentGrantRepo, log, auditSvc)
+	consentSvc := oidc.NewConsentService(cfg.OIDC, oidcStore, clientRepo, userRepo, consentGrantRepo, log, auditSvc)
 	clientApprovalSvc := oidc.NewApprovalService(clientRepo, hasher, log, auditSvc)
 
 	// Broker credential admin service is registered in a subsequent issue.

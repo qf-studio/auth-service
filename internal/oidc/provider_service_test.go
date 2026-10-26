@@ -497,6 +497,64 @@ func TestProviderService_ExchangeCode_RequiresVerifier(t *testing.T) {
 	}
 }
 
+func TestProviderService_ExchangeCode_UserNoLongerActive(t *testing.T) {
+	deletedAt := time.Now().UTC()
+	tests := []struct {
+		name   string
+		mutate func(u *domain.User)
+	}{
+		{"locked after code issued", func(u *domain.User) { u.Locked = true }},
+		{"deleted after code issued", func(u *domain.User) { u.DeletedAt = &deletedAt }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := testConfidentialClient()
+			user := testUserForOIDC()
+			tt.mutate(user)
+			clients := &fakeClientLookup{
+				findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return client, nil },
+			}
+			users := &fakeUserLookup{
+				findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) { return user, nil },
+			}
+			tokens := &fakeTokenIssuer{
+				issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ ...string) (*api.AuthResult, error) {
+					t.Fatal("no tokens may be issued for an inactive user")
+					return nil, nil
+				},
+				issueTokenPairForClientFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ string, _ ...string) (*api.AuthResult, error) {
+					t.Fatal("no tokens may be issued for an inactive user")
+					return nil, nil
+				},
+			}
+			svc, store := newTestProviderService(t, testOIDCConfig(), clients, users, tokens, nil)
+
+			seedAuthCode(t, store, &oidc.AuthorizationCode{
+				Code:                "auth-code-inactive",
+				Subject:             user.ID,
+				ClientID:            client.ID.String(),
+				RedirectURI:         client.RedirectURIs[0],
+				Scopes:              []string{"profile"},
+				CodeChallenge:       oauth.S256Challenge("verifier-inactive"),
+				CodeChallengeMethod: "S256",
+				AuthTime:            time.Now().UTC(),
+				ExpiresAt:           time.Now().UTC().Add(time.Minute),
+			})
+
+			_, err := svc.ExchangeCode(context.Background(), &api.CodeExchangeRequest{
+				GrantType:    "authorization_code",
+				Code:         "auth-code-inactive",
+				RedirectURI:  client.RedirectURIs[0],
+				ClientID:     client.ID.String(),
+				ClientSecret: "correct-secret",
+				CodeVerifier: "verifier-inactive",
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, api.ErrUnauthorized)
+		})
+	}
+}
+
 func TestProviderService_ExchangeCode_PassesClientAudience(t *testing.T) {
 	client := testConfidentialClient()
 	client.Audience = []string{"https://api.example.com"}
