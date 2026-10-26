@@ -387,17 +387,28 @@ func loadHIBP(l *loader) HIBPConfig {
 	return HIBPConfig{APIURL: l.optStr("HIBP_API_URL", "")}
 }
 
-// loadProxy reads TRUSTED_PROXY_CIDRS and parses each entry as a CIDR. It has
-// no required fields, so it never contributes to l.missing.
+// adminTokenPlaceholderPrefix marks the example values in the .env*.example
+// files. Those files are public, so a copied placeholder must not work as a
+// credential (compared case-insensitively).
+const adminTokenPlaceholderPrefix = "change_me"
+
+// loadAdmin reads ADMIN_API_TOKENS. Errors name the token by position only,
+// never by value.
 func loadAdmin(l *loader) (AdminConfig, error) {
 	tokens := splitCSV(l.optStr("ADMIN_API_TOKENS", ""))
 	for i, tok := range tokens {
 		if len(tok) < MinAdminTokenBytes {
 			return AdminConfig{}, fmt.Errorf("ADMIN_API_TOKENS: token %d is shorter than %d bytes", i+1, MinAdminTokenBytes)
 		}
+		if strings.HasPrefix(strings.ToLower(tok), adminTokenPlaceholderPrefix) {
+			return AdminConfig{}, fmt.Errorf("ADMIN_API_TOKENS: token %d is a placeholder value; generate a random token", i+1)
+		}
 	}
 	return AdminConfig{APITokens: tokens}, nil
 }
+
+// loadProxy reads TRUSTED_PROXY_CIDRS and parses each entry as a CIDR. It has
+// no required fields, so it never contributes to l.missing.
 
 func loadProxy(l *loader) (ProxyConfig, error) {
 	raw := l.optStr("TRUSTED_PROXY_CIDRS", "")
