@@ -3,7 +3,7 @@
 **Project**: Authentication service for QuantFlow Studio ecosystem
 **Tech Stack**: Go 1.24+, Gin, PostgreSQL (pgx/v5), Redis (go-redis/v9), JWT (ES256/EdDSA)
 **Repo**: github.com/qf-studio/auth-service
-**Updated**: 2026-09-06
+**Updated**: 2026-10-26
 
 ---
 
@@ -53,31 +53,33 @@
 
 ## Current Focus
 
-### Status (2026-09-06)
-**The service is LIVE at `auth.quantflow.studio`** (AWS ECS `quantflow-svc-auth-service` behind a TLS-terminating ALB, deployed via the new "Deploy QuantFlow AWS" workflow — see Deployment). Latest release: **v0.72.0** (train 2026-09-01: E2E issue B #504 + smoke image #505). Before that: v0.71.2 (manual cut: E2E A1-A4 + MFA-enrollment fix), v0.71.1 (review-003 wave 1 fixes, PRs #489-492). Releases: train daily 16:00 Berlin; manual `v*` tag cuts are safe (train skips already-tagged content — verified 09-01).
+### Status (2026-10-26)
+**Live at `auth.quantflow.studio`** (AWS ECS, see Deployment). Releases: **v0.76.1** (2026-10-26, deploy awaiting approval), v0.76.0 (2026-10-26, deployed), v0.74.0, v0.73.0. Train daily 16:00 Berlin; manual `v*` cuts are safe.
 
-**Recently landed** (2026-09-06, driven by the live AWS deployment):
-- GH-506 (PR #509): per-application `aud` — `Client.Audience` overrides global `JWT_AUDIENCE`; opt-in `JWT_AUDIENCE_ENFORCE`
-- GH-507 (PR #510): `TLS_ENABLED` no-op resolved (deprecation WARN; drop in v0.74 — #513)
-- GH-508 (PR #514): **review-003's DPoP `htu` proxy bug fixed for real** — `TRUSTED_PROXY_CIDRS` gates `X-Forwarded-Proto` trust (was breaking SSL at auth.quantflow.studio)
-- GH-512 (PR #515, in flight): refresh preserves per-client `aud` (`SetClientLookup` + client_id persisted in the Redis refresh value, legacy fallback)
-- E2E layers L1 complete: harness A1-A4 (PRs #500-503, v0.71.2) + wiring assertions/wave-2 skips/negatives B (#504) + smoke image C (#505) in v0.72.0. E2E already caught 1 prod bug (MFA enrollment 500). Next: canary D (#496, Navigator-executed — unblocked now that the smoke image ships)
-- Review-003 wave-2 backlog unchanged (in-memory sessions, audit_logs, HIBP, :4001 auth, RLS, webhooks, scopes DTO, Casbin, retention) — acceptance tests already written as `t.Skip("review-003: ...")` in `e2e/` via #504; each fix flips its skip
+**Hardening batch 2026-10-26** (security review 004; local-only report `tasks/TASK-02-security-review-004.md`, not committed — public repo):
+- v0.76.0 (PR #523, Navigator): refresh-token lifecycle, client IP from trusted proxies only, email-revert window, MFA disable step-up, login/MFA attempt limits.
+- v0.76.1 (Pilot wave 1 + follow-ups): #544 OIDC scopes/PKCE/userinfo, #545 webhook target restrictions, #546 breached-password check, #547 dependency bumps (Go 1.26), #548 DPoP-bound refresh tokens, #549 deploy-workflow input handling, #550 OIDC refresh only with `offline_access`, #551 login-accept checks + audit.
+- On main after v0.76.1: #553 toolchain pin, govulncheck CI gate, action SHA + image digest pins, Dependabot.
+- **Next**: review merged #548/#550/#551 (merged by autopilot, not yet reviewed), then label `pilot` on #542 (needs #550) and wave 2 #524–#527; wave 3 #528–#531 after wave 2; #540 after #524/#525/#530.
+- Ops before wave-2/3 releases deploy: `ADMIN_API_TOKENS` (#524), gRPC client tokens (#525), `REDIS_PASSWORD` + `DATA_ENCRYPTION_KEY` then `CONFIG_STRICT=true` (#530/#531).
+- Breaking for clients since v0.76.0: `POST /auth/mfa/disable` needs `{password, code}`; login 429 after repeated failures; email change inside the revert window → 409; OIDC code flow needs PKCE for all clients and `offline_access` for a refresh token; `go` minimum for `pkg/authclient` consumers is now 1.26.
 
-**Open issues**:
+**Open issues (non-hardening)**:
 | # | Title | Notes |
 |---|---|---|
-| #512 | refresh drops per-client aud | PR #515 rebased+validated by Navigator 2026-09-06 |
-| #513 | drop TLS_ENABLED deprecation WARN | scheduled for one release after v0.73 |
-| #496 | canary repo (TASK-01 issue D) | Navigator-executed; smoke image now available |
-| #465 | Pointer consumer actions | STALE: predates AWS cutover — Pointer's auth copy is frozen until it switches to `auth.quantflow.studio` (see fa896d2); checklist needs a rewrite for the shared-instance model |
-| #447 | Pointer deploy workflow relocation | Largely OBE: `deploy-pointer-aws.yml` removed from this repo (fa896d2); close or repurpose |
+| #513 | drop TLS_ENABLED deprecation WARN | due |
+| #496 | canary repo (TASK-01 issue D) | built; awaiting `CANARY_GH_TOKEN` for first CI run |
+| #465 | Pointer consumer actions | STALE — rewrite for the shared-instance model |
+| #447 | Pointer deploy workflow relocation | Largely OBE (fa896d2); close or repurpose |
 
-**Pilot operational notes** (instance at v2.271.2 as of 2026-08-30):
+**Pilot operational notes** (instance v2.294.2 as of 2026-10-26):
 0. Base-presence check (new, observed 2026-08-30): specs referencing a file path that doesn't exist on main verbatim get silently held ~2h then labeled `pilot-needs-human` with NO issue comment. Use full repo-relative paths in specs. Recovery: fix path, `gh issue edit NN --body-file <doc> --remove-label pilot-needs-human`, wait out repick backoff (~8-15 min).
 1. Post-PR state loss: worker can die after opening a PR without closing the child issue → repick loop → `pilot-blocked` with all work actually done in open PRs. Check `gh pr list` before re-arming. Unverified against v2.246.1.
 2. ~~False completion via merged-PR title scan~~ **RESOLVED**: the title-based completion scan was removed in Pilot v2.237.0 (pilot PRs #4178/#4192); running instance is v2.246.1, so this can no longer occur. Historical remediation (needed only on pre-v2.237 instances): retitle merged PRs matching `"GH-NN" in:title`, then remove the bogus `pilot-done` once.
 3. Stale worker file state: PR branches can carry (a) reverts of files fixed on main after the branch was cut — #475 silently reverted a reviewed bugfix from #474 — and (b) polluted meta files (`.claude/settings.json` worker hook paths, stale `.agent/` doc restores). Before merging a Pilot PR: `git diff origin/main <branch>` (not the GitHub compare, which can show a stale merge base) and `git checkout origin/main -- <file>` the regressions on the branch. Unverified against v2.246.1 — keep checking.
+
+4. CI-fix PRs can drop scope (2026-10-26): when a Pilot PR fails CI, autopilot files `GH-NNN: fix(ci): resolve CI failure from PR #X`; that PR can replace the original, carry only part of the plan, and close the issue as `pilot-superseded` (#532 → #547 dropped the govulncheck job and pins; re-filed as #552). Compare the merged file list with the original PR and the issue plan.
+5. Autopilot merges green PRs without a Navigator review. Review merged Pilot PRs before labeling issues that build on them.
 
 ### Deployment (rewritten 2026-09-06 — AWS cutover)
 - **Production**: `auth.quantflow.studio` — AWS ECS service `quantflow-svc-auth-service` behind a TLS-terminating ALB. Deployed by `.github/workflows/deploy-quantflow-aws.yml` ("Deploy QuantFlow AWS"): after a successful `v*` Release (or manual dispatch with an image tag) → mirror GHCR→ECR `quantflow/auth-service` → deploy stack → run `/auth-migrate` in-VPC via the `quantflow-auth-service-migrate` task definition → verify. One deploy at a time (concurrency group); first-create path uses DesiredCount=0 → migrate → scale to 2.
@@ -86,6 +88,7 @@
 - **Release**: push to main / `v*` tag → GHCR image (multi-arch) + **migration dry-run gate** on fresh Postgres 16 (never break this gate) + `auth-service-smoke:<tag>` image (#505) — run it against any live deployment: `docker run --rm -e SMOKE_BASE_URL=https://auth.quantflow.studio ghcr.io/qf-studio/auth-service-smoke:<tag>`.
 - **Consumers** (Pointer): its self-hosted auth copy is frozen; plan is to consume the shared `auth.quantflow.studio` instance (#465 checklist needs rewriting for that model).
 - Migrations run via CLI before scale-up, never at startup (runtime DB user has no ALTER).
+- Since 2026-10-26 the deploy job waits for a required reviewer on the `aws-quantflow` environment (Actions → run → Review deployments), and the self-hosted deploy runners accept only the deploy workflow from `main` — do not rename `.github/workflows/deploy-quantflow-aws.yml`.
 
 ---
 
@@ -98,6 +101,15 @@
 | [gh-435](./tasks/gh-435.md) | Migrate tool in image + multi-arch fix + real CI gate | ✅ Complete (v0.69.0) |
 | [gh-431](./tasks/gh-431.md) | OIDC provider services implementation (children gh-467→470) | ✅ Complete (v0.70.0) |
 | [gh-473](./tasks/gh-473.md) | Token-type hardening: gRPC qf_at_ gate + client_type claim gate | ✅ Complete (v0.70.0, PR #476) |
+| [TASK-01](./tasks/TASK-01-e2e-canary-strategy.md) | E2E & canary test strategy | 🚀 L1 done; canary #496 awaiting token |
+| TASK-02 (local only) | Security review 004 report — commit after waves 2–3 merge | 🚧 Waves 2–3 pending |
+| [TASK-03](./tasks/TASK-03-workflow-inputs-via-env.md) | Deploy workflow inputs via env + validation (#538) | ✅ #549 |
+| [TASK-04](./tasks/TASK-04-dpop-bound-refresh-tokens.md) | DPoP-bound refresh tokens (#539) | ✅ #548 (review pending) |
+| [TASK-05](./tasks/TASK-05-dpop-use-full-validator.md) | Full `dpop.Validator` (#540) | 📋 after #524/#525/#530 |
+| [TASK-06](./tasks/TASK-06-oidc-refresh-only-with-offline-access.md) | OIDC refresh only with `offline_access` (#541) | ✅ #550 (review pending) |
+| [TASK-07](./tasks/TASK-07-oidc-revoke-tokens-on-code-reuse.md) | Revoke tokens on code reuse (#542) | 📋 label after #550 review |
+| [TASK-08](./tasks/TASK-08-oidc-login-accept-checks.md) | Login-accept checks + audit (#543) | ✅ #551 (review pending) |
+| [TASK-09](./tasks/TASK-09-govulncheck-gate-and-pins.md) | Toolchain pin, govulncheck gate, pins (#552) | ✅ #553 |
 | `tasks/gh-NN.md` | Per-issue specs; active ones match open `pilot`-labeled issues | Various |
 
 ---
