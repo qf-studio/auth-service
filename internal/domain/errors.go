@@ -17,6 +17,10 @@ const (
 	CodeBadRequest       = "BAD_REQUEST"
 	CodeGone             = "GONE"
 
+	// CodeInsufficientScope is returned when the access token lacks a scope
+	// the endpoint requires (RFC 6750 §3.1; e.g. userinfo without openid).
+	CodeInsufficientScope = "insufficient_scope"
+
 	// CodeInvalidPassword is returned when a password-verification step (e.g.
 	// confirming an email change) fails. Lowercase per the email-change API
 	// contract (GH-518), unlike the other, longer-standing UPPER_SNAKE_CASE codes.

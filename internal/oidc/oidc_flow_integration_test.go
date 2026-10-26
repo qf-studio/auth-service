@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -286,7 +287,7 @@ func TestOIDCFlow_Integration(t *testing.T) {
 		require.Equal(t, discovery.Issuer, stack.idTokenIssuer(t, tokenResp.IDToken),
 			"discovery issuer must match iss claim in issued ID tokens")
 
-		userInfo, err := stack.provider.GetUserInfo(ctx, user.ID)
+		userInfo, err := stack.provider.GetUserInfo(ctx, user.ID, strings.Fields(tokenResp.Scope))
 		require.NoError(t, err)
 		require.Equal(t, user.ID, userInfo.Sub)
 		require.Equal(t, user.Email, userInfo.Email)
@@ -394,9 +395,19 @@ func TestOIDCFlow_Integration(t *testing.T) {
 		client := stack.createFirstPartyClient(t, redirectURI)
 		require.NotEmpty(t, client.ClientSecret)
 
+		// PKCE is mandatory for confidential clients too: no challenge, no flow.
+		noPKCE, err := stack.provider.Authorize(ctx, &api.AuthorizeRequest{
+			ClientID: client.ID, RedirectURI: redirectURI, ResponseType: "code",
+			Scope: "openid profile", State: "confidential-state",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "invalid_request", parseRedirect(t, noPKCE.RedirectTo).Get("error"))
+
+		verifier := oauth.GenerateVerifier()
 		authResp, err := stack.provider.Authorize(ctx, &api.AuthorizeRequest{
 			ClientID: client.ID, RedirectURI: redirectURI, ResponseType: "code",
 			Scope: "openid profile", State: "confidential-state",
+			CodeChallenge: oauth.S256Challenge(verifier), CodeChallengeMethod: "S256",
 		})
 		require.NoError(t, err)
 		loginChallenge := parseRedirect(t, authResp.RedirectTo).Get("login_challenge")
@@ -415,6 +426,7 @@ func TestOIDCFlow_Integration(t *testing.T) {
 		// Without a client secret, the exchange must fail.
 		_, err = stack.provider.ExchangeCode(ctx, &api.CodeExchangeRequest{
 			GrantType: "authorization_code", Code: code, RedirectURI: redirectURI, ClientID: client.ID,
+			CodeVerifier: verifier,
 		})
 		require.Error(t, err, "confidential client must present its secret")
 		require.True(t, errors.Is(err, api.ErrUnauthorized), "got %v", err)
@@ -424,7 +436,7 @@ func TestOIDCFlow_Integration(t *testing.T) {
 		// original code is still redeemable with the correct secret.
 		tokenResp, err := stack.provider.ExchangeCode(ctx, &api.CodeExchangeRequest{
 			GrantType: "authorization_code", Code: code, RedirectURI: redirectURI,
-			ClientID: client.ID, ClientSecret: client.ClientSecret,
+			ClientID: client.ID, ClientSecret: client.ClientSecret, CodeVerifier: verifier,
 		})
 		require.NoError(t, err)
 		require.NotEmpty(t, tokenResp.AccessToken)

@@ -2,6 +2,7 @@ package oidc_test
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -132,6 +133,9 @@ func TestProviderService_Authorize_Success(t *testing.T) {
 		ResponseType: "code",
 		Scope:        "openid profile",
 		State:        "state-123",
+
+		CodeChallenge:       oauth.S256Challenge("verifier"),
+		CodeChallengeMethod: "S256",
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, resp.RedirectTo)
@@ -308,6 +312,82 @@ func TestProviderService_Authorize_S256PKCEAccepted(t *testing.T) {
 	assert.NotEmpty(t, u.Query().Get("login_challenge"))
 }
 
+func TestProviderService_Authorize_ConfidentialClientRequiresPKCE(t *testing.T) {
+	client := testConfidentialClient()
+	clients := &fakeClientLookup{
+		findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return client, nil },
+	}
+	svc, _ := newTestProviderService(t, testOIDCConfig(), clients, nil, nil, nil)
+
+	resp, err := svc.Authorize(context.Background(), &api.AuthorizeRequest{
+		ClientID:     client.ID.String(),
+		RedirectURI:  client.RedirectURIs[0],
+		ResponseType: "code",
+		Scope:        "openid",
+		State:        "s1",
+	})
+	require.NoError(t, err)
+	u, err := url.Parse(resp.RedirectTo)
+	require.NoError(t, err)
+	assert.Equal(t, "invalid_request", u.Query().Get("error"))
+	assert.Equal(t, "s1", u.Query().Get("state"))
+	assert.Empty(t, u.Query().Get("login_challenge"))
+}
+
+func TestProviderService_Authorize_ScopeValidation(t *testing.T) {
+	tests := []struct {
+		name         string
+		clientScopes []string
+		requested    string
+		wantScopes   []string // nil => expect invalid_scope redirect
+	}{
+		{"unknown and unpermitted scopes dropped", []string{"openid", "email"}, "openid email admin", []string{"openid", "email"}},
+		{"client scope outside server set dropped", []string{"openid", "email", "admin"}, "openid email admin", []string{"openid", "email"}},
+		{"client permitted subset only", []string{"openid"}, "openid email profile", []string{"openid"}},
+		{"empty client scopes limited to supported", nil, "openid email profile admin", []string{"openid", "email", "profile"}},
+		{"duplicates collapsed", nil, "openid openid email", []string{"openid", "email"}},
+		{"openid missing from request", nil, "email profile", nil},
+		{"openid not permitted for client", []string{"email"}, "openid email", nil},
+		{"only unknown scopes", nil, "admin", nil},
+		{"empty scope", nil, "", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := testConfidentialClient()
+			client.Scopes = tc.clientScopes
+			clients := &fakeClientLookup{
+				findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return client, nil },
+			}
+			svc, store := newTestProviderService(t, testOIDCConfig(), clients, nil, nil, nil)
+
+			resp, err := svc.Authorize(context.Background(), &api.AuthorizeRequest{
+				ClientID:            client.ID.String(),
+				RedirectURI:         client.RedirectURIs[0],
+				ResponseType:        "code",
+				Scope:               tc.requested,
+				State:               "st",
+				CodeChallenge:       oauth.S256Challenge("verifier"),
+				CodeChallengeMethod: "S256",
+			})
+			require.NoError(t, err)
+			u, err := url.Parse(resp.RedirectTo)
+			require.NoError(t, err)
+
+			if tc.wantScopes == nil {
+				assert.Equal(t, "invalid_scope", u.Query().Get("error"))
+				assert.Equal(t, "st", u.Query().Get("state"))
+				assert.Empty(t, u.Query().Get("login_challenge"))
+				return
+			}
+
+			require.Empty(t, u.Query().Get("error"))
+			lr, err := store.GetLoginRequest(context.Background(), u.Query().Get("login_challenge"))
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantScopes, lr.Scopes)
+		})
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // ExchangeCode
 // ────────────────────────────────────────────────────────────────────────────
@@ -374,6 +454,47 @@ func TestProviderService_ExchangeCode_Success_WithOpenIDScope(t *testing.T) {
 	assert.Equal(t, "openid profile", resp.Scope)
 	assert.Equal(t, "nonce-xyz", issuedNonce)
 	assert.Equal(t, client.ID.String(), issuedClientID)
+}
+
+func TestProviderService_ExchangeCode_RequiresVerifier(t *testing.T) {
+	client := testConfidentialClient()
+	clients := &fakeClientLookup{
+		findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return client, nil },
+	}
+	tests := []struct {
+		name      string
+		challenge string
+		verifier  string
+	}{
+		{"code stored without challenge", "", "verifier-x"},
+		{"verifier omitted", oauth.S256Challenge("verifier-x"), ""},
+		{"wrong verifier", oauth.S256Challenge("verifier-x"), "other"},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store := newTestProviderService(t, testOIDCConfig(), clients, nil, nil, nil)
+			codeValue := fmt.Sprintf("auth-code-verifier-%d", i)
+			seedAuthCode(t, store, &oidc.AuthorizationCode{
+				Code:          codeValue,
+				Subject:       "user-1",
+				ClientID:      client.ID.String(),
+				RedirectURI:   client.RedirectURIs[0],
+				Scopes:        []string{"openid"},
+				CodeChallenge: tc.challenge,
+				ExpiresAt:     time.Now().UTC().Add(time.Minute),
+			})
+
+			_, err := svc.ExchangeCode(context.Background(), &api.CodeExchangeRequest{
+				Code:         codeValue,
+				RedirectURI:  client.RedirectURIs[0],
+				ClientID:     client.ID.String(),
+				ClientSecret: "correct-secret",
+				CodeVerifier: tc.verifier,
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, api.ErrUnauthorized)
+		})
+	}
 }
 
 func TestProviderService_ExchangeCode_PassesClientAudience(t *testing.T) {
@@ -616,12 +737,13 @@ func TestProviderService_ExchangeCode_ClientSecretVerification(t *testing.T) {
 		svc, store := newTestProviderService(t, testOIDCConfig(), clients, users, tokens, nil)
 
 		code := &oidc.AuthorizationCode{
-			Code:        "auth-code-5",
-			Subject:     user.ID,
-			ClientID:    client.ID.String(),
-			RedirectURI: client.RedirectURIs[0],
-			Scopes:      []string{"profile"},
-			ExpiresAt:   time.Now().UTC().Add(time.Minute),
+			Code:          "auth-code-5",
+			Subject:       user.ID,
+			ClientID:      client.ID.String(),
+			RedirectURI:   client.RedirectURIs[0],
+			Scopes:        []string{"profile"},
+			CodeChallenge: oauth.S256Challenge("verifier-5"),
+			ExpiresAt:     time.Now().UTC().Add(time.Minute),
 		}
 		seedAuthCode(t, store, code)
 
@@ -630,6 +752,7 @@ func TestProviderService_ExchangeCode_ClientSecretVerification(t *testing.T) {
 			RedirectURI:  client.RedirectURIs[0],
 			ClientID:     client.ID.String(),
 			ClientSecret: "old-secret",
+			CodeVerifier: "verifier-5",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "at", resp.AccessToken)
@@ -708,7 +831,7 @@ func TestProviderService_ExchangeCode_PublicClient_NoSecretRequired(t *testing.T
 // GetUserInfo
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestProviderService_GetUserInfo_Success(t *testing.T) {
+func TestProviderService_GetUserInfo_ScopeProjection(t *testing.T) {
 	user := testUserForOIDC()
 	users := &fakeUserLookup{
 		findByIDFn: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
@@ -718,12 +841,35 @@ func TestProviderService_GetUserInfo_Success(t *testing.T) {
 	}
 	svc, _ := newTestProviderService(t, testOIDCConfig(), nil, users, nil, nil)
 
-	got, err := svc.GetUserInfo(context.Background(), user.ID)
-	require.NoError(t, err)
-	assert.Equal(t, user.ID, got.Sub)
-	assert.Equal(t, user.Email, got.Email)
-	assert.True(t, got.EmailVerified)
-	assert.Equal(t, user.Name, got.Name)
+	tests := []struct {
+		name    string
+		scopes  []string
+		want    api.OIDCUserInfoResponse
+		wantErr error
+	}{
+		{"openid only returns sub only", []string{"openid"}, api.OIDCUserInfoResponse{Sub: user.ID}, nil},
+		{"email scope adds email fields", []string{"openid", "email"},
+			api.OIDCUserInfoResponse{Sub: user.ID, Email: user.Email, EmailVerified: true}, nil},
+		{"profile scope adds name", []string{"openid", "profile"},
+			api.OIDCUserInfoResponse{Sub: user.ID, Name: user.Name}, nil},
+		{"all scopes", []string{"openid", "email", "profile"},
+			api.OIDCUserInfoResponse{Sub: user.ID, Email: user.Email, EmailVerified: true, Name: user.Name}, nil},
+		{"no openid is insufficient_scope", []string{"email", "profile"}, api.OIDCUserInfoResponse{}, api.ErrInsufficientScope},
+		{"no scopes is insufficient_scope", nil, api.OIDCUserInfoResponse{}, api.ErrInsufficientScope},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := svc.GetUserInfo(context.Background(), user.ID, tc.scopes)
+			if tc.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, *got)
+		})
+	}
 }
 
 func TestProviderService_GetUserInfo_NotFound(t *testing.T) {
@@ -734,7 +880,7 @@ func TestProviderService_GetUserInfo_NotFound(t *testing.T) {
 	}
 	svc, _ := newTestProviderService(t, testOIDCConfig(), nil, users, nil, nil)
 
-	_, err := svc.GetUserInfo(context.Background(), "missing-user")
+	_, err := svc.GetUserInfo(context.Background(), "missing-user", []string{"openid"})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrNotFound)
 }

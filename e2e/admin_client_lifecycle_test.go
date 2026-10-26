@@ -11,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+
+	"github.com/qf-studio/auth-service/internal/oauth"
 )
 
 // adminClient mirrors api.AdminClient's JSON shape (no secret field).
@@ -131,8 +133,8 @@ func TestAdminClientLifecycle(t *testing.T) {
 	require.NotEmpty(t, newSecretTokens.AccessToken, "new secret must exchange")
 
 	// 5. A wrong secret must be rejected.
-	authCode := issueAuthCode(t, created.ID, redirectURI, subject.ID, "openid")
-	wrongSecretStatus, wrongSecretErr := attemptCodeExchange(t, authCode, redirectURI, created.ID, "qf_cs_0000000000000000000000000000000000000000000000000000000000000000")
+	authCode, authVerifier := issueAuthCode(t, created.ID, redirectURI, subject.ID, "openid")
+	wrongSecretStatus, wrongSecretErr := attemptCodeExchange(t, authCode, authVerifier, redirectURI, created.ID, "qf_cs_0000000000000000000000000000000000000000000000000000000000000000")
 	require.Equal(t, http.StatusUnauthorized, wrongSecretStatus, "wrong secret must be rejected")
 	require.Equal(t, "UNAUTHORIZED", wrongSecretErr.Code)
 
@@ -281,9 +283,13 @@ func rotateAdminClientSecret(t *testing.T, clientID string) adminClientWithSecre
 // issueAuthCode drives GET /oauth/authorize -> PUT
 // /admin/oauth/auth/requests/login?accept=true for an admin-owned
 // ("first-party") client, which auto-consents and issues a fresh, single-use
-// authorization code without a separate consent step. Returns the code.
-func issueAuthCode(t *testing.T, clientID, redirectURI, subjectID, scope string) string {
+// authorization code without a separate consent step. PKCE (S256) is sent
+// because the server requires it for every client. Returns the code and the
+// matching code_verifier.
+func issueAuthCode(t *testing.T, clientID, redirectURI, subjectID, scope string) (code, verifier string) {
 	t.Helper()
+
+	verifier = oauth.GenerateVerifier()
 
 	authorizeURL := fmt.Sprintf("%s/oauth/authorize?%s", suite.PublicBaseURL, url.Values{
 		"client_id":     {clientID},
@@ -291,6 +297,9 @@ func issueAuthCode(t *testing.T, clientID, redirectURI, subjectID, scope string)
 		"response_type": {"code"},
 		"scope":         {scope},
 		"state":         {"e2e-state-" + uuid.NewString()},
+
+		"code_challenge":        {oauth.S256Challenge(verifier)},
+		"code_challenge_method": {"S256"},
 	}.Encode())
 
 	authorizeReq, err := http.NewRequest(http.MethodGet, authorizeURL, http.NoBody)
@@ -325,10 +334,10 @@ func issueAuthCode(t *testing.T, clientID, redirectURI, subjectID, scope string)
 
 	codeRedirect, err := url.Parse(accepted.RedirectTo)
 	require.NoError(t, err, "parse accept-login redirect")
-	code := codeRedirect.Query().Get("code")
+	code = codeRedirect.Query().Get("code")
 	require.NotEmpty(t, code, "accept-login redirect must carry an authorization code (client is admin-owned, so consent is skipped)")
 
-	return code
+	return code, verifier
 }
 
 // exchangeAuthCodeForClient issues a fresh authorization code for clientID
@@ -336,9 +345,9 @@ func issueAuthCode(t *testing.T, clientID, redirectURI, subjectID, scope string)
 func exchangeAuthCodeForClient(t *testing.T, clientID, redirectURI, subjectID, scope, secret string) oidcTokenResponse {
 	t.Helper()
 
-	code := issueAuthCode(t, clientID, redirectURI, subjectID, scope)
+	code, verifier := issueAuthCode(t, clientID, redirectURI, subjectID, scope)
 
-	status, tokenResp, errResp := codeExchange(t, code, redirectURI, clientID, secret)
+	status, tokenResp, errResp := codeExchange(t, code, verifier, redirectURI, clientID, secret)
 	require.Equal(t, http.StatusOK, status, "code exchange status (error: %+v)", errResp)
 	return tokenResp
 }
@@ -347,20 +356,21 @@ func exchangeAuthCodeForClient(t *testing.T, clientID, redirectURI, subjectID, s
 // and returns the status and decoded error body, for negative-path
 // assertions (the caller supplies a code expected to fail, e.g. a
 // deliberately wrong secret).
-func attemptCodeExchange(t *testing.T, code, redirectURI, clientID, secret string) (int, errorEnvelope) {
+func attemptCodeExchange(t *testing.T, code, verifier, redirectURI, clientID, secret string) (int, errorEnvelope) {
 	t.Helper()
-	status, _, errResp := codeExchange(t, code, redirectURI, clientID, secret)
+	status, _, errResp := codeExchange(t, code, verifier, redirectURI, clientID, secret)
 	return status, errResp
 }
 
 // codeExchange POSTs /oauth/token with grant_type=authorization_code and
 // decodes either the success or error body depending on status.
-func codeExchange(t *testing.T, code, redirectURI, clientID, secret string) (int, oidcTokenResponse, errorEnvelope) {
+func codeExchange(t *testing.T, code, verifier, redirectURI, clientID, secret string) (int, oidcTokenResponse, errorEnvelope) {
 	t.Helper()
 
 	body, err := json.Marshal(map[string]string{
 		"grant_type":    "authorization_code",
 		"code":          code,
+		"code_verifier": verifier,
 		"redirect_uri":  redirectURI,
 		"client_id":     clientID,
 		"client_secret": secret,

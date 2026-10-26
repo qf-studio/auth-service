@@ -129,17 +129,29 @@ func (s *ProviderService) Authorize(ctx context.Context, req *api.AuthorizeReque
 		)}, nil
 	}
 
-	isPublic := client.ClientType == domain.ClientTypePublic
-	if isPublic && req.CodeChallenge == "" {
+	// Decision: PKCE is mandatory for every client type, confidential
+	// included (OAuth 2.1 §4.1.1), so an intercepted code is useless without
+	// the verifier.
+	if req.CodeChallenge == "" {
 		return &api.AuthorizeResponse{RedirectTo: buildRedirectError(
-			req.RedirectURI, "invalid_request", "code_challenge is required for public clients", req.State,
+			req.RedirectURI, "invalid_request", "code_challenge is required", req.State,
 		)}, nil
 	}
-	if req.CodeChallenge != "" && req.CodeChallengeMethod != "S256" {
+	if req.CodeChallengeMethod != "S256" {
 		// Covers both an omitted method (which per RFC 7636 defaults to
 		// "plain") and an explicit "plain": this provider is S256-only.
 		return &api.AuthorizeResponse{RedirectTo: buildRedirectError(
 			req.RedirectURI, "invalid_request", "only code_challenge_method=S256 is supported", req.State,
+		)}, nil
+	}
+
+	// Decision: unknown / unpermitted scopes are dropped rather than rejected
+	// (RFC 6749 §3.3 lets the server issue fewer scopes than requested); only
+	// a missing openid scope is fatal, since this is an OIDC provider.
+	scopes := grantableScopes(splitScope(req.Scope), s.cfg.SupportedScopes, client.Scopes)
+	if !containsScope(scopes, "openid") {
+		return &api.AuthorizeResponse{RedirectTo: buildRedirectError(
+			req.RedirectURI, "invalid_scope", "the openid scope is required and must be permitted for this client", req.State,
 		)}, nil
 	}
 
@@ -154,7 +166,7 @@ func (s *ProviderService) Authorize(ctx context.Context, req *api.AuthorizeReque
 		Challenge:           challenge,
 		ClientID:            req.ClientID,
 		RedirectURI:         req.RedirectURI,
-		Scopes:              splitScope(req.Scope),
+		Scopes:              scopes,
 		State:               req.State,
 		Nonce:               req.Nonce,
 		CodeChallenge:       req.CodeChallenge,
@@ -220,14 +232,13 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 		return nil, fmt.Errorf("redirect_uri mismatch: %w", api.ErrUnauthorized)
 	}
 
-	if code.CodeChallenge != "" {
-		if req.CodeVerifier == "" || oauth.S256Challenge(req.CodeVerifier) != code.CodeChallenge {
-			return nil, fmt.Errorf("code_verifier does not match code_challenge: %w", api.ErrUnauthorized)
-		}
-	} else if isPublic {
-		// Defense in depth: Authorize already enforces PKCE for public
-		// clients, so a code without a challenge should never reach here.
-		return nil, fmt.Errorf("missing code_challenge for public client: %w", api.ErrUnauthorized)
+	if code.CodeChallenge == "" {
+		// Defense in depth: Authorize requires PKCE for every client, so a
+		// code without a challenge should never reach here.
+		return nil, fmt.Errorf("authorization code has no code_challenge: %w", api.ErrUnauthorized)
+	}
+	if req.CodeVerifier == "" || oauth.S256Challenge(req.CodeVerifier) != code.CodeChallenge {
+		return nil, fmt.Errorf("code_verifier does not match code_challenge: %w", api.ErrUnauthorized)
 	}
 
 	user, err := s.users.FindByID(ctx, tenantID, code.Subject)
@@ -293,15 +304,15 @@ func (s *ProviderService) verifyClientSecret(client *domain.Client, secret strin
 	return false
 }
 
-// GetUserInfo returns claims about the authenticated user (OIDC Core §5.3).
-//
-// NOTE: the fixed OIDCProviderService.GetUserInfo signature is (ctx,
-// userID) — it carries no scope information, and this codebase has no
-// mechanism to propagate the granted token scopes from the bearer-auth
-// middleware into ctx. Scope-gated claim projection is therefore not
-// structurally possible here; all available profile claims are always
-// returned.
-func (s *ProviderService) GetUserInfo(ctx context.Context, userID string) (*api.OIDCUserInfoResponse, error) {
+// GetUserInfo returns claims about the authenticated user (OIDC Core §5.3),
+// projected by the scopes on the presented access token: the token must carry
+// openid (else api.ErrInsufficientScope); email and email_verified require
+// the email scope, name requires the profile scope. sub is always returned.
+func (s *ProviderService) GetUserInfo(ctx context.Context, userID string, scopes []string) (*api.OIDCUserInfoResponse, error) {
+	if !containsScope(scopes, "openid") {
+		return nil, fmt.Errorf("userinfo requires the openid scope: %w", api.ErrInsufficientScope)
+	}
+
 	tenantID := domain.TenantIDFromContext(ctx)
 	user, err := s.users.FindByID(ctx, tenantID, userID)
 	if err != nil {
@@ -312,10 +323,13 @@ func (s *ProviderService) GetUserInfo(ctx context.Context, userID string) (*api.
 		return nil, fmt.Errorf("userinfo: %w", api.ErrInternalError)
 	}
 
-	return &api.OIDCUserInfoResponse{
-		Sub:           user.ID,
-		Email:         user.Email,
-		EmailVerified: user.EmailVerified,
-		Name:          user.Name,
-	}, nil
+	resp := &api.OIDCUserInfoResponse{Sub: user.ID}
+	if containsScope(scopes, "email") {
+		resp.Email = user.Email
+		resp.EmailVerified = user.EmailVerified
+	}
+	if containsScope(scopes, "profile") {
+		resp.Name = user.Name
+	}
+	return resp, nil
 }
