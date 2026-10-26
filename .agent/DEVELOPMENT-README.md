@@ -104,12 +104,13 @@
 | [TASK-01](./tasks/TASK-01-e2e-canary-strategy.md) | E2E & canary test strategy | 🚀 L1 done; canary #496 awaiting token |
 | TASK-02 (local only) | Security review 004 report — commit after waves 2–3 merge | 🚧 Waves 2–3 pending |
 | [TASK-03](./tasks/TASK-03-workflow-inputs-via-env.md) | Deploy workflow inputs via env + validation (#538) | ✅ #549 |
-| [TASK-04](./tasks/TASK-04-dpop-bound-refresh-tokens.md) | DPoP-bound refresh tokens (#539) | ✅ #548 (review pending) |
+| [TASK-04](./tasks/TASK-04-dpop-bound-refresh-tokens.md) | DPoP-bound refresh tokens (#539) | ✅ #548 (reviewed) |
 | [TASK-05](./tasks/TASK-05-dpop-use-full-validator.md) | Full `dpop.Validator` (#540) | 📋 after #524/#525/#530 |
-| [TASK-06](./tasks/TASK-06-oidc-refresh-only-with-offline-access.md) | OIDC refresh only with `offline_access` (#541) | ✅ #550 (review pending) |
-| [TASK-07](./tasks/TASK-07-oidc-revoke-tokens-on-code-reuse.md) | Revoke tokens on code reuse (#542) | 📋 label after #550 review |
-| [TASK-08](./tasks/TASK-08-oidc-login-accept-checks.md) | Login-accept checks + audit (#543) | ✅ #551 (review pending) |
+| [TASK-06](./tasks/TASK-06-oidc-refresh-only-with-offline-access.md) | OIDC refresh only with `offline_access` (#541) | ✅ #550 (reviewed) |
+| [TASK-07](./tasks/TASK-07-oidc-revoke-tokens-on-code-reuse.md) | Revoke tokens on code reuse (#542) | 🚀 `pilot` labeled |
+| [TASK-08](./tasks/TASK-08-oidc-login-accept-checks.md) | Login-accept checks + audit (#543) | ✅ #551 (reviewed) |
 | [TASK-09](./tasks/TASK-09-govulncheck-gate-and-pins.md) | Toolchain pin, govulncheck gate, pins (#552) | ✅ #553 |
+| [TASK-10](./tasks/TASK-10-prod-secrets-for-hardening-waves.md) | Prod secrets/settings for waves 2–3 (#568, Nelya) | 📋 Assigned |
 | `tasks/gh-NN.md` | Per-issue specs; active ones match open `pilot`-labeled issues | Various |
 
 ---
