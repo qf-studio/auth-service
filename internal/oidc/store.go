@@ -18,7 +18,21 @@ type Store interface {
 	ConsumeConsentRequest(ctx context.Context, challenge string) (*ConsentRequest, error)
 
 	SaveAuthorizationCode(ctx context.Context, ac *AuthorizationCode) error
+	// ConsumeAuthorizationCode atomically redeems the code and leaves a
+	// used-code record behind (GH-542).
 	ConsumeAuthorizationCode(ctx context.Context, code string) (*AuthorizationCode, error)
+	// RecordCodeIssuance stores the tokens issued from a redeemed code and
+	// reports whether the code was presented again in the meantime, in which
+	// case the caller must revoke those tokens. Returns ErrUsedCodeNotFound
+	// if the used-code record is gone.
+	RecordCodeIssuance(ctx context.Context, code string, iss CodeIssuance) (replayed bool, err error)
+	// MarkCodeReplayed handles a presentation of an already-redeemed code. It
+	// flags the used-code record as replayed and returns the tokens issued
+	// from the code, or nil if the first redemption has not recorded them
+	// yet (it will see the flag and revoke them itself). Returns
+	// ErrUsedCodeNotFound if the code was never redeemed or the record has
+	// expired.
+	MarkCodeReplayed(ctx context.Context, code string) (*CodeIssuance, error)
 }
 
 // Compile-time assertion that *RedisStore satisfies Store.

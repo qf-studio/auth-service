@@ -208,7 +208,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	oauthSvc := oauth.NewService(cfg.OAuth, nil, tokenSvc, log, stateMgr, oauthProviders...)
 
 	// ── OIDC Provider ─────────────────────────────────────────────────────
-	oidcStore := oidc.NewRedisStore(redisClient)
+	oidcStore := oidc.NewRedisStore(redisClient, oidc.WithUsedCodeTTL(cfg.JWT.AccessTokenTTL))
 	oidcSvc := oidc.NewProviderService(cfg.OIDC, cfg.JWT.Algorithm, oidcStore, clientRepo, userRepo, tokenSvc, hasher, log, auditSvc)
 	log.Info("OIDC provider configuration loaded",
 		zap.String("issuer", cfg.OIDC.IssuerURL),

@@ -207,9 +207,27 @@ func TestOIDCFlow_AuthorizeLoginTokenUserinfo(t *testing.T) {
 	require.Equal(t, email, userInfo.Email)
 
 	// 8. Negative: the authorization code is single-use; a second exchange
-	// must fail.
+	// must fail, and (GH-542) it revokes the tokens the first exchange issued.
+	require.Equal(t, http.StatusOK, meStatus(t, client, tokens.AccessToken), "access token works before the code is reused")
+
 	status, _ = postJSON(t, client, suite.PublicBaseURL+"/oauth/token", exchangeBody, nil)
 	require.NotEqual(t, http.StatusOK, status, "reused authorization code must be rejected")
+
+	require.Equal(t, http.StatusUnauthorized, meStatus(t, client, tokens.AccessToken),
+		"access token issued from a reused code must be revoked")
+}
+
+// meStatus returns the status of GET /auth/me with accessToken as bearer.
+func meStatus(t *testing.T, client *http.Client, accessToken string) int {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodGet, suite.PublicBaseURL+"/auth/me", http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := client.Do(req)
+	require.NoError(t, err, "me request")
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
 }
 
 // putJSON is postJSON's PUT sibling: used for the admin login/consent
@@ -311,4 +329,98 @@ func TestOIDCFlow_OfflineAccessIssuesRefreshToken(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "refresh grant status")
 	require.NotEmpty(t, refreshed.AccessToken)
 	require.NotEmpty(t, refreshed.RefreshToken)
+}
+
+// TestOIDCFlow_CodeReuseRevokesRefreshFamily covers GH-542: redeeming a code
+// twice revokes the refresh token issued by the first redemption, including
+// its rotated successors, while the user's own login session keeps working.
+func TestOIDCFlow_CodeReuseRevokesRefreshFamily(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode (requires Docker)")
+	}
+
+	client := suite.HTTPClient
+
+	email := newE2EEmail("oidc-reuse")
+	registered := registerUser(t, client, email, fakeUserPassword)
+	var session authResponse
+	status, _ := postJSON(t, client, suite.PublicBaseURL+"/auth/login", map[string]string{
+		"email": email, "password": fakeUserPassword,
+	}, &session)
+	require.Equal(t, http.StatusOK, status, "login status")
+
+	redirectURI := "http://e2e-oidc-reuse.invalid/callback"
+	var adminClient adminClientResponse
+	status, _ = postJSON(t, client, suite.AdminBaseURL+"/admin/clients", map[string]any{
+		"name":          "E2E OIDC Reuse Client " + uuid.NewString(),
+		"client_type":   "public",
+		"scopes":        []string{"openid", "offline_access"},
+		"redirect_uris": []string{redirectURI},
+	}, &adminClient)
+	require.Equal(t, http.StatusCreated, status, "create client status")
+
+	verifier := oauth.GenerateVerifier()
+	authorizeQuery := url.Values{
+		"client_id":             {adminClient.ID},
+		"redirect_uri":          {redirectURI},
+		"response_type":         {"code"},
+		"scope":                 {"openid offline_access"},
+		"state":                 {"state-" + uuid.NewString()},
+		"code_challenge":        {oauth.S256Challenge(verifier)},
+		"code_challenge_method": {"S256"},
+	}
+	authorizeReq, err := http.NewRequest(http.MethodGet, suite.PublicBaseURL+"/oauth/authorize?"+authorizeQuery.Encode(), http.NoBody)
+	require.NoError(t, err)
+	authorizeResp, err := noRedirectClient.Do(authorizeReq)
+	require.NoError(t, err, "authorize request")
+	defer func() { _ = authorizeResp.Body.Close() }()
+	require.Equal(t, http.StatusFound, authorizeResp.StatusCode, "authorize status")
+	loginRedirect, err := url.Parse(authorizeResp.Header.Get("Location"))
+	require.NoError(t, err)
+
+	var loginAccept redirectResponse
+	status, _ = putJSON(t, client, fmt.Sprintf("%s/admin/oauth/auth/requests/login?login_challenge=%s&accept=true",
+		suite.AdminBaseURL, url.QueryEscape(loginRedirect.Query().Get("login_challenge"))),
+		map[string]string{"subject": registered.ID}, &loginAccept)
+	require.Equal(t, http.StatusOK, status, "accept login status")
+	codeRedirect, err := url.Parse(loginAccept.RedirectTo)
+	require.NoError(t, err)
+	code := codeRedirect.Query().Get("code")
+	require.NotEmpty(t, code)
+
+	exchangeBody := map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          code,
+		"redirect_uri":  redirectURI,
+		"client_id":     adminClient.ID,
+		"code_verifier": verifier,
+	}
+	var tokens oidcTokenResponse
+	status, _ = postJSON(t, client, suite.PublicBaseURL+"/oauth/token", exchangeBody, &tokens)
+	require.Equal(t, http.StatusOK, status, "token exchange status")
+	require.NotEmpty(t, tokens.RefreshToken)
+
+	// Rotate once so the original refresh key is gone: only the family can
+	// reach the live successor.
+	var rotated authResponse
+	status, _ = postJSON(t, client, suite.PublicBaseURL+"/auth/token", map[string]string{
+		"grant_type": "refresh_token", "refresh_token": tokens.RefreshToken,
+	}, &rotated)
+	require.Equal(t, http.StatusOK, status, "refresh grant status")
+	require.NotEmpty(t, rotated.RefreshToken)
+
+	status, _ = postJSON(t, client, suite.PublicBaseURL+"/oauth/token", exchangeBody, nil)
+	require.NotEqual(t, http.StatusOK, status, "reused authorization code must be rejected")
+
+	status, _ = postJSON(t, client, suite.PublicBaseURL+"/auth/token", map[string]string{
+		"grant_type": "refresh_token", "refresh_token": rotated.RefreshToken,
+	}, nil)
+	require.Equal(t, http.StatusUnauthorized, status, "rotated successor of the reused code's refresh token must be revoked")
+	require.Equal(t, http.StatusUnauthorized, meStatus(t, client, tokens.AccessToken))
+
+	require.Equal(t, http.StatusOK, meStatus(t, client, session.AccessToken), "the user's own login session is unaffected")
+	status, _ = postJSON(t, client, suite.PublicBaseURL+"/auth/token", map[string]string{
+		"grant_type": "refresh_token", "refresh_token": session.RefreshToken,
+	}, nil)
+	require.Equal(t, http.StatusOK, status, "the user's own refresh token is unaffected")
 }

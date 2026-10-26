@@ -219,6 +219,7 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 	code, err := s.store.ConsumeAuthorizationCode(ctx, req.Code)
 	if err != nil {
 		if errors.Is(err, ErrAuthorizationCodeNotFound) {
+			s.handleCodeReuse(ctx, req)
 			return nil, fmt.Errorf("invalid or expired authorization code: %w", api.ErrUnauthorized)
 		}
 		s.logger.Error("exchange code: consume code failed", zap.Error(err))
@@ -271,6 +272,32 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
 
+	// GH-542: remember which tokens this code produced so a second
+	// presentation can revoke them. If the code was already presented again
+	// while we were issuing, the details were not there to revoke yet, so
+	// this redemption revokes its own tokens and fails like any reused code.
+	// Decision: if the record cannot be written the tokens are revoked and the
+	// exchange fails, rather than issuing tokens that a replay could not reach.
+	iss := CodeIssuance{
+		AccessTokenID:        result.AccessTokenID,
+		AccessTokenExpiresAt: result.AccessTokenExpiresAt,
+		RefreshFamilyID:      result.RefreshFamilyID,
+	}
+	replayed, err := s.store.RecordCodeIssuance(ctx, req.Code, iss)
+	switch {
+	case errors.Is(err, ErrUsedCodeNotFound):
+		// The record expired or was evicted; nothing to attach to.
+		s.logger.Warn("exchange code: used-code record missing", zap.String("client_id", req.ClientID))
+	case err != nil:
+		s.logger.Error("exchange code: record code issuance failed", zap.Error(err))
+		s.revokeCodeTokens(ctx, req.ClientID, iss)
+		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
+	case replayed:
+		// The replay handler already logged the audit event.
+		s.revokeCodeTokens(ctx, req.ClientID, iss)
+		return nil, fmt.Errorf("invalid or expired authorization code: %w", api.ErrUnauthorized)
+	}
+
 	resp := &api.OIDCTokenResponse{
 		AccessToken:  result.AccessToken,
 		TokenType:    result.TokenType,
@@ -295,6 +322,48 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 	})
 
 	return resp, nil
+}
+
+// handleCodeReuse runs when a code is not found at redemption. If it was
+// redeemed before, the tokens issued from it are revoked (RFC 6749 §4.1.2,
+// OAuth 2.1 §4.1.3): the access token by jti and the refresh token family,
+// leaving the user's other sessions alone. The caller's response does not
+// change. If the first redemption has not recorded its tokens yet, the record
+// is flagged and that redemption revokes them itself.
+func (s *ProviderService) handleCodeReuse(ctx context.Context, req *api.CodeExchangeRequest) {
+	iss, err := s.store.MarkCodeReplayed(ctx, req.Code)
+	if err != nil {
+		if !errors.Is(err, ErrUsedCodeNotFound) {
+			s.logger.Error("exchange code: mark code replayed failed", zap.Error(err))
+		}
+		return
+	}
+	s.logger.Warn("authorization code presented again; revoking tokens issued from it",
+		zap.String("event", audit.EventOIDCCodeReuse), zap.String("client_id", req.ClientID))
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventOIDCCodeReuse,
+		TargetID: req.ClientID,
+	})
+	if iss != nil {
+		s.revokeCodeTokens(ctx, req.ClientID, *iss)
+	}
+}
+
+// revokeCodeTokens revokes the tokens identified by iss. Failures are logged
+// and do not stop the other revocation.
+func (s *ProviderService) revokeCodeTokens(ctx context.Context, clientID string, iss CodeIssuance) {
+	if iss.AccessTokenID != "" {
+		if err := s.tokens.RevokeJTI(ctx, iss.AccessTokenID, iss.AccessTokenExpiresAt); err != nil {
+			s.logger.Error("code reuse: revoke access token failed",
+				zap.String("client_id", clientID), zap.String("jti", iss.AccessTokenID), zap.Error(err))
+		}
+	}
+	if iss.RefreshFamilyID != "" {
+		if err := s.tokens.RevokeRefreshFamily(ctx, iss.RefreshFamilyID); err != nil {
+			s.logger.Error("code reuse: revoke refresh token family failed",
+				zap.String("client_id", clientID), zap.String("family_id", iss.RefreshFamilyID), zap.Error(err))
+		}
+	}
 }
 
 // verifyClientSecret checks secret against both the current secret_hash and,

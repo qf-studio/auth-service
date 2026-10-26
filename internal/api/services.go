@@ -22,6 +22,15 @@ type AuthResult struct {
 	MFARequired         bool   `json:"mfa_required,omitempty"`
 	MFAToken            string `json:"mfa_token,omitempty"`
 	ForcePasswordChange bool   `json:"force_password_change,omitempty"`
+
+	// AccessTokenID, AccessTokenExpiresAt and RefreshFamilyID identify the
+	// issued tokens (jti, exp, refresh-token family) so a caller can revoke
+	// them later without handling the raw tokens (GH-542). They are never
+	// serialized to clients. RefreshFamilyID is empty when no refresh token
+	// was issued.
+	AccessTokenID        string    `json:"-"`
+	AccessTokenExpiresAt time.Time `json:"-"`
+	RefreshFamilyID      string    `json:"-"`
 }
 
 // UserInfo represents the authenticated user's profile.

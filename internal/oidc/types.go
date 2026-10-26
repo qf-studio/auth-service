@@ -57,3 +57,16 @@ type AuthorizationCode struct {
 	AuthTime            time.Time
 	ExpiresAt           time.Time
 }
+
+// CodeIssuance identifies the tokens issued from one redeemed authorization
+// code, so they can be revoked if the code is presented again (RFC 6749
+// §4.1.2, OAuth 2.1 §4.1.3). It holds identifiers only, never raw tokens.
+type CodeIssuance struct {
+	// AccessTokenID is the jti of the issued access token.
+	AccessTokenID string
+	// AccessTokenExpiresAt is the access token's expiry.
+	AccessTokenExpiresAt time.Time
+	// RefreshFamilyID is the refresh-token family; empty when no refresh
+	// token was issued.
+	RefreshFamilyID string
+}
