@@ -230,12 +230,25 @@ func doRequest(router *gin.Engine, method, path string, body interface{}, header
 	} else {
 		req = httptest.NewRequest(method, path, http.NoBody)
 	}
+	if strings.HasPrefix(path, "/admin/") {
+		// Admin routers require a bearer credential (GH-524); default to the
+		// valid test token, which explicit headers below can override.
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	}
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
 	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	return w
+}
+
+// testAdminToken is the fake admin API token accepted by test admin routers.
+const testAdminToken = "test-not-a-real-admin-token-000000000"
+
+// testAdminDeps returns AdminDeps for handler tests: healthy, with testAdminToken accepted.
+func testAdminDeps() *api.AdminDeps {
+	return &api.AdminDeps{Health: health.NewService(), APITokens: []string{testAdminToken}}
 }
 
 // --- Health probe tests ---

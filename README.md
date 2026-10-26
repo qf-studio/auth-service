@@ -16,7 +16,7 @@ Authentication and authorization service for the QuantFlow Studio ecosystem. Ser
 - **Argon2id Password Hashing** — 19 MiB memory, 2 iterations, HMAC pepper
 - **NIST Password Policy** — 15-char minimum, breached-password blocklist, no composition rules. New passwords (register, reset confirm, change, admin user create) are checked against HIBP Pwned Passwords via the k-anonymity range API (only a 5-char SHA-1 prefix leaves the service; 3 s timeout). The check **fails open**: if HIBP is unreachable the password is accepted, a `WARN` is logged and a `password_breach_check_failed` audit event is emitted. Breached passwords are rejected with `400` and a `password_breached` audit event.
 - **Token Security** — Prefixed tokens (`qf_at_`, `qf_rt_`, `qf_ac_`, `qf_ak_`), only signatures stored in DB
-- **Dual-Port Architecture** — Public (:4000) and Admin (:4001) with network-level isolation
+- **Dual-Port Architecture** — Public (:4000) and Admin (:4001). Every `/admin/*` route requires a static bearer token (`ADMIN_API_TOKENS`) in addition to network-level isolation
 - **Rate Limiting** — Per-IP with progressive delay and account lockout
 - **DPoP Support** — Demonstrating Proof-of-Possession token binding
 - **MFA** — TOTP with backup codes
@@ -79,10 +79,27 @@ source .env && go run cmd/server/main.go
 | POST | `/oauth/token` | OAuth 2.1 token exchange |
 | GET | `/admin/clients` | List OAuth clients (admin) |
 | POST | `/admin/clients` | Create OAuth client (admin) |
+| POST | `/admin/clients/:id/approve` | Approve a third-party client (admin; was `GET` before GH-524) |
 | GET | `/health` | Health check |
 | GET | `/ready` | Readiness probe |
 
 Full API specification: [`api/`](./api/)
+
+### Admin API authentication
+
+Every `/admin/*` route on :4001 needs `Authorization: Bearer <token>`, where
+the token is one of the comma-separated `ADMIN_API_TOKENS` (each at least 32
+bytes; generate with `./scripts/generate-secret.sh --name ADMIN_API_TOKENS --bytes 32 --format hex`).
+Missing or wrong credentials return `401`; `/health` stays unauthenticated.
+
+- **Rotation:** two tokens are accepted at once. Deploy `ADMIN_API_TOKENS=<new>,<old>`,
+  move callers to `<new>`, then deploy `ADMIN_API_TOKENS=<new>`.
+- **Unset:** the service still starts (the public API stays up), logs one `ERROR`
+  at startup, and every `/admin/*` route returns `503` with code `admin_api_disabled`.
+- Admin request bodies are capped by the same limit as the public API (`413`).
+- **Deploy order:** add `ADMIN_API_TOKENS` to the task definition / env file
+  *before* deploying this release, and give existing admin callers the token
+  first — otherwise their calls start failing with `503`.
 
 ## Webhooks
 
@@ -166,6 +183,7 @@ All configuration is via environment variables. See [`internal/config/config.go`
 |----------|---------|-------------|
 | `PUBLIC_PORT` | `4000` | Public API port |
 | `ADMIN_PORT` | `4001` | Admin API port |
+| `ADMIN_API_TOKENS` | _(empty)_ | Comma-separated bearer tokens (each ≥ 32 bytes; two accepted at once for rotation) required on every `/admin/*` route. Empty disables the admin API (`503 admin_api_disabled`) without stopping the service. |
 | `GRPC_PORT` | `4002` | gRPC port |
 | `LOG_LEVEL` | `info` | Log level |
 | `POSTGRES_PORT` | `5432` | PostgreSQL port |

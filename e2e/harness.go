@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -209,7 +210,7 @@ func setupSuite(ctx context.Context) (*Env, func(), error) {
 		PublicBaseURL:     publicBaseURL,
 		AdminBaseURL:      adminBaseURL,
 		GRPCAddr:          grpcAddr,
-		HTTPClient:        &http.Client{Timeout: 15 * time.Second},
+		HTTPClient:        newAdminAuthClient(adminBaseURL, fakeAdminAPIToken),
 		EmailSink:         res.emailMock,
 		HIBP:              res.hibpMock,
 		PostgresDSN:       postgresDSN,
@@ -343,6 +344,7 @@ func baseSUTEnv(hibpPort, emailPort int, issuerURL string) map[string]string {
 		"JWT_PRIVATE_KEY_PATH":    containerKeyPath,
 		"JWT_ALGORITHM":           "ES256",
 		"SYSTEM_SECRETS":          fakeSystemSecret,
+		"ADMIN_API_TOKENS":        fakeAdminAPIToken,
 		"PASSWORD_PEPPER":         fakePasswordPepper,
 		"CORS_ALLOWED_ORIGINS":    fakeCORSOrigin,
 		"HIBP_API_URL":            fmt.Sprintf("http://%s:%d/range/", testcontainers.HostInternal, hibpPort),
@@ -723,4 +725,31 @@ func repoRoot() (string, error) {
 		return "", fmt.Errorf("resolve caller for repo root")
 	}
 	return filepath.Dir(filepath.Dir(file)), nil
+}
+
+// adminTokenTransport attaches the admin API bearer token to requests bound
+// for the admin port (ADMIN_API_TOKENS, GH-524) unless the request already
+// carries its own Authorization header.
+type adminTokenTransport struct {
+	base      http.RoundTripper
+	adminHost string
+	token     string
+}
+
+func (t *adminTokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.token != "" && req.URL.Host == t.adminHost && req.Header.Get("Authorization") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	return t.base.RoundTrip(req)
+}
+
+// newAdminAuthClient returns the shared harness HTTP client; requests to
+// adminBaseURL automatically carry the admin bearer token (when non-empty).
+func newAdminAuthClient(adminBaseURL, token string) *http.Client {
+	client := &http.Client{Timeout: 15 * time.Second}
+	if u, err := url.Parse(adminBaseURL); err == nil && u.Host != "" {
+		client.Transport = &adminTokenTransport{base: http.DefaultTransport, adminHost: u.Host, token: token}
+	}
+	return client
 }

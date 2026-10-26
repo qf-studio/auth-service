@@ -246,3 +246,31 @@ func TestNegative_PrometheusMetricsParseAsPrometheusFormat(t *testing.T) {
 	require.True(t, sawType, "expected at least one # TYPE line in prometheus output")
 	require.True(t, sawSample, "expected at least one metric sample line in prometheus output")
 }
+
+// TestNegative_AdminAPIRequiresBearerToken (GH-524) proves the admin port
+// rejects a request with no credential or a wrong one and accepts the
+// configured ADMIN_API_TOKENS value, while /health stays open.
+func TestNegative_AdminAPIRequiresBearerToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode (requires Docker)")
+	}
+
+	// A bare client: suite.HTTPClient would inject the valid token.
+	bare := &http.Client{Timeout: 15 * time.Second}
+	get := func(path, authz string) int {
+		req, err := http.NewRequest(http.MethodGet, suite.AdminBaseURL+path, http.NoBody)
+		require.NoError(t, err)
+		if authz != "" {
+			req.Header.Set("Authorization", authz)
+		}
+		resp, err := bare.Do(req)
+		require.NoError(t, err, "GET %s", path)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	require.Equal(t, http.StatusUnauthorized, get("/admin/metrics", ""), "no credential")
+	require.Equal(t, http.StatusUnauthorized, get("/admin/metrics", "Bearer wrong-wrong-wrong-wrong-wrong-wrong"), "wrong token")
+	require.Equal(t, http.StatusOK, get("/admin/metrics", "Bearer "+fakeAdminAPIToken), "valid token")
+	require.Equal(t, http.StatusOK, get("/health", ""), "/health is unauthenticated")
+}

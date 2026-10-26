@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
-	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // ── Mock Consent Service ───────────────────────────────────────────────────
@@ -123,7 +122,7 @@ func newAdminConsentRouter(consentSvc api.ConsentService, approvalSvc api.AdminC
 		Consent:        consentSvc,
 		ClientApproval: approvalSvc,
 	}
-	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	return mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 }
 
 // ── Login Request Tests ────────────────────────────────────────────────────
@@ -254,13 +253,21 @@ func TestAdminRejectConsent_Success(t *testing.T) {
 func TestAdminApproveClient_Success(t *testing.T) {
 	r := newAdminConsentRouter(nil, &mockClientApprovalService{})
 
-	w := doRequest(r, http.MethodGet, "/admin/clients/client-1/approve", nil)
+	w := doRequest(r, http.MethodPost, "/admin/clients/client-1/approve", nil)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var resp api.ClientApprovalInfo
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "client-1", resp.ClientID)
 	assert.True(t, resp.Approved)
+}
+
+func TestAdminApproveClient_GetNotAllowed(t *testing.T) {
+	r := newAdminConsentRouter(nil, &mockClientApprovalService{})
+
+	w := doRequest(r, http.MethodGet, "/admin/clients/client-1/approve", nil)
+	assert.True(t, w.Code == http.StatusNotFound || w.Code == http.StatusMethodNotAllowed,
+		"GET approve must no longer change state, got %d", w.Code)
 }
 
 func TestAdminApproveClient_NotFound(t *testing.T) {
@@ -271,7 +278,7 @@ func TestAdminApproveClient_NotFound(t *testing.T) {
 	}
 	r := newAdminConsentRouter(nil, svc)
 
-	w := doRequest(r, http.MethodGet, "/admin/clients/nonexistent/approve", nil)
+	w := doRequest(r, http.MethodPost, "/admin/clients/nonexistent/approve", nil)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
@@ -281,7 +288,7 @@ func TestAdminConsentRoutes_NotRegisteredWhenNil(t *testing.T) {
 	svc := &api.AdminServices{
 		// Consent: nil, ClientApproval: nil
 	}
-	r := mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	r := mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 
 	tests := []struct {
 		method string
@@ -291,7 +298,7 @@ func TestAdminConsentRoutes_NotRegisteredWhenNil(t *testing.T) {
 		{http.MethodPut, "/admin/oauth/auth/requests/login?login_challenge=abc&accept=true"},
 		{http.MethodGet, "/admin/oauth/auth/requests/consent?consent_challenge=abc"},
 		{http.MethodPut, "/admin/oauth/auth/requests/consent?consent_challenge=abc&accept=true"},
-		{http.MethodGet, "/admin/clients/c1/approve"},
+		{http.MethodPost, "/admin/clients/c1/approve"},
 	}
 
 	for _, tc := range tests {

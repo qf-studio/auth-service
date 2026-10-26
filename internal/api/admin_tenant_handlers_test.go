@@ -14,7 +14,6 @@ import (
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/domain"
-	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // --- Mock AdminTenantService ---
@@ -87,7 +86,7 @@ func (m *mockAdminTenantService) DeleteTenant(ctx context.Context, tenantID stri
 
 func newAdminTenantRouter(tenantSvc api.AdminTenantService) *gin.Engine {
 	svc := &api.AdminServices{Tenants: tenantSvc}
-	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	return mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 }
 
 // --- List Tenants ---

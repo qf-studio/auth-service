@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
-	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // --- Mock AdminTokenService ---
@@ -42,7 +41,7 @@ func (m *mockAdminTokenService) Introspect(ctx context.Context, token string) (*
 
 func newAdminTokenRouter(tokenSvc api.AdminTokenService) *gin.Engine {
 	svc := &api.AdminServices{Tokens: tokenSvc}
-	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	return mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 }
 
 // --- Introspect ---
@@ -140,7 +139,7 @@ func TestAdminIntrospect_ServiceError(t *testing.T) {
 
 func TestAdminRouter_NilServices(t *testing.T) {
 	svc := &api.AdminServices{}
-	router := mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	router := mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 
 	// Health should still work.
 	w := doRequest(router, http.MethodGet, "/health", nil)

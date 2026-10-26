@@ -314,6 +314,11 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Health:            healthSvc,
 		Metrics:           metricsCollector,
 		TrustedProxyCIDRs: cfg.Proxy.TrustedCIDRs,
+		APITokens:         cfg.Admin.APITokens,
+		RequestSize:       middleware.RequestSize(cfg.RequestLimit),
+	}
+	if len(cfg.Admin.APITokens) == 0 {
+		log.Error("ADMIN_API_TOKENS is not set: every /admin/* route will return 503 admin_api_disabled until it is configured")
 	}
 
 	// ── RBAC ─────────────────────────────────────────────────────────────

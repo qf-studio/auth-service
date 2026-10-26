@@ -2,6 +2,7 @@ package config
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -793,5 +794,40 @@ func BenchmarkLoad(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = Load()
+	}
+}
+
+func TestLoad_AdminAPITokens(t *testing.T) {
+	tokA := strings.Repeat("a", MinAdminTokenBytes)
+	tokB := strings.Repeat("b", MinAdminTokenBytes)
+
+	tests := []struct {
+		name    string
+		value   string
+		want    []string
+		wantErr string
+	}{
+		{"unset disables admin API", "", nil, ""},
+		{"single", tokA, []string{tokA}, ""},
+		{"two for rotation, whitespace trimmed", " " + tokA + " , " + tokB, []string{tokA, tokB}, ""},
+		{"too short", strings.Repeat("a", MinAdminTokenBytes-1), nil, "ADMIN_API_TOKENS"},
+		{"second too short", tokA + ",short", nil, "ADMIN_API_TOKENS"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := requiredEnv()
+			env["ADMIN_API_TOKENS"] = tc.value
+			setEnv(t, env)
+
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.NotContains(t, err.Error(), tokA, "error must not echo token values")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, cfg.Admin.APITokens)
+		})
 	}
 }

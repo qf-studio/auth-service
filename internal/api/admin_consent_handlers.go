@@ -166,7 +166,7 @@ func (h *AdminConsentHandlers) CreateThirdPartyClient(c *gin.Context) {
 	c.JSON(http.StatusCreated, client)
 }
 
-// ApproveClient handles GET /admin/clients/:id/approve.
+// ApproveClient handles POST /admin/clients/:id/approve.
 // Approves a third-party client, enabling it for use.
 func (h *AdminConsentHandlers) ApproveClient(c *gin.Context) {
 	clientID := c.Param("id")

@@ -4,8 +4,12 @@ info:
   version: 0.2.0
   description: >
     Administrative endpoints for the QuantFlow Studio auth service.
-    Accessible only on the admin port (4001) via network-level isolation.
-    No bearer-token auth required — access is controlled at the network layer.
+    Served on the admin port (4001), which should also be network-restricted.
+    Every `/admin/*` route requires `Authorization: Bearer <token>` where the
+    token is one of the service's `ADMIN_API_TOKENS` (two may be configured at
+    once to rotate). Missing or wrong credentials return 401; if no tokens are
+    configured every `/admin/*` route returns 503 `admin_api_disabled`.
+    Request bodies are capped by the same limit as the public API (413).
   contact:
     name: QuantFlow Studio
     url: https://quantflow.studio
@@ -14,6 +18,9 @@ info:
 servers:
   - url: http://localhost:4001
     description: Local development (admin port)
+
+security:
+  - adminBearer: []
 
 tags:
   - name: Health
@@ -311,6 +318,29 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /admin/clients/{id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/ClientID"
+
+    post:
+      operationId: approveClient
+      summary: Approve a third-party client
+      description: >
+        Activates a pending third-party client. This changes state, so it is
+        POST only (GET returns 404/405).
+      tags: [Clients]
+      responses:
+        "200":
+          description: Client approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientApprovalResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   # ── Token Management ─────────────────────────────────────────────
 
   /admin/tokens/introspect:
@@ -391,6 +421,12 @@ paths:
                 type: string
 
 components:
+  securitySchemes:
+    adminBearer:
+      type: http
+      scheme: bearer
+      description: One of the service's ADMIN_API_TOKENS (each at least 32 bytes).
+
   parameters:
     Limit:
       name: limit
@@ -450,6 +486,27 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    ClientApprovalResponse:
+      type: object
+      required: [client_id, client_name, approved]
+      properties:
+        client_id:
+          type: string
+          description: Client identifier
+        client_name:
+          type: string
+          description: Human-readable client name
+        approved:
+          type: boolean
+          description: Whether the client is approved
+        approved_at:
+          type: string
+          format: date-time
+          description: When the client was approved
+        approved_by:
+          type: string
+          description: Admin who approved the client
+
     # ── Shared ───────────────────────────────────────────────────
 
     HealthResponse:

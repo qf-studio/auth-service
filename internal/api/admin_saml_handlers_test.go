@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
-	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // --- Mock AdminSAMLService ---
@@ -139,7 +138,7 @@ func (m *mockAdminSAMLService) GetAttributeMapping(ctx context.Context, idpID st
 
 func newAdminSAMLRouter(samlSvc api.AdminSAMLService) *gin.Engine {
 	svc := &api.AdminServices{SAML: samlSvc}
-	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	return mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 }
 
 // --- List IdPs ---
@@ -484,7 +483,7 @@ func TestAdminSAMLRoutes_NotRegisteredWhenNil(t *testing.T) {
 	svc := &api.AdminServices{
 		// SAML is nil
 	}
-	r := mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	r := mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 
 	tests := []struct {
 		method string

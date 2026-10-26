@@ -140,6 +140,7 @@ All secrets are stored in `.env.<environment>` files on the host:
 | `REDIS_PASSWORD` | Cache password | Manual — use a strong random password |
 | `PASSWORD_PEPPER` | Argon2id HMAC pepper | `./scripts/generate-secret.sh --name PASSWORD_PEPPER` |
 | `SYSTEM_SECRETS` | Client credential secrets (comma-separated, newest first) | `./scripts/generate-secret.sh --name SYSTEM_SECRETS` |
+| `ADMIN_API_TOKENS` | Bearer tokens for `/admin/*` on :4001 (comma-separated, each ≥ 32 bytes) | `./scripts/generate-secret.sh --name ADMIN_API_TOKENS --bytes 32 --format hex` |
 | `JWT_PRIVATE_KEY_PATH` | Path to PEM private key | `./scripts/generate-keys.sh` |
 
 Security practices:
@@ -147,6 +148,8 @@ Security practices:
 - Set file permissions: `chmod 600 .env.production`
 - The private key file should be mode 600, owned by the service user
 - Rotate `SYSTEM_SECRETS` by prepending a new value (comma-separated, newest first)
+- Rotate `ADMIN_API_TOKENS` with two values live at once: deploy `<new>,<old>`, switch admin callers (and `SMOKE_ADMIN_TOKEN`) to `<new>`, then deploy `<new>` alone
+- **Deployment order (GH-524):** every `/admin/*` route requires `Authorization: Bearer <token>`. Add `ADMIN_API_TOKENS` to the task definition / `.env.<environment>` **before** deploying this release. If it is unset the service still starts (public API unaffected) and logs one `ERROR`, but every `/admin/*` route returns `503 admin_api_disabled`. `/health` stays unauthenticated
 
 ### Phase 3: HashiCorp Vault (Upgrade Path)
 
@@ -377,6 +380,7 @@ Exit code `0` means every smoke check passed; non-zero means at least one failed
 |----------|----------|---------|
 | `SMOKE_BASE_URL` | Yes | Public API base URL to verify (e.g. `http://host:4000` or `https://auth.quantflow.studio`). |
 | `SMOKE_ADMIN_URL` | No | Admin API base URL. When reachable, enables the token-introspection leg of the golden-path check. Omit for deployments where the admin port isn't network-reachable from wherever the smoke image runs. |
+| `SMOKE_ADMIN_TOKEN` | With `SMOKE_ADMIN_URL` | One of the deployment's `ADMIN_API_TOKENS`, sent as the bearer credential on the introspection leg. |
 | `SMOKE_GRPC_ADDR` | No | `host:port` for the gRPC service. When set, exercises `ValidateToken` via `pkg/authclient`. Omit to skip the gRPC leg. |
 
 ### Full Example
@@ -385,6 +389,7 @@ Exit code `0` means every smoke check passed; non-zero means at least one failed
 docker run --rm \
   -e SMOKE_BASE_URL=https://auth.quantflow.studio \
   -e SMOKE_ADMIN_URL=http://127.0.0.1:4001 \
+  -e SMOKE_ADMIN_TOKEN=<one of ADMIN_API_TOKENS> \
   -e SMOKE_GRPC_ADDR=auth.quantflow.studio:4002 \
   ghcr.io/qf-studio/auth-service-smoke:v0.72.0
 ```
@@ -421,6 +426,9 @@ scrape_configs:
   - job_name: 'auth-service'
     scrape_interval: 15s
     metrics_path: '/admin/metrics/prometheus'
+    authorization:                      # /admin/* requires an ADMIN_API_TOKENS value
+      type: Bearer
+      credentials_file: /etc/prometheus/auth-service-admin-token
     static_configs:
       - targets: ['auth-service:4001']
         labels:
@@ -628,7 +636,7 @@ docker compose -f deployments/docker-compose.<env>.yml logs postgres
 docker compose -f deployments/docker-compose.<env>.yml exec postgres psql -U <user> -d <db>
 
 # Check connection pool usage (from metrics)
-curl -s http://localhost:4001/admin/metrics | jq '.db_pool'
+curl -s -H "Authorization: Bearer $ADMIN_API_TOKEN" http://localhost:4001/admin/metrics | jq '.db_pool'
 
 # Verify migrations applied
 docker compose exec postgres psql -U <user> -d <db> -c 'SELECT * FROM schema_migrations ORDER BY version DESC LIMIT 5;'
@@ -692,7 +700,7 @@ ls -la .deploy-state/
 docker stats
 
 # Check auth-service request latency (from Prometheus)
-curl -s http://localhost:4001/admin/metrics/prometheus | grep http_request_duration
+curl -s -H "Authorization: Bearer $ADMIN_API_TOKEN" http://localhost:4001/admin/metrics/prometheus | grep http_request_duration
 
 # Check database slow queries
 docker compose exec postgres psql -U <user> -d <db> -c 'SELECT * FROM pg_stat_activity WHERE state != $$idle$$ ORDER BY duration DESC;'
@@ -711,6 +719,7 @@ Full list of configuration variables. See `.env.staging.example` and `.env.produ
 | `APP_ENV` | Environment name | `staging` | `production` |
 | `PUBLIC_PORT` | Public API port | `4000` | `4000` |
 | `ADMIN_PORT` | Admin API port | `4001` | `4001` |
+| `ADMIN_API_TOKENS` | Comma-separated bearer tokens (each ≥ 32 bytes; two accepted at once for rotation) required on every `/admin/*` route. Empty disables the admin API (`503 admin_api_disabled`); the service still starts. Add it **before** deploying the release that introduces it. | *(empty — admin API disabled)* | *(required in practice)* |
 | `LOG_LEVEL` | Log verbosity | `debug` | `info` |
 
 ### Database
