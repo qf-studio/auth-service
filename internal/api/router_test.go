@@ -357,6 +357,26 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+func TestLogin_AccountThrottled(t *testing.T) {
+	authSvc := &mockAuthService{
+		loginFn: func(_ context.Context, _, _ string) (*api.AuthResult, error) {
+			return nil, fmt.Errorf("too many failed login attempts: %w", api.ErrRateLimited)
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{
+		"email":    "alice@example.com",
+		"password": "correct-password-here!!",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/login", body)
+
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeRateLimitExceded, resp.Code)
+}
+
 // --- Password reset tests ---
 
 func TestPasswordReset_AlwaysAccepted(t *testing.T) {
@@ -782,6 +802,27 @@ func TestRequestEmailChange_Conflict(t *testing.T) {
 	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
 
 	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+func TestRequestEmailChange_RevertWindowOpen(t *testing.T) {
+	authSvc := &mockAuthService{
+		requestEmailChangeFn: func(_ context.Context, _, _, _ string) (*api.EmailChangeResult, error) {
+			return nil, fmt.Errorf("previous email change can still be reverted: %w", api.ErrEmailChangeRevertWindowOpen)
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "third@example.com",
+		"password":  "correct-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeEmailChangeRevertWindowOpen, resp.Code)
 }
 
 func TestRequestEmailChange_RateLimited(t *testing.T) {

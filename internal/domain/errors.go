@@ -26,6 +26,11 @@ const (
 	// EMAIL_ENABLED=true but the confirm/revert URL bases haven't been
 	// configured (GH-518).
 	CodeEmailChangeUnconfigured = "email_change_unconfigured"
+
+	// CodeEmailChangeRevertWindowOpen is returned by POST /auth/me/email
+	// while a previously confirmed email change can still be reverted from
+	// the old address.
+	CodeEmailChangeRevertWindowOpen = "email_change_revert_window_open"
 )
 
 // ErrorResponse is the standard JSON error envelope returned by all API endpoints.

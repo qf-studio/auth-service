@@ -292,6 +292,11 @@ var (
 	// while EMAIL_ENABLED=true but the email-change confirm/revert URL
 	// bases haven't been configured.
 	ErrEmailChangeUnconfigured = errors.New("email change unconfigured")
+
+	// ErrEmailChangeRevertWindowOpen indicates POST /auth/me/email was called
+	// while a previously confirmed email change is still inside its revert
+	// window. Maps to 409.
+	ErrEmailChangeRevertWindowOpen = errors.New("email change revert window open")
 )
 
 // handleServiceError maps service-layer sentinel errors to HTTP error responses.
@@ -301,6 +306,8 @@ func handleServiceError(c *gin.Context, err error) {
 		domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized, err.Error())
 	case errors.Is(err, ErrNotFound):
 		domain.RespondWithError(c, http.StatusNotFound, domain.CodeNotFound, err.Error())
+	case errors.Is(err, ErrEmailChangeRevertWindowOpen):
+		domain.RespondWithError(c, http.StatusConflict, domain.CodeEmailChangeRevertWindowOpen, err.Error())
 	case errors.Is(err, ErrConflict):
 		domain.RespondWithError(c, http.StatusConflict, domain.CodeBadRequest, err.Error())
 	case errors.Is(err, ErrForbidden):

@@ -127,6 +127,10 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		emailSender = email.NewConsoleSender(log)
 	}
 
+	// Per-account login lockout (tenant + email), backed by Redis and
+	// configured by RATE_LIMIT_MAX_FAILED_ATTEMPTS / RATE_LIMIT_LOCKOUT_DURATION.
+	loginThrottle := middleware.NewAccountRateLimiter(redisClient, cfg.Rate)
+
 	authSvc := auth.NewService(auth.ServiceDeps{
 		Redis:                     redisClient,
 		Logger:                    log,
@@ -143,6 +147,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		EmailChangeConfirmURLBase: cfg.Email.EmailChangeConfirmURLBase,
 		EmailChangeRevertURLBase:  cfg.Email.EmailChangeRevertURLBase,
 		RefreshTokenTTL:           cfg.JWT.RefreshTokenTTL,
+		LoginThrottle:             loginThrottle,
 	})
 
 	// ── Session ──────────────────────────────────────────────────────────
@@ -173,6 +178,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("mfa service init failed: %w", err)
 	}
+
+	// Self-service MFA disable re-checks the current password.
+	mfaSvc.SetPasswordVerifier(hasher)
 
 	// Inject MFA checker into auth service to enable MFA challenge on login.
 	authSvc.SetMFAChecker(mfaSvc)

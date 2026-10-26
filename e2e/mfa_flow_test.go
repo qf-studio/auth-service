@@ -58,7 +58,8 @@ func TestMFAFlow_SetupConfirmChallengeVerifyBackupCode(t *testing.T) {
 
 	// 3. Confirm: compute the current TOTP code from the enrolled secret and
 	// confirm enrollment, capturing backup codes for step 7.
-	confirmCode, err := totp.GenerateCode(enrollment.Secret, time.Now())
+	confirmAt := time.Now()
+	confirmCode, err := totp.GenerateCode(enrollment.Secret, confirmAt)
 	require.NoError(t, err, "generate confirm TOTP code")
 
 	var confirm mfaConfirmResponse
@@ -73,7 +74,12 @@ func TestMFAFlow_SetupConfirmChallengeVerifyBackupCode(t *testing.T) {
 	require.NotEmpty(t, challenge.MFAToken, "login must return an mfa_token")
 	require.Empty(t, challenge.AccessToken, "no access token should be issued before the MFA challenge is completed")
 
-	// 5. Complete the challenge with a freshly computed TOTP code.
+	// 5. Complete the challenge with a freshly computed TOTP code. Each
+	// code is accepted once per 30 s time step and the confirm step above
+	// already used the code it was generated in, so wait for the next step.
+	for time.Now().Unix()/30 == confirmAt.Unix()/30 {
+		time.Sleep(250 * time.Millisecond)
+	}
 	verifyCode, err := totp.GenerateCode(enrollment.Secret, time.Now())
 	require.NoError(t, err, "generate verify TOTP code")
 

@@ -24,6 +24,8 @@ type mockMFAService struct {
 	verifyBackupCodeFn   func(ctx context.Context, userID, code string) error
 	completeMFALoginFn   func(ctx context.Context, mfaToken, code, codeType string) (*api.AuthResult, error)
 	disableFn            func(ctx context.Context, userID string) error
+
+	disableWithVerificationFn func(ctx context.Context, userID, password, code, codeType string) error
 	getStatusFn          func(ctx context.Context, userID string) (*api.MFAStatusResponse, error)
 	isMFAEnabledFn       func(ctx context.Context, userID string) (bool, error)
 	generateMFATokenFn   func(ctx context.Context, userID string) (string, error)
@@ -73,6 +75,13 @@ func (m *mockMFAService) CompleteMFALogin(ctx context.Context, mfaToken, code, c
 func (m *mockMFAService) Disable(ctx context.Context, userID string) error {
 	if m.disableFn != nil {
 		return m.disableFn(ctx, userID)
+	}
+	return nil
+}
+
+func (m *mockMFAService) DisableWithVerification(ctx context.Context, userID, password, code, codeType string) error {
+	if m.disableWithVerificationFn != nil {
+		return m.disableWithVerificationFn(ctx, userID, password, code, codeType)
 	}
 	return nil
 }
@@ -252,23 +261,61 @@ func TestMFAVerify_MissingFields(t *testing.T) {
 
 // ── MFA Disable Tests ────────────────────────────────────────────────────────
 
-func TestMFADisable_Success(t *testing.T) {
-	router := newMFATestRouter(&mockMFAService{})
+func TestMFADisable(t *testing.T) {
+	validBody := map[string]string{"password": "current-password-123", "code": "123456"}
 
-	w := doRequest(router, http.MethodPost, "/auth/mfa/disable", nil, "X-User-ID", "user-1")
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestMFADisable_NotEnrolled(t *testing.T) {
-	mfaSvc := &mockMFAService{
-		disableFn: func(_ context.Context, _ string) error {
-			return api.ErrNotFound
+	tests := []struct {
+		name       string
+		body       interface{}
+		svcErr     error
+		wantStatus int
+		wantCalled bool
+	}{
+		{name: "no body", body: nil, wantStatus: http.StatusBadRequest},
+		{name: "missing code", body: map[string]string{"password": "current-password-123"}, wantStatus: http.StatusBadRequest},
+		{name: "missing password", body: map[string]string{"code": "123456"}, wantStatus: http.StatusBadRequest},
+		{name: "valid totp", body: validBody, wantStatus: http.StatusOK, wantCalled: true},
+		{
+			name:       "valid backup code",
+			body:       map[string]string{"password": "current-password-123", "code": "abcd-1234-efgh-5678", "code_type": "backup"},
+			wantStatus: http.StatusOK,
+			wantCalled: true,
 		},
+		{name: "wrong code", body: validBody, svcErr: api.ErrUnauthorized, wantStatus: http.StatusUnauthorized, wantCalled: true},
+		{name: "wrong password", body: validBody, svcErr: api.ErrInvalidPassword, wantStatus: http.StatusForbidden, wantCalled: true},
+		{name: "too many attempts", body: validBody, svcErr: api.ErrForbidden, wantStatus: http.StatusForbidden, wantCalled: true},
+		{name: "not enrolled", body: validBody, svcErr: api.ErrNotFound, wantStatus: http.StatusNotFound, wantCalled: true},
 	}
-	router := newMFATestRouter(mfaSvc)
 
-	w := doRequest(router, http.MethodPost, "/auth/mfa/disable", nil, "X-User-ID", "user-1")
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var called bool
+			var gotPassword, gotCode, gotType string
+			mfaSvc := &mockMFAService{
+				disableWithVerificationFn: func(_ context.Context, userID, pwd, code, codeType string) error {
+					called = true
+					assert.Equal(t, "user-1", userID)
+					gotPassword, gotCode, gotType = pwd, code, codeType
+					return tt.svcErr
+				},
+				disableFn: func(_ context.Context, _ string) error {
+					t.Fatal("self-service disable must not call the unverified Disable")
+					return nil
+				},
+			}
+			router := newMFATestRouter(mfaSvc)
+
+			w := doRequest(router, http.MethodPost, "/auth/mfa/disable", tt.body, "X-User-ID", "user-1")
+			assert.Equal(t, tt.wantStatus, w.Code)
+			assert.Equal(t, tt.wantCalled, called)
+			if called {
+				body := tt.body.(map[string]string)
+				assert.Equal(t, body["password"], gotPassword)
+				assert.Equal(t, body["code"], gotCode)
+				assert.Equal(t, body["code_type"], gotType)
+			}
+		})
+	}
 }
 
 // ── MFA Status Tests ─────────────────────────────────────────────────────────

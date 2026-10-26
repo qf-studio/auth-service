@@ -16,6 +16,10 @@ const (
 	// mfaFailedPrefix is the Redis key prefix for failed MFA attempt counters.
 	mfaFailedPrefix = "mfa:failed:"
 
+	// mfaUsedPrefix is the Redis key prefix for accepted TOTP time steps
+	// (mfa:used:<user>:<step>), which make each code single-use.
+	mfaUsedPrefix = "mfa:used:"
+
 	// webauthnSessionPrefix is the Redis key prefix for WebAuthn ceremony session data.
 	webauthnSessionPrefix = "mfa:webauthn:session:"
 
@@ -149,6 +153,29 @@ func (s *RedisMFAStore) GetFailedAttempts(ctx context.Context, userID string) (i
 	}
 
 	return count, nil
+}
+
+// FailedAttemptsExceeded reports whether the user's failed-attempt counter is
+// at or over the configured maximum. Callers check this before validating a
+// code so that a correct code is not accepted once the limit is reached.
+func (s *RedisMFAStore) FailedAttemptsExceeded(ctx context.Context, userID string) (bool, error) {
+	count, err := s.GetFailedAttempts(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	return count >= s.maxAttempts, nil
+}
+
+// MarkTOTPUsed records, with SETNX, that the user's TOTP code for the given
+// time step has been accepted. Returns false if the step was already recorded.
+// The key expires after ttl, which must outlast the step itself.
+func (s *RedisMFAStore) MarkTOTPUsed(ctx context.Context, userID string, step uint64, ttl time.Duration) (bool, error) {
+	key := mfaUsedPrefix + userID + ":" + strconv.FormatUint(step, 10)
+	ok, err := s.client.SetNX(ctx, key, 1, ttl).Result()
+	if err != nil {
+		return false, fmt.Errorf("mark totp code used: %w", err)
+	}
+	return ok, nil
 }
 
 // ClearFailedAttempts resets the failed attempt counter for a user (e.g. after successful MFA).
