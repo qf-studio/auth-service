@@ -21,7 +21,7 @@ Authentication and authorization service for the QuantFlow Studio ecosystem. Ser
 - **DPoP Support** — Demonstrating Proof-of-Possession token binding
 - **MFA** — TOTP with backup codes
 - **Social Login** — Google, GitHub, Apple OAuth providers
-- **OIDC Provider** — OpenID Connect discovery and ID tokens
+- **OIDC Provider** — OpenID Connect discovery and ID tokens; PKCE (S256) required for every client, requested scopes validated against the client and `OIDC_SUPPORTED_SCOPES`, scope-gated `/userinfo`
 - **SAML SSO** — Service Provider integration
 - **Multi-Tenancy** — Subdomain and header-based tenant resolution
 

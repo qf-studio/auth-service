@@ -84,7 +84,17 @@ func (h *OIDCHandlers) UserInfo(c *gin.Context) {
 		return
 	}
 
-	info, err := h.oidc.GetUserInfo(c.Request.Context(), userID)
+	// Scopes come from the verified access token, placed in the context by
+	// AuthMiddleware. A missing claims entry yields no scopes, so the
+	// service rejects the call for lack of openid.
+	var scopes []string
+	if v, ok := c.Get("claims"); ok {
+		if claims, ok := v.(*domain.TokenClaims); ok {
+			scopes = claims.Scopes
+		}
+	}
+
+	info, err := h.oidc.GetUserInfo(c.Request.Context(), userID, scopes)
 	if err != nil {
 		handleServiceError(c, err)
 		return

@@ -220,8 +220,10 @@ type OIDCProviderService interface {
 	Authorize(ctx context.Context, req *AuthorizeRequest) (*AuthorizeResponse, error)
 	// ExchangeCode exchanges an authorization code for tokens.
 	ExchangeCode(ctx context.Context, req *CodeExchangeRequest) (*OIDCTokenResponse, error)
-	// GetUserInfo returns claims about the authenticated user.
-	GetUserInfo(ctx context.Context, userID string) (*OIDCUserInfoResponse, error)
+	// GetUserInfo returns claims about the authenticated user, projected by
+	// the scopes on the presented access token. It returns
+	// ErrInsufficientScope when scopes does not include openid.
+	GetUserInfo(ctx context.Context, userID string, scopes []string) (*OIDCUserInfoResponse, error)
 }
 
 // --- Consent flow types ---

@@ -309,6 +309,7 @@ func TestConsentService_AcceptConsent_WithoutRemember_DoesNotPersistGrant(t *tes
 		ClientID:    clientID.String(),
 		RedirectURI: "https://app.example.com/callback",
 		State:       "state-c2",
+		Scopes:      []string{"openid", "profile"},
 		ExpiresAt:   time.Now().UTC().Add(time.Minute),
 	}
 	seedConsentRequest(t, store, cr)
@@ -340,6 +341,7 @@ func TestConsentService_AcceptConsent_WithRemember_PersistsGrant(t *testing.T) {
 		Subject:     "user-1",
 		ClientID:    clientID.String(),
 		RedirectURI: "https://app.example.com/callback",
+		Scopes:      []string{"openid", "profile", "email"},
 		ExpiresAt:   time.Now().UTC().Add(time.Minute),
 	}
 	seedConsentRequest(t, store, cr)
@@ -355,6 +357,41 @@ func TestConsentService_AcceptConsent_WithRemember_PersistsGrant(t *testing.T) {
 	assert.Equal(t, "user-1", createdGrant.UserID)
 	assert.Equal(t, clientID, createdGrant.ClientID)
 	assert.Equal(t, []string{"openid", "profile"}, createdGrant.Scopes)
+}
+
+func TestConsentService_AcceptConsent_RejectsScopeNotOnRequest(t *testing.T) {
+	grants := &fakeConsentGrantStore{
+		createFn: func(_ context.Context, _ *domain.ConsentGrant) (*domain.ConsentGrant, error) {
+			t.Fatal("no grant may be persisted for a rejected accept")
+			return nil, nil
+		},
+	}
+	svc, store := newTestConsentService(t, nil, grants)
+
+	cr := &oidc.ConsentRequest{
+		Challenge:   "cchal-escalate",
+		Subject:     "user-1",
+		ClientID:    uuid.New().String(),
+		RedirectURI: "https://app.example.com/callback",
+		Scopes:      []string{"openid", "email"},
+		ExpiresAt:   time.Now().UTC().Add(time.Minute),
+	}
+	seedConsentRequest(t, store, cr)
+
+	_, err := svc.AcceptConsent(context.Background(), "cchal-escalate", &api.AcceptConsentRequest{
+		GrantedScopes: []string{"openid", "admin"},
+		Remember:      true,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrBadRequest)
+
+	// The rejected accept must not burn the consent request: a corrected
+	// accept for a subset of the requested scopes still succeeds.
+	resp, err := svc.AcceptConsent(context.Background(), "cchal-escalate", &api.AcceptConsentRequest{
+		GrantedScopes: []string{"openid"},
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.RedirectTo)
 }
 
 func TestConsentService_AcceptConsent_NotFound(t *testing.T) {

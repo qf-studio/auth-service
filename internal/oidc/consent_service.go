@@ -202,6 +202,22 @@ func (s *ConsentService) GetConsentRequest(ctx context.Context, challenge string
 func (s *ConsentService) AcceptConsent(ctx context.Context, challenge string, req *api.AcceptConsentRequest) (*api.RedirectResponse, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
 
+	// Validate granted_scopes against the pending request before consuming
+	// it, so a malformed accept does not burn the user's consent challenge.
+	pending, err := s.store.GetConsentRequest(ctx, challenge)
+	if err != nil {
+		if errors.Is(err, ErrConsentRequestNotFound) {
+			return nil, fmt.Errorf("consent request %s: %w", challenge, api.ErrNotFound)
+		}
+		s.logger.Error("accept consent: get consent request failed", zap.Error(err))
+		return nil, fmt.Errorf("accept consent: %w", api.ErrInternalError)
+	}
+	for _, sc := range req.GrantedScopes {
+		if !containsScope(pending.Scopes, sc) {
+			return nil, fmt.Errorf("granted scope %q was not requested: %w", sc, api.ErrBadRequest)
+		}
+	}
+
 	cr, err := s.store.ConsumeConsentRequest(ctx, challenge)
 	if err != nil {
 		if errors.Is(err, ErrConsentRequestNotFound) {

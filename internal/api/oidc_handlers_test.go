@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +22,7 @@ type mockOIDCProviderService struct {
 	getDiscoveryFn func(ctx context.Context) (*api.OIDCDiscoveryResponse, error)
 	authorizeFn    func(ctx context.Context, req *api.AuthorizeRequest) (*api.AuthorizeResponse, error)
 	exchangeCodeFn func(ctx context.Context, req *api.CodeExchangeRequest) (*api.OIDCTokenResponse, error)
-	getUserInfoFn  func(ctx context.Context, userID string) (*api.OIDCUserInfoResponse, error)
+	getUserInfoFn  func(ctx context.Context, userID string, scopes []string) (*api.OIDCUserInfoResponse, error)
 }
 
 func (m *mockOIDCProviderService) GetDiscovery(ctx context.Context) (*api.OIDCDiscoveryResponse, error) {
@@ -67,9 +68,9 @@ func (m *mockOIDCProviderService) ExchangeCode(ctx context.Context, req *api.Cod
 	}, nil
 }
 
-func (m *mockOIDCProviderService) GetUserInfo(ctx context.Context, userID string) (*api.OIDCUserInfoResponse, error) {
+func (m *mockOIDCProviderService) GetUserInfo(ctx context.Context, userID string, scopes []string) (*api.OIDCUserInfoResponse, error) {
 	if m.getUserInfoFn != nil {
-		return m.getUserInfoFn(ctx, userID)
+		return m.getUserInfoFn(ctx, userID, scopes)
 	}
 	return &api.OIDCUserInfoResponse{
 		Sub:           userID,
@@ -94,6 +95,8 @@ func newOIDCTestRouter(oidcSvc api.OIDCProviderService) *gin.Engine {
 			return
 		}
 		c.Set("user_id", userID)
+		// Mirror AuthMiddleware: expose the token's scopes via the claims entry.
+		c.Set("claims", &domain.TokenClaims{Subject: userID, Scopes: strings.Fields(c.GetHeader("X-Scopes"))})
 		c.Next()
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
@@ -250,7 +253,7 @@ func TestOIDCUserInfo_Unauthenticated(t *testing.T) {
 
 func TestOIDCUserInfo_ServiceError(t *testing.T) {
 	svc := &mockOIDCProviderService{
-		getUserInfoFn: func(_ context.Context, _ string) (*api.OIDCUserInfoResponse, error) {
+		getUserInfoFn: func(_ context.Context, _ string, _ []string) (*api.OIDCUserInfoResponse, error) {
 			return nil, api.ErrNotFound
 		},
 	}
@@ -258,6 +261,35 @@ func TestOIDCUserInfo_ServiceError(t *testing.T) {
 
 	w := doRequest(router, http.MethodGet, "/userinfo", nil, "X-User-ID", "user-1")
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestOIDCUserInfo_ForwardsTokenScopes(t *testing.T) {
+	var got []string
+	svc := &mockOIDCProviderService{
+		getUserInfoFn: func(_ context.Context, userID string, scopes []string) (*api.OIDCUserInfoResponse, error) {
+			got = scopes
+			return &api.OIDCUserInfoResponse{Sub: userID}, nil
+		},
+	}
+	router := newOIDCTestRouter(svc)
+
+	w := doRequest(router, http.MethodGet, "/userinfo", nil, "X-User-ID", "user-1", "X-Scopes", "openid email")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, []string{"openid", "email"}, got)
+}
+
+func TestOIDCUserInfo_InsufficientScope(t *testing.T) {
+	svc := &mockOIDCProviderService{
+		getUserInfoFn: func(_ context.Context, _ string, _ []string) (*api.OIDCUserInfoResponse, error) {
+			return nil, api.ErrInsufficientScope
+		},
+	}
+	router := newOIDCTestRouter(svc)
+
+	w := doRequest(router, http.MethodGet, "/userinfo", nil, "X-User-ID", "user-1")
+	require.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), domain.CodeInsufficientScope)
+	assert.Contains(t, w.Header().Get("WWW-Authenticate"), "insufficient_scope")
 }
 
 // ── Routes not registered when OIDC is nil ─────────────────────────────────

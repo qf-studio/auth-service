@@ -274,6 +274,15 @@ var (
 	ErrForbidden     = errors.New("forbidden")
 	ErrInternalError = errors.New("internal error")
 
+	// ErrBadRequest indicates the request was well-formed but semantically
+	// invalid for the current state (e.g. accepting consent for a scope that
+	// was never requested). Maps to 400.
+	ErrBadRequest = errors.New("bad request")
+
+	// ErrInsufficientScope indicates the access token lacks a scope the
+	// endpoint requires (RFC 6750 §3.1). Maps to 403 insufficient_scope.
+	ErrInsufficientScope = errors.New("insufficient scope")
+
 	// ErrInvalidPassword indicates a password-verification step failed (e.g.
 	// the password supplied to POST /auth/me/email didn't match). Distinct
 	// from ErrUnauthorized: this maps to 403, not 401, since the caller is
@@ -310,6 +319,11 @@ func handleServiceError(c *gin.Context, err error) {
 		domain.RespondWithError(c, http.StatusConflict, domain.CodeEmailChangeRevertWindowOpen, err.Error())
 	case errors.Is(err, ErrConflict):
 		domain.RespondWithError(c, http.StatusConflict, domain.CodeBadRequest, err.Error())
+	case errors.Is(err, ErrBadRequest):
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, err.Error())
+	case errors.Is(err, ErrInsufficientScope):
+		c.Header("WWW-Authenticate", `Bearer error="insufficient_scope"`)
+		domain.RespondWithError(c, http.StatusForbidden, domain.CodeInsufficientScope, err.Error())
 	case errors.Is(err, ErrForbidden):
 		domain.RespondWithError(c, http.StatusForbidden, domain.CodeForbidden, err.Error())
 	case errors.Is(err, ErrInvalidPassword):

@@ -37,6 +37,24 @@ func splitScope(scope string) []string {
 	return strings.Fields(scope)
 }
 
+// grantableScopes returns the requested scopes that the server supports and
+// the client may use, de-duplicated and in request order. clientScopes is only
+// applied when non-empty: a client with no scope list is limited by the
+// server-wide supported set alone.
+func grantableScopes(requested, supported, clientScopes []string) []string {
+	var granted []string
+	for _, sc := range requested {
+		if !containsScope(supported, sc) || containsScope(granted, sc) {
+			continue
+		}
+		if len(clientScopes) > 0 && !containsScope(clientScopes, sc) {
+			continue
+		}
+		granted = append(granted, sc)
+	}
+	return granted
+}
+
 // joinScopes joins scopes back into a space-delimited string.
 func joinScopes(scopes []string) string {
 	return strings.Join(scopes, " ")
