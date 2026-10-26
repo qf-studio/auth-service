@@ -59,4 +59,8 @@ var (
 
 	// ErrDuplicateTenant indicates a tenant with the same slug already exists.
 	ErrDuplicateTenant = errors.New("duplicate tenant slug")
+
+	// ErrEmailRevertWindowActive indicates a confirmed email change is still
+	// inside its revert window, so a new email change cannot be started yet.
+	ErrEmailRevertWindowActive = errors.New("email change revert window active")
 )

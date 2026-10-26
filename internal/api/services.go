@@ -135,6 +135,7 @@ type MFAService interface {
 	VerifyBackupCode(ctx context.Context, userID, code string) error
 	CompleteMFALogin(ctx context.Context, mfaToken, code, codeType string) (*AuthResult, error)
 	Disable(ctx context.Context, userID string) error
+	DisableWithVerification(ctx context.Context, userID, password, code, codeType string) error
 	GetStatus(ctx context.Context, userID string) (*MFAStatusResponse, error)
 	IsMFAEnabled(ctx context.Context, userID string) (bool, error)
 	GenerateMFAToken(ctx context.Context, userID string) (string, error)

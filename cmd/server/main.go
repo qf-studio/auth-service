@@ -169,6 +169,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		return fmt.Errorf("mfa service init failed: %w", err)
 	}
 
+	// Self-service MFA disable re-checks the current password.
+	mfaSvc.SetPasswordVerifier(hasher)
+
 	// Inject MFA checker into auth service to enable MFA challenge on login.
 	authSvc.SetMFAChecker(mfaSvc)
 

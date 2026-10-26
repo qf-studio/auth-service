@@ -774,6 +774,27 @@ func TestRequestEmailChange_Conflict(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, w.Code)
 }
 
+func TestRequestEmailChange_RevertWindowOpen(t *testing.T) {
+	authSvc := &mockAuthService{
+		requestEmailChangeFn: func(_ context.Context, _, _, _ string) (*api.EmailChangeResult, error) {
+			return nil, fmt.Errorf("previous email change can still be reverted: %w", api.ErrEmailChangeRevertWindowOpen)
+		},
+	}
+	router := newTestRouter(authSvc, &mockTokenService{})
+
+	body := map[string]string{
+		"new_email": "third@example.com",
+		"password":  "correct-password",
+	}
+	w := doRequest(router, http.MethodPost, "/auth/me/email", body, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	var resp domain.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, domain.CodeEmailChangeRevertWindowOpen, resp.Code)
+}
+
 func TestRequestEmailChange_RateLimited(t *testing.T) {
 	authSvc := &mockAuthService{
 		requestEmailChangeFn: func(_ context.Context, _, _, _ string) (*api.EmailChangeResult, error) {

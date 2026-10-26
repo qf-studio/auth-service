@@ -797,7 +797,10 @@ func (s *Service) LogoutAll(ctx context.Context, userID string) error {
 // emailChangeRateLimit requests per emailChangeRateWindow per user — every
 // call counts against the limit, including ones that go on to fail the
 // password check, so the limit can't be bypassed by guessing passwords. A
-// second request while one is already pending replaces both pending tokens.
+// second request while an unconfirmed change is pending replaces both pending
+// tokens. While a confirmed change is still inside its revert window the
+// request is rejected with ErrEmailChangeRevertWindowOpen (409), so the revert
+// link already mailed to the previous address stays valid.
 func (s *Service) RequestEmailChange(ctx context.Context, userID, newEmail, pwd string) (*api.EmailChangeResult, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
 
@@ -854,6 +857,9 @@ func (s *Service) RequestEmailChange(ctx context.Context, userID, newEmail, pwd 
 
 	now := time.Now().UTC()
 	if err := s.users.SetPendingEmailChange(ctx, tenantID, userID, newEmail, changeToken, now.Add(emailChangeTokenTTL), revertToken, now.Add(emailRevertTokenTTL)); err != nil {
+		if errors.Is(err, storage.ErrEmailRevertWindowActive) {
+			return nil, fmt.Errorf("previous email change can still be reverted: %w", api.ErrEmailChangeRevertWindowOpen)
+		}
 		return nil, fmt.Errorf("set pending email change: %w", err)
 	}
 
@@ -1006,7 +1012,10 @@ func (s *Service) ConfirmEmailChange(ctx context.Context, token string) error {
 }
 
 // RevertEmailChange reverts a pending or already-confirmed email change
-// using the token mailed to the original address by RequestEmailChange.
+// using the token mailed to the original address by RequestEmailChange. The
+// repository also sets force_password_change, since the password was used to
+// start a change the address owner did not want, and all sessions are
+// revoked.
 func (s *Service) RevertEmailChange(ctx context.Context, token string) error {
 	tenantID := domain.TenantIDFromContext(ctx)
 

@@ -92,8 +92,17 @@ func (h *MFAHandlers) Verify(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// mfaDisableRequest is the request body for disabling MFA. Both the current
+// password and a second-factor code are required.
+type mfaDisableRequest struct {
+	Password string `json:"password"  binding:"required"`
+	Code     string `json:"code"      binding:"required"`
+	CodeType string `json:"code_type"` // "totp" (default) or "backup"
+}
+
 // Disable handles POST /auth/mfa/disable.
-// Removes MFA for the authenticated user.
+// Removes MFA for the authenticated user after verifying the current password
+// and a current TOTP code or an unused backup code.
 func (h *MFAHandlers) Disable(c *gin.Context) {
 	userID := c.GetString("user_id")
 	if userID == "" {
@@ -101,7 +110,13 @@ func (h *MFAHandlers) Disable(c *gin.Context) {
 		return
 	}
 
-	if err := h.mfa.Disable(c.Request.Context(), userID); err != nil {
+	var req mfaDisableRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid request body")
+		return
+	}
+
+	if err := h.mfa.DisableWithVerification(c.Request.Context(), userID, req.Password, req.Code, req.CodeType); err != nil {
 		handleServiceError(c, err)
 		return
 	}

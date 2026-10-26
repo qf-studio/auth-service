@@ -55,8 +55,13 @@ type UserRepository interface {
 	// SetPendingEmailChange stores a pending email change: the requested new
 	// address, a confirmation token (sent to the new address) with its
 	// expiry, and a revert token (sent to the current address) with its own,
-	// longer expiry. A second call while a change is already pending
-	// replaces both tokens and the pending address.
+	// longer expiry. A second call while an unconfirmed change is pending
+	// replaces both tokens and the pending address. Returns
+	// ErrEmailRevertWindowActive (row left unchanged) while a confirmed
+	// change still has an unexpired revert token, so that revert link stays
+	// valid; ErrNotFound if the user doesn't exist. The check and the write
+	// run under a row lock, so concurrent requests and confirmations are
+	// serialized.
 	SetPendingEmailChange(ctx context.Context, tenantID uuid.UUID, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error
 
 	// ConsumeEmailChangeToken applies a pending email change: promotes
@@ -71,8 +76,10 @@ type UserRepository interface {
 	// ConsumeEmailRevertToken reverts an email change using the token sent to
 	// the original address. If previous_email is set (the change was already
 	// confirmed), email is restored to it; either way pending_email and both
-	// tokens/expiries are cleared. Returns ErrNotFound if the token doesn't
-	// match any user, ErrTokenExpired if it matched but expired, or
+	// tokens/expiries are cleared and force_password_change is set, since the
+	// password was used to start a change the address owner did not want.
+	// Returns ErrNotFound if the token doesn't match any user,
+	// ErrTokenExpired if it matched but expired, or
 	// ErrDuplicateEmail if the previous address was claimed by another user
 	// in the meantime (the row is left unchanged in that case).
 	ConsumeEmailRevertToken(ctx context.Context, tenantID uuid.UUID, token string) (*domain.User, error)
@@ -321,18 +328,55 @@ func (r *PostgresUserRepository) AddPasswordHistory(ctx context.Context, tenantI
 }
 
 // SetPendingEmailChange stores a pending email change and its two tokens.
+// Runs SELECT ... FOR UPDATE followed by the UPDATE in one transaction so the
+// revert-window check can't race a concurrent request or confirmation.
 func (r *PostgresUserRepository) SetPendingEmailChange(ctx context.Context, tenantID uuid.UUID, userID, pendingEmail, changeToken string, changeExpiresAt time.Time, revertToken string, revertExpiresAt time.Time) error {
-	query := `UPDATE users
-		SET pending_email = $1, email_change_token = $2, email_change_token_expires_at = $3,
-		    email_revert_token = $4, email_revert_token_expires_at = $5, updated_at = $6
-		WHERE id = $7 AND tenant_id = $8 AND deleted_at IS NULL`
-
-	tag, err := r.pool.Exec(ctx, query, pendingEmail, changeToken, changeExpiresAt, revertToken, revertExpiresAt, time.Now().UTC(), userID, tenantID)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	selectQuery := `SELECT previous_email, email_revert_token, email_revert_token_expires_at
+		FROM users
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+		FOR UPDATE`
+
+	var (
+		previousEmail        *string
+		existingRevert       *string
+		existingRevertExpiry *time.Time
+	)
+	if err := tx.QueryRow(ctx, selectQuery, userID, tenantID).Scan(&previousEmail, &existingRevert, &existingRevertExpiry); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("user %s: %w", userID, ErrNotFound)
+		}
+		return fmt.Errorf("lock user for email change: %w", err)
+	}
+
+	now := time.Now().UTC()
+	// previous_email is only set by a confirmed change; while its revert
+	// token is still valid, the revert link mailed to the old address must
+	// keep working, so no new change may overwrite it.
+	if previousEmail != nil && existingRevert != nil && existingRevertExpiry != nil && now.Before(*existingRevertExpiry) {
+		return fmt.Errorf("user %s: %w", userID, ErrEmailRevertWindowActive)
+	}
+
+	// previous_email is cleared: any earlier confirmed change is past its
+	// revert window, and leaving it set would make the new revert token
+	// restore that older address instead of only canceling this request.
+	updateQuery := `UPDATE users
+		SET pending_email = $1, email_change_token = $2, email_change_token_expires_at = $3,
+		    email_revert_token = $4, email_revert_token_expires_at = $5, previous_email = NULL,
+		    updated_at = $6
+		WHERE id = $7 AND tenant_id = $8`
+
+	if _, err := tx.Exec(ctx, updateQuery, pendingEmail, changeToken, changeExpiresAt, revertToken, revertExpiresAt, now, userID, tenantID); err != nil {
 		return fmt.Errorf("set pending email change: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("user %s: %w", userID, ErrNotFound)
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit pending email change: %w", err)
 	}
 	return nil
 }
@@ -461,7 +505,7 @@ func (r *PostgresUserRepository) ConsumeEmailRevertToken(ctx context.Context, te
 			SET email = $1, previous_email = NULL, pending_email = NULL,
 			    email_change_token = NULL, email_change_token_expires_at = NULL,
 			    email_revert_token = NULL, email_revert_token_expires_at = NULL,
-			    updated_at = $2
+			    force_password_change = TRUE, updated_at = $2
 			WHERE id = $3 AND tenant_id = $4`
 		args = []interface{}{*user.PreviousEmail, now, user.ID, tenantID}
 	} else {
@@ -471,7 +515,7 @@ func (r *PostgresUserRepository) ConsumeEmailRevertToken(ctx context.Context, te
 			SET pending_email = NULL,
 			    email_change_token = NULL, email_change_token_expires_at = NULL,
 			    email_revert_token = NULL, email_revert_token_expires_at = NULL,
-			    updated_at = $1
+			    force_password_change = TRUE, updated_at = $1
 			WHERE id = $2 AND tenant_id = $3`
 		args = []interface{}{now, user.ID, tenantID}
 	}
@@ -501,6 +545,7 @@ func (r *PostgresUserRepository) ConsumeEmailRevertToken(ctx context.Context, te
 	user.EmailChangeTokenExpiresAt = nil
 	user.EmailRevertToken = nil
 	user.EmailRevertTokenExpiresAt = nil
+	user.ForcePasswordChange = true
 	user.UpdatedAt = now
 
 	return user, nil

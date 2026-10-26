@@ -75,6 +75,22 @@ type Service struct {
 	users  UserLookup
 	logger *zap.Logger
 	audit  audit.EventLogger
+
+	// passwords verifies the current password for self-service disable. Set
+	// via SetPasswordVerifier; DisableWithVerification fails closed if unset.
+	passwords PasswordVerifier
+}
+
+// PasswordVerifier checks a plaintext password against a stored hash. This is
+// a narrow interface satisfied by password.Hasher.
+type PasswordVerifier interface {
+	Verify(password, hash string) (bool, error)
+}
+
+// SetPasswordVerifier injects the password verifier used by
+// DisableWithVerification.
+func (s *Service) SetPasswordVerifier(pv PasswordVerifier) {
+	s.passwords = pv
 }
 
 // NewService creates a new MFA service. Returns an error if cfg is invalid
@@ -325,7 +341,60 @@ func (s *Service) CompleteMFALogin(ctx context.Context, mfaToken, code, codeType
 	return result, nil
 }
 
-// Disable removes MFA for a user (deletes secret and backup codes).
+// DisableWithVerification is the self-service disable path: it requires the
+// user's current password and a second-factor proof (a current TOTP code, or
+// an unused backup code when codeType is "backup") before removing MFA. Both
+// are checked server-side; a wrong password counts against the same per-user
+// failed-attempt counter as MFA login. Admin resets use Disable directly.
+func (s *Service) DisableWithVerification(ctx context.Context, userID, pwd, code, codeType string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	if s.passwords == nil {
+		s.logger.Error("mfa disable requested but no password verifier is configured")
+		return fmt.Errorf("password verifier not configured: %w", api.ErrInternalError)
+	}
+
+	user, err := s.users.FindByID(ctx, tenantID, userID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("user not found: %w", api.ErrUnauthorized)
+		}
+		return fmt.Errorf("look up user for mfa disable: %w", err)
+	}
+
+	match, err := s.passwords.Verify(pwd, user.PasswordHash)
+	if err != nil {
+		return fmt.Errorf("verify password: %w", err)
+	}
+	if !match {
+		if _, recErr := s.tokens.RecordFailedAttempt(ctx, userID); recErr != nil {
+			if errors.Is(recErr, storage.ErrMFAMaxAttempts) {
+				return fmt.Errorf("too many failed attempts: %w", api.ErrForbidden)
+			}
+			s.logger.Error("failed to record mfa attempt", zap.Error(recErr))
+		}
+		return fmt.Errorf("password incorrect: %w", api.ErrInvalidPassword)
+	}
+
+	switch codeType {
+	case "totp", "":
+		if err := s.VerifyTOTP(ctx, userID, code); err != nil {
+			return err
+		}
+	case "backup":
+		if err := s.VerifyBackupCode(ctx, userID, code); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported code type %q: %w", codeType, api.ErrUnauthorized)
+	}
+
+	return s.Disable(ctx, userID)
+}
+
+// Disable removes MFA for a user (deletes secret and backup codes) without
+// any second-factor check. Used by the admin reset endpoint; the
+// self-service endpoint goes through DisableWithVerification.
 func (s *Service) Disable(ctx context.Context, userID string) error {
 	tenantID := domain.TenantIDFromContext(ctx)
 
