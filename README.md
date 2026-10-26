@@ -1,6 +1,6 @@
 # Auth Service
 
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![NIST SP 800-63-4](https://img.shields.io/badge/NIST-AAL2-blue)](https://pages.nist.gov/800-63-4/)
 
@@ -29,7 +29,7 @@ Authentication and authorization service for the QuantFlow Studio ecosystem. Ser
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.26+
 - PostgreSQL 15+
 - Redis 7+
 - Docker & Docker Compose (optional)
@@ -276,7 +276,7 @@ go build -o bin/auth-service cmd/server/main.go
 
 | Component | Technology |
 |-----------|-----------|
-| Language | Go 1.25+ |
+| Language | Go 1.26+ |
 | Framework | Gin |
 | Database | PostgreSQL 15+ (pgx/v5) |
 | Cache | Redis 7+ (go-redis/v9) |
