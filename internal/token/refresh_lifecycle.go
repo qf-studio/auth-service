@@ -30,6 +30,9 @@ import (
 //     at or before it is invalid. Setting it revokes all of a subject's
 //     refresh tokens in O(1) without a per-user index. TTL = refresh TTL,
 //     after which every older record has expired anyway.
+//   - `rt_fam_revoked:<family>`: marks a refresh-token family (a token and every
+//     token rotated from it) revoked, ending that chain without touching the
+//     subject's other sessions. TTL = refresh TTL.
 //   - `rt_used:<key>`: written when a record is rotated. Presenting a rotated
 //     token again (outside a short leeway for client retries) revokes every
 //     refresh token of that subject, so a copied token cannot keep a parallel
@@ -37,6 +40,8 @@ import (
 const (
 	refreshEpochKeyPrefix = "rt_epoch:"
 	refreshUsedKeyPrefix  = "rt_used:"
+
+	refreshFamilyRevokedKeyPrefix = "rt_fam_revoked:"
 
 	// refreshReuseLeeway is how long after rotation a second presentation of
 	// the same refresh token is treated as a benign client retry (rejected,
@@ -63,6 +68,20 @@ func (s *Service) RevokeAllRefreshTokens(ctx context.Context, subject string) er
 	now := strconv.FormatInt(time.Now().UnixNano(), 10)
 	if err := s.redis.Set(ctx, refreshEpochKeyPrefix+subject, now, s.cfg.RefreshTokenTTL).Err(); err != nil {
 		return fmt.Errorf("revoke all refresh tokens: %w", err)
+	}
+	return nil
+}
+
+// RevokeRefreshFamily invalidates every refresh token of one family, rotated
+// successors included, and leaves the subject's other families untouched. The
+// marker lives for the refresh-token TTL, after which every member has
+// expired anyway.
+func (s *Service) RevokeRefreshFamily(ctx context.Context, familyID string) error {
+	if familyID == "" {
+		return fmt.Errorf("revoke refresh family: empty family id")
+	}
+	if err := s.redis.Set(ctx, refreshFamilyRevokedKeyPrefix+familyID, "1", s.cfg.RefreshTokenTTL).Err(); err != nil {
+		return fmt.Errorf("revoke refresh family: %w", err)
 	}
 	return nil
 }
@@ -148,6 +167,17 @@ func (s *Service) lookupRefreshToken(ctx context.Context, rawToken string) (stri
 		// Revoked by a revoke-all; drop the record so it is not checked again.
 		_ = s.redis.Del(ctx, refreshKeyPrefix+keyEncoded).Err()
 		return "", refreshTokenData{}, fmt.Errorf("refresh token revoked")
+	}
+
+	if data.FamilyID != "" {
+		n, err := s.redis.Exists(ctx, refreshFamilyRevokedKeyPrefix+data.FamilyID).Result()
+		if err != nil {
+			return "", refreshTokenData{}, fmt.Errorf("lookup refresh family: %w", err)
+		}
+		if n > 0 {
+			_ = s.redis.Del(ctx, refreshKeyPrefix+keyEncoded).Err()
+			return "", refreshTokenData{}, fmt.Errorf("refresh token revoked")
+		}
 	}
 	return keyEncoded, data, nil
 }

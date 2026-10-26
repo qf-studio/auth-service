@@ -186,14 +186,14 @@ func (s *Service) SetRefreshTokenStore(store RefreshTokenStore) {
 // omitting it (or passing an empty client audience) falls back to the
 // service-wide JWT_AUDIENCE.
 func (s *Service) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", "", audience)
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", "", "", audience)
 }
 
 // IssueTokenPairWithDPoP generates a DPoP-bound access/refresh token pair.
 // The jktThumbprint is embedded as the cnf.jkt claim in the access token.
 // audience behaves as documented on IssueTokenPair.
 func (s *Service) IssueTokenPairWithDPoP(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, audience ...string) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, jktThumbprint, "", audience)
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, jktThumbprint, "", "", audience)
 }
 
 // IssueTokenPairForClient generates an access/refresh token pair for a
@@ -204,7 +204,7 @@ func (s *Service) IssueTokenPairWithDPoP(ctx context.Context, subject string, ro
 // JWT_AUDIENCE the way a refresh with no client context does. audience
 // behaves as documented on IssueTokenPair.
 func (s *Service) IssueTokenPairForClient(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error) {
-	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", clientID, audience)
+	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", clientID, "", audience)
 }
 
 // IssueAccessTokenForClient generates an access token only, with no refresh
@@ -212,25 +212,29 @@ func (s *Service) IssueTokenPairForClient(ctx context.Context, subject string, r
 // code-exchange grant uses it when offline_access was not granted (OIDC Core
 // §11). audience behaves as documented on IssueTokenPair.
 func (s *Service) IssueAccessTokenForClient(_ context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error) {
-	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, "", audience)
+	accessToken, jti, exp, err := s.issueAccessToken(subject, roles, scopes, clientType, "", audience)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
 	}
 
 	return &api.AuthResult{
-		AccessToken: accessToken,
-		TokenType:   "Bearer",
-		ExpiresIn:   int(s.cfg.AccessTokenTTL.Seconds()),
+		AccessToken:          accessToken,
+		TokenType:            "Bearer",
+		ExpiresIn:            int(s.cfg.AccessTokenTTL.Seconds()),
+		AccessTokenID:        jti,
+		AccessTokenExpiresAt: exp,
 	}, nil
 }
 
-func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint, clientID string, audience []string) (*api.AuthResult, error) {
-	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, jktThumbprint, audience)
+// issueTokenPair mints an access/refresh pair. familyID is the refresh-token
+// family to continue (rotation); empty starts a new family.
+func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint, clientID, familyID string, audience []string) (*api.AuthResult, error) {
+	accessToken, jti, exp, err := s.issueAccessToken(subject, roles, scopes, clientType, jktThumbprint, audience)
 	if err != nil {
 		return nil, fmt.Errorf("issue access token: %w", err)
 	}
 
-	refreshToken, err := s.issueRefreshToken(ctx, subject, clientID, jktThumbprint)
+	refreshToken, familyID, err := s.issueRefreshToken(ctx, subject, clientID, jktThumbprint, familyID)
 	if err != nil {
 		return nil, fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -241,10 +245,13 @@ func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, sco
 	}
 
 	return &api.AuthResult{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		TokenType:    tokenType,
-		ExpiresIn:    int(s.cfg.AccessTokenTTL.Seconds()),
+		AccessToken:          accessToken,
+		RefreshToken:         refreshToken,
+		TokenType:            tokenType,
+		ExpiresIn:            int(s.cfg.AccessTokenTTL.Seconds()),
+		AccessTokenID:        jti,
+		AccessTokenExpiresAt: exp,
+		RefreshFamilyID:      familyID,
 	}, nil
 }
 
@@ -347,7 +354,7 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 		}
 	}
 
-	result, err := s.issueTokenPair(ctx, subject, roles, nil, domain.ClientTypeUser, jktThumbprint, clientID, audience)
+	result, err := s.issueTokenPair(ctx, subject, roles, nil, domain.ClientTypeUser, jktThumbprint, clientID, record.FamilyID, audience)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +419,18 @@ func (s *Service) Revoke(ctx context.Context, rawToken string) error {
 		return nil
 	}
 
-	ttl := time.Until(exp.Time)
+	return s.RevokeJTI(ctx, jti, exp.Time)
+}
+
+// RevokeJTI adds an access token's jti to the revocation blocklist for the
+// rest of its lifetime (until exp), so IsRevoked reports it. A token that has
+// already expired needs no entry. Only the jti is stored, never the token.
+func (s *Service) RevokeJTI(ctx context.Context, jti string, exp time.Time) error {
+	if jti == "" {
+		return fmt.Errorf("revoke jti: empty jti")
+	}
+
+	ttl := time.Until(exp)
 	if ttl <= 0 {
 		// Already expired, no need to blocklist.
 		return nil
@@ -525,19 +543,22 @@ func (c *customClaims) GetJTI() (string, error) {
 	return c.ID, nil
 }
 
-func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, audience []string) (string, error) {
-	jti, err := generateRandomID(jtiBytes)
+// issueAccessToken mints a signed access token and also returns its jti and
+// expiry so callers can revoke it later without parsing it back.
+func (s *Service) issueAccessToken(subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint string, audience []string) (signedToken, jti string, exp time.Time, err error) {
+	jti, err = generateRandomID(jtiBytes)
 	if err != nil {
-		return "", fmt.Errorf("generate jti: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("generate jti: %w", err)
 	}
 
 	now := time.Now()
+	exp = now.Add(s.cfg.AccessTokenTTL)
 	claims := &customClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   subject,
 			Issuer:    s.oidc.IssuerURL,
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(s.cfg.AccessTokenTTL)),
+			ExpiresAt: jwt.NewNumericDate(exp),
 			ID:        jti,
 		},
 		Roles:      roles,
@@ -565,10 +586,10 @@ func (s *Service) issueAccessToken(subject string, roles, scopes []string, clien
 	token.Header["kid"] = s.kid
 	signed, err := token.SignedString(s.privateKey)
 	if err != nil {
-		return "", fmt.Errorf("sign access token: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("sign access token: %w", err)
 	}
 
-	return accessTokenPrefix + signed, nil
+	return accessTokenPrefix + signed, jti, exp, nil
 }
 
 // ── Internal: ID Token (OIDC) ────────────────────────────────────────────────
@@ -698,36 +719,50 @@ type refreshTokenData struct {
 	// JKT is the DPoP key thumbprint the token was issued with (GH-539).
 	// Empty for unbound tokens and for records written before it existed.
 	JKT string `json:"jkt,omitempty"`
+	// FamilyID groups a refresh token with every token rotated from it, so
+	// the whole chain can be revoked at once (RevokeRefreshFamily, GH-542).
+	// Empty for records written before it existed.
+	FamilyID string `json:"fid,omitempty"`
 }
 
-func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID, jktThumbprint string) (string, error) {
+// issueRefreshToken mints and stores a refresh token and returns it with its
+// family id. An empty familyID starts a new family; rotation passes the
+// predecessor's so every successor stays in the same family.
+func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID, jktThumbprint, familyID string) (refreshToken, family string, err error) {
 	if len(s.cfg.SystemSecrets) == 0 {
-		return "", fmt.Errorf("no system secrets configured")
+		return "", "", fmt.Errorf("no system secrets configured")
 	}
 
 	keyMaterial, err := generateRandomBytes(refreshKeyBytes)
 	if err != nil {
-		return "", fmt.Errorf("generate refresh key: %w", err)
+		return "", "", fmt.Errorf("generate refresh key: %w", err)
+	}
+
+	if familyID == "" {
+		familyID, err = generateRandomID(jtiBytes)
+		if err != nil {
+			return "", "", fmt.Errorf("generate refresh family id: %w", err)
+		}
 	}
 
 	keyEncoded := base64.RawURLEncoding.EncodeToString(keyMaterial)
 	signature := hmacSign(keyMaterial, s.cfg.SystemSecrets[0])
 	sigEncoded := base64.RawURLEncoding.EncodeToString(signature)
 
-	refreshToken := refreshTokenPrefix + keyEncoded + "." + sigEncoded
+	refreshToken = refreshTokenPrefix + keyEncoded + "." + sigEncoded
 
 	// Store the signature in Redis keyed by encoded key, value is the JSON
 	// encoding of refreshTokenData (subject + originating client, if any).
-	encoded, err := json.Marshal(refreshTokenData{Subject: subject, ClientID: clientID, IssuedAt: time.Now().UnixNano(), JKT: jktThumbprint})
+	encoded, err := json.Marshal(refreshTokenData{Subject: subject, ClientID: clientID, IssuedAt: time.Now().UnixNano(), JKT: jktThumbprint, FamilyID: familyID})
 	if err != nil {
-		return "", fmt.Errorf("encode refresh token data: %w", err)
+		return "", "", fmt.Errorf("encode refresh token data: %w", err)
 	}
 	redisKey := refreshKeyPrefix + keyEncoded
 	if err := s.redis.Set(ctx, redisKey, encoded, s.cfg.RefreshTokenTTL).Err(); err != nil {
-		return "", fmt.Errorf("store refresh token: %w", err)
+		return "", "", fmt.Errorf("store refresh token: %w", err)
 	}
 
-	return refreshToken, nil
+	return refreshToken, familyID, nil
 }
 
 // deleteRefreshKey removes the live record for an encoded refresh key.

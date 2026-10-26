@@ -35,6 +35,11 @@ type TokenIssuer interface {
 	// for code exchanges where offline_access was not granted.
 	IssueAccessTokenForClient(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
 	IssueIDToken(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
+	// RevokeJTI denylists an access token by jti until exp (GH-542).
+	RevokeJTI(ctx context.Context, jti string, exp time.Time) error
+	// RevokeRefreshFamily revokes a refresh token and every token rotated
+	// from it, leaving the subject's other sessions intact (GH-542).
+	RevokeRefreshFamily(ctx context.Context, familyID string) error
 }
 
 // ConsentGrantStore abstracts remembered-consent persistence. This is a

@@ -15,4 +15,8 @@ var (
 	// ErrAuthorizationCodeNotFound indicates the authorization code does not
 	// exist, has expired, or has already been redeemed.
 	ErrAuthorizationCodeNotFound = errors.New("oidc: authorization code not found")
+
+	// ErrUsedCodeNotFound indicates there is no used-code record for the
+	// authorization code: it was never redeemed, or the record has expired.
+	ErrUsedCodeNotFound = errors.New("oidc: used authorization code record not found")
 )

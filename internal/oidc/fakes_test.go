@@ -36,6 +36,30 @@ type fakeTokenIssuer struct {
 	issueTokenPairForClientFn   func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
 	issueAccessTokenForClientFn func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
 	issueIDTokenFn              func(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
+
+	mu              sync.Mutex
+	revokedJTIs     []string
+	revokedFamilies []string
+}
+
+func (f *fakeTokenIssuer) RevokeJTI(_ context.Context, jti string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revokedJTIs = append(f.revokedJTIs, jti)
+	return nil
+}
+
+func (f *fakeTokenIssuer) RevokeRefreshFamily(_ context.Context, familyID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revokedFamilies = append(f.revokedFamilies, familyID)
+	return nil
+}
+
+func (f *fakeTokenIssuer) revoked() (jtis, families []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.revokedJTIs...), append([]string(nil), f.revokedFamilies...)
 }
 
 func (f *fakeTokenIssuer) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error) {

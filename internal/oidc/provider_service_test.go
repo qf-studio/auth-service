@@ -1017,3 +1017,174 @@ func TestProviderService_ExchangeCode_RefreshTokenOnlyWithOfflineAccess(t *testi
 		})
 	}
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// ExchangeCode: authorization code reuse (GH-542)
+// ────────────────────────────────────────────────────────────────────────────
+
+// codeReuseFixture is a ProviderService wired to a fake issuer that hands out
+// distinct jti/family ids per issuance, plus an auditor that records events.
+type codeReuseFixture struct {
+	svc     *oidc.ProviderService
+	store   oidc.Store
+	tokens  *fakeTokenIssuer
+	auditor *recordingAuditor
+	client  *domain.Client
+	// issued lists the jti issued, in order.
+	issued []string
+}
+
+func newCodeReuseFixture(t *testing.T, onIssue func(f *codeReuseFixture)) *codeReuseFixture {
+	t.Helper()
+	f := &codeReuseFixture{client: testConfidentialClient(), auditor: &recordingAuditor{}}
+	user := testUserForOIDC()
+	clients := &fakeClientLookup{
+		findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return f.client, nil },
+	}
+	users := &fakeUserLookup{
+		findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) { return user, nil },
+	}
+	f.tokens = &fakeTokenIssuer{
+		issueTokenPairFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ ...string) (*api.AuthResult, error) {
+			n := len(f.issued) + 1
+			jti := fmt.Sprintf("jti-%d", n)
+			f.issued = append(f.issued, jti)
+			if onIssue != nil {
+				onIssue(f)
+			}
+			return &api.AuthResult{
+				AccessToken:          "at-" + jti,
+				RefreshToken:         fmt.Sprintf("rt-%d", n),
+				TokenType:            "Bearer",
+				ExpiresIn:            900,
+				AccessTokenID:        jti,
+				AccessTokenExpiresAt: time.Now().Add(15 * time.Minute),
+				RefreshFamilyID:      fmt.Sprintf("fam-%d", n),
+			}, nil
+		},
+		issueIDTokenFn: func(context.Context, string, string, string, time.Time) (string, error) { return "id", nil },
+	}
+	_, redisClient := newTestRedis(t)
+	f.store = oidc.NewRedisStore(redisClient)
+	f.svc = oidc.NewProviderService(testOIDCConfig(), "ES256", f.store, clients, users, f.tokens, &fakeHasher{}, zap.NewNop(), f.auditor)
+	return f
+}
+
+func (f *codeReuseFixture) seed(t *testing.T, code string) {
+	t.Helper()
+	seedAuthCode(t, f.store, &oidc.AuthorizationCode{
+		Code:                code,
+		Subject:             "user-1",
+		ClientID:            f.client.ID.String(),
+		RedirectURI:         f.client.RedirectURIs[0],
+		Scopes:              []string{"openid", "offline_access"},
+		CodeChallenge:       oauth.S256Challenge("verifier"),
+		CodeChallengeMethod: "S256",
+		AuthTime:            time.Now().UTC(),
+		ExpiresAt:           time.Now().UTC().Add(time.Minute),
+	})
+}
+
+func (f *codeReuseFixture) exchange(code string) (*api.OIDCTokenResponse, error) {
+	return f.svc.ExchangeCode(context.Background(), &api.CodeExchangeRequest{
+		GrantType:    "authorization_code",
+		Code:         code,
+		RedirectURI:  f.client.RedirectURIs[0],
+		ClientID:     f.client.ID.String(),
+		ClientSecret: "correct-secret",
+		CodeVerifier: "verifier",
+	})
+}
+
+func TestProviderService_ExchangeCode_Reuse_RevokesTokensOfThatCodeOnly(t *testing.T) {
+	f := newCodeReuseFixture(t, nil)
+	f.seed(t, "code-a")
+	f.seed(t, "code-b")
+
+	_, err := f.exchange("code-a")
+	require.NoError(t, err)
+	_, err = f.exchange("code-b") // unrelated tokens of the same user
+	require.NoError(t, err)
+	jtis, fams := f.tokens.revoked()
+	require.Empty(t, jtis)
+	require.Empty(t, fams)
+
+	_, err = f.exchange("code-a")
+	require.ErrorIs(t, err, api.ErrUnauthorized, "reused code is still rejected as before")
+	assert.Contains(t, err.Error(), "invalid or expired authorization code", "error response is unchanged")
+
+	jtis, fams = f.tokens.revoked()
+	assert.Equal(t, []string{"jti-1"}, jtis, "only the first code's access token is revoked")
+	assert.Equal(t, []string{"fam-1"}, fams, "only the first code's refresh family is revoked")
+
+	events := f.auditor.byType(audit.EventOIDCCodeReuse)
+	require.Len(t, events, 1)
+	assert.Equal(t, f.client.ID.String(), events[0].TargetID)
+	assert.NotContains(t, fmt.Sprintf("%+v", events[0]), "code-a", "the code value is never logged")
+}
+
+func TestProviderService_ExchangeCode_Reuse_AccessTokenOnlyRevokesJTIOnly(t *testing.T) {
+	f := newCodeReuseFixture(t, nil)
+	f.tokens.issueAccessTokenForClientFn = func(context.Context, string, []string, []string, domain.ClientType, string, ...string) (*api.AuthResult, error) {
+		return &api.AuthResult{
+			AccessToken: "at", TokenType: "Bearer", AccessTokenID: "jti-only",
+			AccessTokenExpiresAt: time.Now().Add(time.Minute),
+		}, nil
+	}
+	// No offline_access in the granted scopes: the access-token-only path.
+	require.NoError(t, f.store.SaveAuthorizationCode(context.Background(), &oidc.AuthorizationCode{
+		Code: "code-at-only", Subject: "user-1", ClientID: f.client.ID.String(),
+		RedirectURI: f.client.RedirectURIs[0], Scopes: []string{"openid"},
+		CodeChallenge: oauth.S256Challenge("verifier"), CodeChallengeMethod: "S256",
+	}))
+
+	_, err := f.exchange("code-at-only")
+	require.NoError(t, err)
+	_, err = f.exchange("code-at-only")
+	require.ErrorIs(t, err, api.ErrUnauthorized)
+
+	jtis, fams := f.tokens.revoked()
+	assert.Equal(t, []string{"jti-only"}, jtis)
+	assert.Empty(t, fams, "no refresh token was issued, so no family to revoke")
+}
+
+func TestProviderService_ExchangeCode_UnknownCode_RevokesNothing(t *testing.T) {
+	f := newCodeReuseFixture(t, nil)
+
+	_, err := f.exchange("never-issued")
+	require.ErrorIs(t, err, api.ErrUnauthorized)
+
+	jtis, fams := f.tokens.revoked()
+	assert.Empty(t, jtis)
+	assert.Empty(t, fams)
+	assert.Empty(t, f.auditor.byType(audit.EventOIDCCodeReuse))
+}
+
+// TestProviderService_ExchangeCode_Reuse_DuringIssuanceRevokesOwnTokens is the
+// race with the first redemption: the code is presented again after it was
+// consumed but before the issuance details are stored. The replay can revoke
+// nothing yet, so the first redemption must revoke its own tokens and fail.
+func TestProviderService_ExchangeCode_Reuse_DuringIssuanceRevokesOwnTokens(t *testing.T) {
+	var replayErr error
+	f := newCodeReuseFixture(t, nil)
+	f.tokens.issueTokenPairFn = func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ ...string) (*api.AuthResult, error) {
+		// The code is already consumed here; a concurrent request replays it.
+		_, replayErr = f.exchange("code-race")
+		return &api.AuthResult{
+			AccessToken: "at", RefreshToken: "rt", TokenType: "Bearer",
+			AccessTokenID: "jti-first", AccessTokenExpiresAt: time.Now().Add(time.Minute),
+			RefreshFamilyID: "fam-first",
+		}, nil
+	}
+	f.seed(t, "code-race")
+
+	resp, err := f.exchange("code-race")
+
+	require.ErrorIs(t, replayErr, api.ErrUnauthorized)
+	require.ErrorIs(t, err, api.ErrUnauthorized, "the first redemption fails like a reused code")
+	assert.Nil(t, resp, "no tokens are returned")
+	jtis, fams := f.tokens.revoked()
+	assert.Equal(t, []string{"jti-first"}, jtis)
+	assert.Equal(t, []string{"fam-first"}, fams)
+	assert.Len(t, f.auditor.byType(audit.EventOIDCCodeReuse), 1)
+}

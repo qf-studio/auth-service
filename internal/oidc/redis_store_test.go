@@ -2,6 +2,8 @@ package oidc_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -253,4 +255,147 @@ func TestRedisStore_DefaultTTLs(t *testing.T) {
 	assert.InDelta(t, 10*time.Minute, mr.TTL("oidc:login:ttl-login"), float64(time.Second))
 	assert.InDelta(t, 10*time.Minute, mr.TTL("oidc:consent:ttl-consent"), float64(time.Second))
 	assert.InDelta(t, 60*time.Second, mr.TTL("oidc:code:ttl-code"), float64(time.Second))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Used-code records (GH-542)
+// ────────────────────────────────────────────────────────────────────────────
+
+func usedKeyFor(code string) string {
+	sum := sha256.Sum256([]byte(code))
+	return "oidc_code_used:" + hex.EncodeToString(sum[:])
+}
+
+func seedCode(t *testing.T, store *oidc.RedisStore, code string) {
+	t.Helper()
+	require.NoError(t, store.SaveAuthorizationCode(context.Background(), &oidc.AuthorizationCode{
+		Code:     code,
+		Subject:  "user-1",
+		ClientID: "client-1",
+	}))
+}
+
+func TestRedisStore_ConsumeAuthorizationCode_WritesHashedUsedRecord(t *testing.T) {
+	mr, client := newTestRedis(t)
+	store := oidc.NewRedisStore(client)
+	seedCode(t, store, "code-hash-me")
+
+	_, err := store.ConsumeAuthorizationCode(context.Background(), "code-hash-me")
+	require.NoError(t, err)
+
+	key := usedKeyFor("code-hash-me")
+	assert.True(t, mr.Exists(key))
+	assert.GreaterOrEqual(t, mr.TTL(key), 15*time.Minute)
+	for _, k := range mr.Keys() {
+		assert.NotContains(t, k, "code-hash-me", "the raw code must not appear in any key")
+	}
+}
+
+func TestRedisStore_ConsumeAuthorizationCode_UnknownCodeWritesNoRecord(t *testing.T) {
+	mr, client := newTestRedis(t)
+	store := oidc.NewRedisStore(client)
+
+	_, err := store.ConsumeAuthorizationCode(context.Background(), "never-issued")
+	require.ErrorIs(t, err, oidc.ErrAuthorizationCodeNotFound)
+
+	assert.Empty(t, mr.Keys(), "presenting an unknown code must not create state")
+}
+
+func TestRedisStore_WithUsedCodeTTL(t *testing.T) {
+	mr, client := newTestRedis(t)
+	store := oidc.NewRedisStore(client, oidc.WithUsedCodeTTL(time.Hour))
+	seedCode(t, store, "code-ttl")
+
+	_, err := store.ConsumeAuthorizationCode(context.Background(), "code-ttl")
+	require.NoError(t, err)
+	assert.Equal(t, time.Hour, mr.TTL(usedKeyFor("code-ttl")))
+
+	// A value below the floor is ignored.
+	mr2, client2 := newTestRedis(t)
+	short := oidc.NewRedisStore(client2, oidc.WithUsedCodeTTL(time.Minute))
+	seedCode(t, short, "code-floor")
+	_, err = short.ConsumeAuthorizationCode(context.Background(), "code-floor")
+	require.NoError(t, err)
+	assert.Equal(t, 15*time.Minute, mr2.TTL(usedKeyFor("code-floor")))
+}
+
+func TestRedisStore_MarkCodeReplayed_UnknownCode(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := oidc.NewRedisStore(client)
+
+	_, err := store.MarkCodeReplayed(context.Background(), "never-redeemed")
+	assert.ErrorIs(t, err, oidc.ErrUsedCodeNotFound)
+}
+
+func TestRedisStore_RecordCodeIssuance_NoRecord(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := oidc.NewRedisStore(client)
+
+	_, err := store.RecordCodeIssuance(context.Background(), "never-redeemed", oidc.CodeIssuance{AccessTokenID: "jti"})
+	assert.ErrorIs(t, err, oidc.ErrUsedCodeNotFound)
+}
+
+func TestRedisStore_RecordThenReplay_ReturnsIssuance(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := oidc.NewRedisStore(client)
+	ctx := context.Background()
+	seedCode(t, store, "code-rr")
+	_, err := store.ConsumeAuthorizationCode(ctx, "code-rr")
+	require.NoError(t, err)
+
+	exp := time.Now().Add(15 * time.Minute).Truncate(time.Second)
+	replayed, err := store.RecordCodeIssuance(ctx, "code-rr", oidc.CodeIssuance{
+		AccessTokenID: "jti-1", AccessTokenExpiresAt: exp, RefreshFamilyID: "fam-1",
+	})
+	require.NoError(t, err)
+	assert.False(t, replayed)
+
+	got, err := store.MarkCodeReplayed(ctx, "code-rr")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "jti-1", got.AccessTokenID)
+	assert.Equal(t, "fam-1", got.RefreshFamilyID)
+	assert.True(t, exp.Equal(got.AccessTokenExpiresAt))
+}
+
+func TestRedisStore_RecordWithoutFamily_RoundTripsEmptyFamily(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := oidc.NewRedisStore(client)
+	ctx := context.Background()
+	seedCode(t, store, "code-nofam")
+	_, err := store.ConsumeAuthorizationCode(ctx, "code-nofam")
+	require.NoError(t, err)
+
+	_, err = store.RecordCodeIssuance(ctx, "code-nofam", oidc.CodeIssuance{
+		AccessTokenID: "jti-2", AccessTokenExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	got, err := store.MarkCodeReplayed(ctx, "code-nofam")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "jti-2", got.AccessTokenID)
+	assert.Empty(t, got.RefreshFamilyID)
+}
+
+// TestRedisStore_ReplayBeforeIssuanceDetails covers the race with the first
+// redemption: the replay finds no details, flags the record, and the first
+// redemption's RecordCodeIssuance then reports it so it can revoke its tokens.
+func TestRedisStore_ReplayBeforeIssuanceDetails(t *testing.T) {
+	_, client := newTestRedis(t)
+	store := oidc.NewRedisStore(client)
+	ctx := context.Background()
+	seedCode(t, store, "code-race")
+	_, err := store.ConsumeAuthorizationCode(ctx, "code-race")
+	require.NoError(t, err)
+
+	got, err := store.MarkCodeReplayed(ctx, "code-race")
+	require.NoError(t, err)
+	assert.Nil(t, got, "no issuance recorded yet")
+
+	replayed, err := store.RecordCodeIssuance(ctx, "code-race", oidc.CodeIssuance{
+		AccessTokenID: "jti-race", AccessTokenExpiresAt: time.Now().Add(time.Minute), RefreshFamilyID: "fam-race",
+	})
+	require.NoError(t, err)
+	assert.True(t, replayed)
 }

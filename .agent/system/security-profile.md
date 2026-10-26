@@ -102,6 +102,13 @@ These are NIST mandates — not suggestions:
 - **Refresh tokens**: Signature in Redis with metadata, TTL-based expiry
 - **API keys**: Hashed (Argon2id), never stored in plaintext
 
+### Authorization code reuse (GH-542)
+Redeeming an OIDC authorization code twice revokes what the first redemption issued (RFC 6749 §4.1.2, OAuth 2.1 §4.1.3), scoped to that code only:
+- Redemption is one Lua script: GETDEL the code and write `oidc_code_used:<sha256(code)>` (TTL = max(15 min, access-token TTL)). After issuing, `{jti, exp, family_id}` is stored on that record.
+- A second presentation revokes the jti (`revoked:<jti>`) and the refresh family (`rt_fam_revoked:<family>`, checked in `lookupRefreshToken`, so rotated successors die too), and emits the `oidc_code_reuse` audit event. The error response is unchanged.
+- If the second presentation lands before the first stores its details, it sets a `replayed` flag; the first redemption sees it and revokes its own tokens.
+- Refresh records carry a family id (`fid`), kept across rotation. Records from before it existed have none and are not reachable by family revocation.
+
 ### JWT Claims
 ```json
 {
