@@ -76,11 +76,8 @@ type Env struct {
 	EmailSink *mocks.EmailSinkMock
 
 	// HIBP is the fake Pwned Passwords range endpoint the SUT's HIBP client
-	// is pointed at (HIBP_API_URL). No golden-path flow drives it today —
-	// internal/auth.Service never calls the breach checker yet
-	// ("HIBP never called", tracked as a review-003 wave-2 gap — see
-	// DEVELOPMENT-README Current Focus) — but the env wiring is already in
-	// place so a future fix needs no harness changes.
+	// is pointed at (HIBP_API_URL). Register, password reset confirm,
+	// password change and admin user create consult it (GH-535).
 	HIBP *mocks.HIBPMock
 
 	// PostgresDSN is a host-reachable connection string for the shared

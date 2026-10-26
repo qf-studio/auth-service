@@ -117,7 +117,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// invalidates the user's refresh tokens in Redis, where refresh validity
 	// is decided.
 	sessionTokenRepo := tokenSvc.WrapRefreshTokenRepository(refreshTokenRepo)
-	hibpClient := hibp.NewClient(http.DefaultClient, cfg.HIBP.APIURL)
+	hibpClient := hibp.NewClient(&http.Client{Timeout: hibp.RequestTimeout}, cfg.HIBP.APIURL)
 
 	// ── Email ────────────────────────────────────────────────────────────
 	var emailSender email.EmailSender
@@ -259,6 +259,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 
 	// ── Admin services ────────────────────────────────────────────────────
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
+	adminUserSvc.SetBreachChecker(hibpClient)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
 	adminTokenSvc := admin.NewTokenService(tokenSvc, sessionTokenRepo, "auth-service", log, auditSvc)
 	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, log, auditSvc)

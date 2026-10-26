@@ -17,6 +17,11 @@ var (
 	ErrPasswordTooShort = errors.New("password too short")
 	ErrPasswordTooLong  = errors.New("password too long")
 
+	// ErrPasswordBreached indicates the password appears in a known data
+	// breach (NIST SP 800-63-4 blocklist check). Its message is returned to
+	// the client verbatim.
+	ErrPasswordBreached = errors.New("password appears in a known data breach; choose another")
+
 	// Token errors.
 	ErrTokenExpired = errors.New("token expired")
 	ErrTokenRevoked = errors.New("token revoked")

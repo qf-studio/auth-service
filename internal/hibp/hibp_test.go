@@ -2,10 +2,14 @@ package hibp
 
 import (
 	"context"
+	"crypto/sha1" //#nosec G505 -- test mirrors the HIBP protocol
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,4 +106,49 @@ func TestMatchesSuffix(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestIsBreached_SendsOnlyHashPrefix pins the k-anonymity contract: the only
+// thing sent is the 5-char SHA-1 prefix; neither the password nor the hash
+// suffix appears anywhere in the request.
+func TestIsBreached_SendsOnlyHashPrefix(t *testing.T) {
+	const password = "correct horse battery staple"
+	var gotURL, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		for k, v := range r.Header {
+			gotURL += " " + k + "=" + strings.Join(v, ",")
+		}
+		_, _ = w.Write([]byte("0018A45C4D1DEF81644B54AB7F969B88D65:2\r\n"))
+	}))
+	defer srv.Close()
+
+	hash := fmt.Sprintf("%X", sha1.Sum([]byte(password))) //#nosec G401
+	c := NewClient(srv.Client(), srv.URL+"/range/")
+	_, err := c.IsBreached(context.Background(), password)
+	require.NoError(t, err)
+
+	assert.True(t, strings.HasPrefix(gotURL, "/range/"+hash[:5]+" "), "request path must be the 5-char prefix, got %q", gotURL)
+	assert.NotContains(t, gotURL, hash[5:])
+	assert.NotContains(t, gotURL, password)
+	assert.Empty(t, gotBody)
+}
+
+func TestIsBreached_Timeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	c := NewClient(&http.Client{Timeout: 50 * time.Millisecond}, srv.URL+"/range/")
+	_, err := c.IsBreached(context.Background(), "password")
+	require.Error(t, err)
+}
+
+func TestRequestTimeout(t *testing.T) {
+	assert.Equal(t, 3*time.Second, RequestTimeout)
 }

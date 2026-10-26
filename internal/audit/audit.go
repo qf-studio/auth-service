@@ -31,6 +31,8 @@ const (
 	EventPasswordExpired          = "password_expired"
 	EventHashUpgraded             = "hash_upgraded"
 	EventPasswordReused           = "password_reused"
+	EventPasswordBreached         = "password_breached"
+	EventBreachCheckFailed        = "password_breach_check_failed"
 	EventTokenRefresh             = "token_refresh"
 	EventTokenRevoke              = "token_revoke"
 	EventAdminUserCreate          = "admin_user_create"
