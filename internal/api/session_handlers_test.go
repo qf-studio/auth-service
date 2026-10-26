@@ -82,7 +82,7 @@ func newSessionTestRouter(sessionSvc api.SessionService) *gin.Engine {
 		Session: sessionSvc,
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
-	return api.NewPublicRouter(svc, mw, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 }
 
 // --- List Sessions ---
@@ -250,7 +250,7 @@ func TestLogin_CreatesSession(t *testing.T) {
 		Token:   &mockTokenService{},
 		Session: sessionSvc,
 	}
-	router := api.NewPublicRouter(svc, nil, health.NewService())
+	router := mustRouter(api.NewPublicRouter(svc, nil, health.NewService()))
 
 	body := map[string]string{
 		"email":    "alice@example.com",
@@ -286,7 +286,7 @@ func TestLogin_SessionCreationFailure_DoesNotBlockLogin(t *testing.T) {
 		Token:   &mockTokenService{},
 		Session: sessionSvc,
 	}
-	router := api.NewPublicRouter(svc, nil, health.NewService())
+	router := mustRouter(api.NewPublicRouter(svc, nil, health.NewService()))
 
 	body := map[string]string{
 		"email":    "alice@example.com",

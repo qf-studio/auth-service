@@ -135,6 +135,7 @@ type MFAService interface {
 	VerifyBackupCode(ctx context.Context, userID, code string) error
 	CompleteMFALogin(ctx context.Context, mfaToken, code, codeType string) (*AuthResult, error)
 	Disable(ctx context.Context, userID string) error
+	DisableWithVerification(ctx context.Context, userID, password, code, codeType string) error
 	GetStatus(ctx context.Context, userID string) (*MFAStatusResponse, error)
 	IsMFAEnabled(ctx context.Context, userID string) (bool, error)
 	GenerateMFAToken(ctx context.Context, userID string) (string, error)
@@ -361,8 +362,10 @@ type Services struct {
 	Broker  BrokerTokenService
 	SAML    SAMLService
 
-	// TrustedProxyCIDRs controls when X-Forwarded-Proto / X-Forwarded-Host are
-	// honored while reconstructing the request URI for DPoP htu matching (see
+	// TrustedProxyCIDRs lists the reverse proxies (TRUSTED_PROXY_CIDRS) whose
+	// X-Forwarded-For is used to derive the client IP (see
+	// middleware.ConfigureClientIP) and whose X-Forwarded-Proto is honored
+	// while reconstructing the request URI for DPoP htu matching (see
 	// middleware.RequestURI). Empty (default) trusts nothing.
 	TrustedProxyCIDRs []*net.IPNet
 }

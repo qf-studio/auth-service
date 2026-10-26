@@ -119,16 +119,14 @@ func TestGRPC_ValidateToken(t *testing.T) {
 
 	revokeAccessToken(t, accessToken)
 
-	// GAP: revocation is not checked by ValidateToken (only by
-	// IntrospectToken, see TestGRPC_IntrospectToken below). This assertion
-	// pins that known behavior rather than testing for the ideal one.
+	// ValidateToken checks the revocation blocklist, like IntrospectToken.
 	afterRevoke, err := authc.ValidateToken(ctx, accessToken)
 	require.NoError(t, err)
-	require.True(t, afterRevoke.Valid, "documented gap: ValidateToken does not check the revocation blocklist")
+	require.False(t, afterRevoke.Valid, "a revoked access token must not validate")
 }
 
 // TestGRPC_IntrospectToken exercises AuthServiceServer.IntrospectToken,
-// which (unlike ValidateToken) does check revocation.
+// which checks revocation (as ValidateToken does).
 func TestGRPC_IntrospectToken(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping e2e test in short mode (requires Docker)")

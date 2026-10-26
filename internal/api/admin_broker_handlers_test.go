@@ -135,7 +135,7 @@ func (m *mockAdminBrokerService) RotateCredential(ctx context.Context, credentia
 
 func newAdminBrokerRouter(brokerSvc api.AdminBrokerService) *gin.Engine {
 	svc := &api.AdminServices{Brokers: brokerSvc}
-	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 }
 
 // --- List Credentials ---

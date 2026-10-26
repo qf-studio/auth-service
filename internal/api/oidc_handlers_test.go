@@ -97,7 +97,7 @@ func newOIDCTestRouter(oidcSvc api.OIDCProviderService) *gin.Engine {
 		c.Next()
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
-	return api.NewPublicRouter(svc, mw, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 }
 
 // ── Discovery Tests ───────────��────────────────────────────────────────────
@@ -268,7 +268,7 @@ func TestOIDCRoutes_NotRegisteredWhenNil(t *testing.T) {
 		Token: &mockTokenService{},
 		// OIDC: nil
 	}
-	router := api.NewPublicRouter(svc, nil, health.NewService())
+	router := mustRouter(api.NewPublicRouter(svc, nil, health.NewService()))
 
 	tests := []struct {
 		method string

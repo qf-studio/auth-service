@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -855,24 +856,22 @@ func TestLogout_RevokesAccessToken(t *testing.T) {
 	assert.Equal(t, "qf_at_my-access-token", revokedToken)
 }
 
-// TestLogout_RevokesRefreshTokenSignature is a regression test for GH-486:
-// Logout's doc comment claimed the refresh token's DB row was revoked, but
-// the implementation never touched it, so a rotated-away token stayed
-// introspectable as active until its row's original TTL expired. When the
-// caller supplies the refresh token, its signature must be revoked too.
-func TestLogout_RevokesRefreshTokenSignature(t *testing.T) {
-	var revokedSig string
-	tokens := &mockRefreshTokenRepository{
-		revokeFn: func(_ context.Context, sig string) error {
-			revokedSig = sig
+// TestLogout_RevokesRefreshToken verifies that logout hands the refresh
+// token to the token service, which deletes its Redis record (where refresh
+// validity is decided) and revokes its Postgres row (GH-486).
+func TestLogout_RevokesRefreshToken(t *testing.T) {
+	var revoked []string
+	issuer := &mockTokenIssuer{
+		revokeFn: func(_ context.Context, token string) error {
+			revoked = append(revoked, token)
 			return nil
 		},
 	}
 
-	svc := newUnitService(t, &mockUserRepository{}, tokens, &mockTokenIssuer{}, &mockHasher{})
+	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, issuer, &mockHasher{})
 	err := svc.Logout(context.Background(), "user-1", "qf_at_my-access-token", "qf_rt_key123.sig456")
 	require.NoError(t, err)
-	assert.Equal(t, "sig456", revokedSig)
+	assert.Equal(t, []string{"qf_at_my-access-token", "qf_rt_key123.sig456"}, revoked)
 }
 
 // TestLogout_NoRefreshTokenSkipsRevoke confirms logout stays functional
@@ -914,13 +913,16 @@ func TestLogout_MalformedRefreshTokenSkipsRevoke(t *testing.T) {
 // revoke is best-effort: a failure there must not fail the overall logout,
 // since the access-token Redis blocklist entry is the primary signal.
 func TestLogout_RefreshTokenRevokeFailureDoesNotFailLogout(t *testing.T) {
-	tokens := &mockRefreshTokenRepository{
-		revokeFn: func(_ context.Context, _ string) error {
-			return fmt.Errorf("db down")
+	issuer := &mockTokenIssuer{
+		revokeFn: func(_ context.Context, token string) error {
+			if strings.HasPrefix(token, "qf_rt_") {
+				return fmt.Errorf("redis down")
+			}
+			return nil
 		},
 	}
 
-	svc := newUnitService(t, &mockUserRepository{}, tokens, &mockTokenIssuer{}, &mockHasher{})
+	svc := newUnitService(t, &mockUserRepository{}, &mockRefreshTokenRepository{}, issuer, &mockHasher{})
 	err := svc.Logout(context.Background(), "user-1", "qf_at_my-access-token", "qf_rt_key123.sig456")
 	require.NoError(t, err)
 }

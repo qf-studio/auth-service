@@ -80,7 +80,7 @@ func newOAuthTestRouter(oauthSvc api.OAuthService) *gin.Engine {
 		c.Next()
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
-	return api.NewPublicRouter(svc, mw, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 }
 
 // ── OAuth Redirect Tests ────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ func TestOAuthRoutes_NotRegisteredWhenNil(t *testing.T) {
 		Token: &mockTokenService{},
 		// OAuth: nil — not set
 	}
-	router := api.NewPublicRouter(svc, nil, health.NewService())
+	router := mustRouter(api.NewPublicRouter(svc, nil, health.NewService()))
 
 	w := doRequest(router, http.MethodGet, "/auth/oauth/google", nil)
 	assert.Equal(t, http.StatusNotFound, w.Code)

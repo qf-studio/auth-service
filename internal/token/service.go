@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/storage"
 )
 
 const (
@@ -239,42 +241,53 @@ func (s *Service) RefreshWithDPoP(ctx context.Context, rawRefreshToken, jktThumb
 }
 
 func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumbprint string) (*api.AuthResult, error) {
-	subject, clientID, err := s.validateRefreshToken(ctx, rawRefreshToken)
+	keyEncoded, record, err := s.lookupRefreshToken(ctx, rawRefreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("invalid refresh token: %w", api.ErrUnauthorized)
 	}
-
-	// Revoke the old refresh token (rotate).
-	s.deleteRefreshToken(ctx, rawRefreshToken)
+	subject, clientID := record.Subject, record.ClientID
 
 	tenantID := domain.TenantIDFromContext(ctx)
+
+	// The user must still exist and be active: a locked or deleted account
+	// gets no new tokens. Refresh tokens carry no roles/scopes of their own,
+	// so the same lookup supplies the user's current roles, mirroring what
+	// the login path does (GH-432). A lookup failure fails the refresh
+	// without consuming the token, so the client can retry.
+	var roles []string
+	if s.users != nil {
+		user, lookupErr := s.users.FindByID(ctx, tenantID, subject)
+		if lookupErr != nil && !errors.Is(lookupErr, storage.ErrNotFound) {
+			s.logger.Error("failed to look up user for refresh",
+				zap.String("subject", subject), zap.Error(lookupErr))
+			return nil, fmt.Errorf("refresh: user lookup: %w", api.ErrInternalError)
+		}
+		if lookupErr != nil || !user.IsActive() {
+			s.deleteRefreshKey(ctx, keyEncoded)
+			return nil, fmt.Errorf("invalid refresh token: %w", api.ErrUnauthorized)
+		}
+		roles = user.Roles
+	}
+
+	// Rotate: consume the old record atomically. A concurrent refresh with
+	// the same token loses here and gets no tokens.
+	if err := s.consumeRefreshToken(ctx, keyEncoded, subject); err != nil {
+		if errors.Is(err, errRefreshReused) {
+			return nil, fmt.Errorf("invalid refresh token: %w", api.ErrUnauthorized)
+		}
+		return nil, fmt.Errorf("refresh: %w", api.ErrInternalError)
+	}
 
 	// Mark the old signature's Postgres row revoked so introspection reflects
 	// the rotation immediately rather than waiting out the row's original
 	// TTL (GH-486). Best-effort: Postgres bookkeeping must not fail the
-	// refresh — Redis (above) is already the authoritative hot-path
-	// revocation signal.
+	// refresh — Redis (above) is the authoritative revocation signal.
 	if s.refreshTokens != nil {
 		if oldSig, ok := domain.RefreshTokenSignature(rawRefreshToken); ok {
 			if revokeErr := s.refreshTokens.Revoke(ctx, tenantID, oldSig); revokeErr != nil {
 				s.logger.Warn("failed to revoke old refresh token signature in db",
 					zap.String("subject", subject), zap.Error(revokeErr))
 			}
-		}
-	}
-
-	// Refresh tokens carry no roles/scopes of their own, so look up the user's
-	// current roles (as of refresh time) and mirror what the login path does,
-	// otherwise refresh-minted access tokens would silently drop the roles
-	// claim and demote the user until they re-login (GH-432).
-	var roles []string
-	if s.users != nil {
-		user, lookupErr := s.users.FindByID(ctx, tenantID, subject)
-		if lookupErr != nil {
-			s.logger.Error("failed to look up user for refresh role enrichment",
-				zap.String("subject", subject), zap.Error(lookupErr))
-		} else {
-			roles = user.Roles
 		}
 	}
 
@@ -341,9 +354,14 @@ func (s *Service) ClientCredentialsWithDPoP(_ context.Context, _, _, _ string) (
 	return nil, fmt.Errorf("client credentials not yet implemented: %w", api.ErrInternalError)
 }
 
-// Revoke invalidates a token by adding its JTI to the Redis blocklist.
+// Revoke invalidates a token: an access token by adding its JTI to the
+// Redis blocklist, a refresh token (qf_rt_) by deleting its record.
 func (s *Service) Revoke(ctx context.Context, rawToken string) error {
-	// Try as access token first.
+	if strings.HasPrefix(rawToken, refreshTokenPrefix) {
+		return s.revokeRefreshToken(ctx, rawToken)
+	}
+
+	// Access token.
 	token := strings.TrimPrefix(rawToken, accessTokenPrefix)
 
 	claims, err := s.parseJWT(token)
@@ -642,6 +660,10 @@ func claimsToDomain(c *customClaims) (*domain.TokenClaims, error) {
 type refreshTokenData struct {
 	Subject  string `json:"sub"`
 	ClientID string `json:"cid,omitempty"`
+	// IssuedAt is the issue time in unix nanoseconds, compared against the
+	// subject's revocation epoch (see refresh_lifecycle.go). Zero for
+	// records written before it existed.
+	IssuedAt int64 `json:"iat,omitempty"`
 }
 
 func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID string) (string, error) {
@@ -662,7 +684,7 @@ func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID strin
 
 	// Store the signature in Redis keyed by encoded key, value is the JSON
 	// encoding of refreshTokenData (subject + originating client, if any).
-	encoded, err := json.Marshal(refreshTokenData{Subject: subject, ClientID: clientID})
+	encoded, err := json.Marshal(refreshTokenData{Subject: subject, ClientID: clientID, IssuedAt: time.Now().UnixNano()})
 	if err != nil {
 		return "", fmt.Errorf("encode refresh token data: %w", err)
 	}
@@ -674,74 +696,10 @@ func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID strin
 	return refreshToken, nil
 }
 
-// validateRefreshToken verifies rawToken's HMAC signature and looks up its
-// Redis record, returning the subject and originating client ID (empty if
-// none). Returns an error if the token is malformed, unsigned by a known
-// system secret, or not found/expired in Redis.
-func (s *Service) validateRefreshToken(ctx context.Context, rawToken string) (string, string, error) {
-	token := strings.TrimPrefix(rawToken, refreshTokenPrefix)
-
-	parts := strings.SplitN(token, ".", 2)
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("malformed refresh token")
-	}
-
-	keyEncoded, sigEncoded := parts[0], parts[1]
-
-	keyMaterial, err := base64.RawURLEncoding.DecodeString(keyEncoded)
-	if err != nil {
-		return "", "", fmt.Errorf("decode refresh key: %w", err)
-	}
-
-	sigBytes, err := base64.RawURLEncoding.DecodeString(sigEncoded)
-	if err != nil {
-		return "", "", fmt.Errorf("decode refresh signature: %w", err)
-	}
-
-	// Try each system secret (newest first) for rotation support.
-	valid := false
-	for _, secret := range s.cfg.SystemSecrets {
-		expected := hmacSign(keyMaterial, secret)
-		if hmac.Equal(sigBytes, expected) {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return "", "", fmt.Errorf("invalid refresh token signature")
-	}
-
-	// Look up the stored record from Redis.
-	redisKey := refreshKeyPrefix + keyEncoded
-	raw, err := s.redis.Get(ctx, redisKey).Result()
-	if err == redis.Nil {
-		return "", "", fmt.Errorf("refresh token not found or expired")
-	}
-	if err != nil {
-		return "", "", fmt.Errorf("lookup refresh token: %w", err)
-	}
-
-	var data refreshTokenData
-	if err := json.Unmarshal([]byte(raw), &data); err != nil || data.Subject == "" {
-		// Legacy format (pre-GH-512): the value is the bare subject string,
-		// not JSON. Refresh tokens issued before this deploy are still live
-		// in Redis until their TTL expires, so this must keep working rather
-		// than failing the refresh.
-		return raw, "", nil
-	}
-
-	return data.Subject, data.ClientID, nil
-}
-
-func (s *Service) deleteRefreshToken(ctx context.Context, rawToken string) {
-	token := strings.TrimPrefix(rawToken, refreshTokenPrefix)
-	parts := strings.SplitN(token, ".", 2)
-	if len(parts) != 2 {
-		return
-	}
-	redisKey := refreshKeyPrefix + parts[0]
-	if err := s.redis.Del(ctx, redisKey).Err(); err != nil {
-		s.logger.Warn("failed to delete old refresh token", zap.Error(err))
+// deleteRefreshKey removes the live record for an encoded refresh key.
+func (s *Service) deleteRefreshKey(ctx context.Context, keyEncoded string) {
+	if err := s.redis.Del(ctx, refreshKeyPrefix+keyEncoded).Err(); err != nil {
+		s.logger.Warn("failed to delete refresh token", zap.Error(err))
 	}
 }
 

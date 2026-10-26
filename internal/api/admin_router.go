@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -47,13 +49,23 @@ func validateHTTPURLNoFragment(fl validator.FieldLevel) bool {
 type AdminDeps struct {
 	Health  *health.Service
 	Metrics *metrics.Collector
+
+	// TrustedProxyCIDRs lists the reverse proxies (TRUSTED_PROXY_CIDRS) whose
+	// X-Forwarded-For is used to derive the client IP (see
+	// middleware.ConfigureClientIP). Empty (default) trusts nothing.
+	TrustedProxyCIDRs []*net.IPNet
 }
 
 // NewAdminRouter creates a *gin.Engine with the admin API route tree.
 // Only correlation ID middleware is applied (no auth, no rate limiting).
 // The admin port is protected at the network level.
-func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
+// Client-IP derivation is restricted to deps.TrustedProxyCIDRs; an error is
+// returned if that list cannot be applied.
+func NewAdminRouter(svc *AdminServices, deps *AdminDeps) (*gin.Engine, error) {
 	r := gin.New()
+	if err := middleware.ConfigureClientIP(r, deps.TrustedProxyCIDRs); err != nil {
+		return nil, fmt.Errorf("admin router: %w", err)
+	}
 	r.Use(gin.Recovery())
 	r.Use(middleware.CorrelationID())
 
@@ -218,7 +230,7 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) *gin.Engine {
 		}
 	}
 
-	return r
+	return r, nil
 }
 
 // parsePagination extracts page and per_page query parameters with defaults.

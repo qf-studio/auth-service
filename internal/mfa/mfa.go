@@ -26,6 +26,14 @@ import (
 const (
 	// backupCodeBytes is the number of random bytes per backup code (8 bytes = 16 hex chars).
 	backupCodeBytes = 8
+
+	// defaultTOTPPeriod is used when Config.Period is unset, matching the
+	// otp library's own default.
+	defaultTOTPPeriod = 30
+
+	// minUsedCodeTTL is the minimum lifetime of a used-code record. It must
+	// outlast the time step the code was accepted in.
+	minUsedCodeTTL = 90 * time.Second
 )
 
 // MFATokenStore abstracts temporary MFA token storage (Redis).
@@ -34,6 +42,15 @@ type MFATokenStore interface {
 	ConsumeMFAToken(ctx context.Context, token string) (string, error)
 	RecordFailedAttempt(ctx context.Context, userID string) (int, error)
 	ClearFailedAttempts(ctx context.Context, userID string) error
+
+	// FailedAttemptsExceeded reports whether the user's failed-attempt
+	// counter is at or over the limit. Checked before any code is validated.
+	FailedAttemptsExceeded(ctx context.Context, userID string) (bool, error)
+
+	// MarkTOTPUsed atomically records that the user's TOTP code for the given
+	// time step has been accepted, expiring after ttl. Returns false if that
+	// step was already recorded (the code was used before).
+	MarkTOTPUsed(ctx context.Context, userID string, step uint64, ttl time.Duration) (bool, error)
 }
 
 // TokenIssuer abstracts token pair creation for completing MFA login.
@@ -75,6 +92,22 @@ type Service struct {
 	users  UserLookup
 	logger *zap.Logger
 	audit  audit.EventLogger
+
+	// passwords verifies the current password for self-service disable. Set
+	// via SetPasswordVerifier; DisableWithVerification fails closed if unset.
+	passwords PasswordVerifier
+}
+
+// PasswordVerifier checks a plaintext password against a stored hash. This is
+// a narrow interface satisfied by password.Hasher.
+type PasswordVerifier interface {
+	Verify(password, hash string) (bool, error)
+}
+
+// SetPasswordVerifier injects the password verifier used by
+// DisableWithVerification.
+func (s *Service) SetPasswordVerifier(pv PasswordVerifier) {
+	s.passwords = pv
 }
 
 // NewService creates a new MFA service. Returns an error if cfg is invalid
@@ -179,8 +212,8 @@ func (s *Service) ConfirmEnrollment(ctx context.Context, userID, code string) ([
 		return nil, fmt.Errorf("mfa already confirmed: %w", api.ErrConflict)
 	}
 
-	if !s.validateTOTP(secret.Secret, code) {
-		return nil, fmt.Errorf("invalid totp code: %w", api.ErrUnauthorized)
+	if err := s.checkTOTP(ctx, userID, secret.Secret, code); err != nil {
+		return nil, err
 	}
 
 	if err := s.repo.ConfirmSecret(ctx, tenantID, userID); err != nil {
@@ -222,14 +255,43 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID, code string) error {
 		return fmt.Errorf("mfa not confirmed: %w", api.ErrNotFound)
 	}
 
-	if !s.validateTOTP(secret.Secret, code) {
-		if _, err := s.tokens.RecordFailedAttempt(ctx, userID); err != nil {
-			if errors.Is(err, storage.ErrMFAMaxAttempts) {
-				return fmt.Errorf("too many failed attempts: %w", api.ErrForbidden)
-			}
-			s.logger.Error("failed to record mfa attempt", zap.Error(err))
-		}
-		return fmt.Errorf("invalid totp code: %w", api.ErrUnauthorized)
+	return s.checkTOTP(ctx, userID, secret.Secret, code)
+}
+
+// checkTOTP is the shared TOTP check for enrollment confirmation and
+// verification:
+//  1. reject without validating if the failed-attempt counter is already at
+//     the limit, so a correct guess after the limit is not accepted;
+//  2. validate the code, recording a failed attempt if it doesn't match;
+//  3. record the accepted time step (SETNX), rejecting the code if that step
+//     was already used, so a code can't be replayed inside its window;
+//  4. clear the failed-attempt counter.
+//
+// Store errors in steps 1 and 3 fail closed (internal error): without them
+// the limit or the single-use guarantee can't be enforced.
+func (s *Service) checkTOTP(ctx context.Context, userID, secret, code string) error {
+	if err := s.checkAttemptLimit(ctx, userID); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	if !s.validateTOTPAt(secret, code, now) {
+		return s.recordFailedAttempt(ctx, userID, "invalid totp code")
+	}
+
+	period := s.totpPeriod()
+	step := uint64(now.Unix()) / uint64(period)    //nolint:gosec // Unix time is positive
+	ttl := 3 * time.Duration(period) * time.Second //nolint:gosec // period is a small config value (seconds)
+	if ttl < minUsedCodeTTL {
+		ttl = minUsedCodeTTL
+	}
+	fresh, err := s.tokens.MarkTOTPUsed(ctx, userID, step, ttl)
+	if err != nil {
+		s.logger.Error("failed to record used totp code", zap.String("user_id", userID), zap.Error(err))
+		return fmt.Errorf("record used totp code: %w", api.ErrInternalError)
+	}
+	if !fresh {
+		return s.recordFailedAttempt(ctx, userID, "totp code already used")
 	}
 
 	if err := s.tokens.ClearFailedAttempts(ctx, userID); err != nil {
@@ -239,20 +301,45 @@ func (s *Service) VerifyTOTP(ctx context.Context, userID, code string) error {
 	return nil
 }
 
+// checkAttemptLimit rejects the request if the user's failed-attempt counter
+// is already at the limit. A store error fails closed.
+func (s *Service) checkAttemptLimit(ctx context.Context, userID string) error {
+	exceeded, err := s.tokens.FailedAttemptsExceeded(ctx, userID)
+	if err != nil {
+		s.logger.Error("failed to read mfa attempts", zap.String("user_id", userID), zap.Error(err))
+		return fmt.Errorf("check mfa attempts: %w", api.ErrInternalError)
+	}
+	if exceeded {
+		return fmt.Errorf("too many failed attempts: %w", api.ErrForbidden)
+	}
+	return nil
+}
+
+// recordFailedAttempt increments the failed-attempt counter and returns the
+// error for the caller: ErrForbidden once the limit is reached, otherwise
+// ErrUnauthorized with the given reason.
+func (s *Service) recordFailedAttempt(ctx context.Context, userID, reason string) error {
+	if _, err := s.tokens.RecordFailedAttempt(ctx, userID); err != nil {
+		if errors.Is(err, storage.ErrMFAMaxAttempts) {
+			return fmt.Errorf("too many failed attempts: %w", api.ErrForbidden)
+		}
+		s.logger.Error("failed to record mfa attempt", zap.Error(err))
+	}
+	return fmt.Errorf("%s: %w", reason, api.ErrUnauthorized)
+}
+
 // VerifyBackupCode validates and consumes a backup code for a user.
 func (s *Service) VerifyBackupCode(ctx context.Context, userID, code string) error {
 	tenantID := domain.TenantIDFromContext(ctx)
 	codeHash := hashBackupCode(code)
 
+	if err := s.checkAttemptLimit(ctx, userID); err != nil {
+		return err
+	}
+
 	if err := s.repo.ConsumeBackupCode(ctx, tenantID, userID, codeHash); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			if _, err := s.tokens.RecordFailedAttempt(ctx, userID); err != nil {
-				if errors.Is(err, storage.ErrMFAMaxAttempts) {
-					return fmt.Errorf("too many failed attempts: %w", api.ErrForbidden)
-				}
-				s.logger.Error("failed to record mfa attempt", zap.Error(err))
-			}
-			return fmt.Errorf("invalid backup code: %w", api.ErrUnauthorized)
+			return s.recordFailedAttempt(ctx, userID, "invalid backup code")
 		}
 		return fmt.Errorf("consume backup code: %w", err)
 	}
@@ -325,7 +412,66 @@ func (s *Service) CompleteMFALogin(ctx context.Context, mfaToken, code, codeType
 	return result, nil
 }
 
-// Disable removes MFA for a user (deletes secret and backup codes).
+// DisableWithVerification is the self-service disable path: it requires the
+// user's current password and a second-factor proof (a current TOTP code, or
+// an unused backup code when codeType is "backup") before removing MFA. Both
+// are checked server-side; a wrong password counts against the same per-user
+// failed-attempt counter as MFA login. Admin resets use Disable directly.
+func (s *Service) DisableWithVerification(ctx context.Context, userID, pwd, code, codeType string) error {
+	tenantID := domain.TenantIDFromContext(ctx)
+
+	if s.passwords == nil {
+		s.logger.Error("mfa disable requested but no password verifier is configured")
+		return fmt.Errorf("password verifier not configured: %w", api.ErrInternalError)
+	}
+
+	user, err := s.users.FindByID(ctx, tenantID, userID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("user not found: %w", api.ErrUnauthorized)
+		}
+		return fmt.Errorf("look up user for mfa disable: %w", err)
+	}
+
+	// Checked before the password so a caller at the limit learns nothing
+	// about either factor.
+	if err := s.checkAttemptLimit(ctx, userID); err != nil {
+		return err
+	}
+
+	match, err := s.passwords.Verify(pwd, user.PasswordHash)
+	if err != nil {
+		return fmt.Errorf("verify password: %w", err)
+	}
+	if !match {
+		if _, recErr := s.tokens.RecordFailedAttempt(ctx, userID); recErr != nil {
+			if errors.Is(recErr, storage.ErrMFAMaxAttempts) {
+				return fmt.Errorf("too many failed attempts: %w", api.ErrForbidden)
+			}
+			s.logger.Error("failed to record mfa attempt", zap.Error(recErr))
+		}
+		return fmt.Errorf("password incorrect: %w", api.ErrInvalidPassword)
+	}
+
+	switch codeType {
+	case "totp", "":
+		if err := s.VerifyTOTP(ctx, userID, code); err != nil {
+			return err
+		}
+	case "backup":
+		if err := s.VerifyBackupCode(ctx, userID, code); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported code type %q: %w", codeType, api.ErrUnauthorized)
+	}
+
+	return s.Disable(ctx, userID)
+}
+
+// Disable removes MFA for a user (deletes secret and backup codes) without
+// any second-factor check. Used by the admin reset endpoint; the
+// self-service endpoint goes through DisableWithVerification.
 func (s *Service) Disable(ctx context.Context, userID string) error {
 	tenantID := domain.TenantIDFromContext(ctx)
 
@@ -387,10 +533,13 @@ func (s *Service) IsMFAEnabled(ctx context.Context, userID string) (bool, error)
 	return status.Enabled && status.Confirmed, nil
 }
 
-// validateTOTP checks a TOTP code against the secret.
-func (s *Service) validateTOTP(secret, code string) bool {
-	valid, err := totp.ValidateCustom(code, secret, time.Now().UTC(), totp.ValidateOpts{
-		Period:    s.cfg.Period,
+// validateTOTPAt checks a TOTP code against the secret at time t. Skew is 0,
+// so only the code for t's own time step is accepted; checkTOTP relies on
+// that to derive the used-code step from t.
+func (s *Service) validateTOTPAt(secret, code string, t time.Time) bool {
+	valid, err := totp.ValidateCustom(code, secret, t, totp.ValidateOpts{
+		Period:    s.totpPeriod(),
+		Skew:      0,
 		Digits:    s.totpDigits(),
 		Algorithm: otp.AlgorithmSHA1,
 	})
@@ -399,6 +548,15 @@ func (s *Service) validateTOTP(secret, code string) bool {
 		return false
 	}
 	return valid
+}
+
+// totpPeriod returns the configured TOTP period in seconds, defaulting to
+// defaultTOTPPeriod when unset.
+func (s *Service) totpPeriod() uint {
+	if s.cfg.Period == 0 {
+		return defaultTOTPPeriod
+	}
+	return s.cfg.Period
 }
 
 // totpDigits returns the configured TOTP digit count as an otp.Digits value.

@@ -112,6 +112,11 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// reissued access token keeps that client's Audience instead of falling
 	// back to the global JWT_AUDIENCE (GH-512).
 	tokenSvc.SetClientLookup(clientRepo)
+	// Revoke-all-sessions paths (logout-all, password reset/change, email
+	// change/revert, admin) go through this repository; the wrapper also
+	// invalidates the user's refresh tokens in Redis, where refresh validity
+	// is decided.
+	sessionTokenRepo := tokenSvc.WrapRefreshTokenRepository(refreshTokenRepo)
 	hibpClient := hibp.NewClient(http.DefaultClient, cfg.HIBP.APIURL)
 
 	// ── Email ────────────────────────────────────────────────────────────
@@ -122,12 +127,16 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		emailSender = email.NewConsoleSender(log)
 	}
 
+	// Per-account login lockout (tenant + email), backed by Redis and
+	// configured by RATE_LIMIT_MAX_FAILED_ATTEMPTS / RATE_LIMIT_LOCKOUT_DURATION.
+	loginThrottle := middleware.NewAccountRateLimiter(redisClient, cfg.Rate)
+
 	authSvc := auth.NewService(auth.ServiceDeps{
 		Redis:                     redisClient,
 		Logger:                    log,
 		Auditor:                   auditSvc,
 		Users:                     userRepo,
-		Tokens:                    refreshTokenRepo,
+		Tokens:                    sessionTokenRepo,
 		Issuer:                    tokenSvc,
 		Hasher:                    hasher,
 		Breaches:                  hibpClient,
@@ -138,6 +147,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		EmailChangeConfirmURLBase: cfg.Email.EmailChangeConfirmURLBase,
 		EmailChangeRevertURLBase:  cfg.Email.EmailChangeRevertURLBase,
 		RefreshTokenTTL:           cfg.JWT.RefreshTokenTTL,
+		LoginThrottle:             loginThrottle,
 	})
 
 	// ── Session ──────────────────────────────────────────────────────────
@@ -168,6 +178,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("mfa service init failed: %w", err)
 	}
+
+	// Self-service MFA disable re-checks the current password.
+	mfaSvc.SetPasswordVerifier(hasher)
 
 	// Inject MFA checker into auth service to enable MFA challenge on login.
 	authSvc.SetMFAChecker(mfaSvc)
@@ -247,7 +260,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Admin services ────────────────────────────────────────────────────
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
-	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
+	adminTokenSvc := admin.NewTokenService(tokenSvc, sessionTokenRepo, "auth-service", log, auditSvc)
 	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, log, auditSvc)
 	adminWebhookSvc := admin.NewWebhookService(webhookRepo, webhookDeliveryRepo, webhookDispatcher, log, auditSvc)
 
@@ -297,8 +310,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	adminDeps := &api.AdminDeps{
-		Health:  healthSvc,
-		Metrics: metricsCollector,
+		Health:            healthSvc,
+		Metrics:           metricsCollector,
+		TrustedProxyCIDRs: cfg.Proxy.TrustedCIDRs,
 	}
 
 	// ── RBAC ─────────────────────────────────────────────────────────────
@@ -323,8 +337,14 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	// ── HTTP servers ──────────────────────────────────────────────────────
-	publicRouter := api.NewPublicRouter(services, mw, healthSvc)
-	adminRouter := api.NewAdminRouter(adminServices, adminDeps)
+	publicRouter, err := api.NewPublicRouter(services, mw, healthSvc)
+	if err != nil {
+		return fmt.Errorf("public router init failed: %w", err)
+	}
+	adminRouter, err := api.NewAdminRouter(adminServices, adminDeps)
+	if err != nil {
+		return fmt.Errorf("admin router init failed: %w", err)
+	}
 
 	publicSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.App.PublicPort),
