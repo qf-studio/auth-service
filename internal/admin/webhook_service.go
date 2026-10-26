@@ -392,7 +392,6 @@ func domainDeliveryToAdmin(d *domain.WebhookDelivery) api.AdminWebhookDelivery {
 		Payload:      d.Payload,
 		Status:       d.Status,
 		ResponseCode: d.ResponseCode,
-		ResponseBody: d.ResponseBody,
 		Attempt:      d.Attempt,
 		NextRetryAt:  d.NextRetryAt,
 		DeliveredAt:  d.DeliveredAt,

@@ -20,7 +20,7 @@ func TestWebhookReceiverMock_ValidSignature(t *testing.T) {
 	defer m.Close()
 
 	body := []byte(`{"id":"evt-1","event_type":"user.created"}`)
-	postWebhook(t, m.URL(), body, sign(testWebhookSecret, body), "user.created")
+	postWebhook(t, m.URL(), body, sign(testWebhookSecret, testTimestamp, body), "user.created")
 
 	deliveries := m.Deliveries()
 	require.Len(t, deliveries, 1)
@@ -59,7 +59,7 @@ func TestWebhookReceiverMock_MultipleDeliveriesOrdered(t *testing.T) {
 
 	for i, evt := range []string{"a", "b", "c"} {
 		body := []byte(evt)
-		postWebhook(t, m.URL(), body, sign(testWebhookSecret, body), evt)
+		postWebhook(t, m.URL(), body, sign(testWebhookSecret, testTimestamp, body), evt)
 		require.Len(t, m.Deliveries(), i+1)
 	}
 
@@ -70,8 +70,11 @@ func TestWebhookReceiverMock_MultipleDeliveriesOrdered(t *testing.T) {
 	assert.Equal(t, "c", deliveries[2].EventType)
 }
 
-func sign(secret string, body []byte) string {
+const testTimestamp = "1793000000"
+
+func sign(secret, timestamp string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp + "."))
 	mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
@@ -85,6 +88,7 @@ func postWebhook(t *testing.T, baseURL string, body []byte, signature, eventType
 		req.Header.Set(signatureHeader, signature)
 	}
 	req.Header.Set(eventTypeHeader, eventType)
+	req.Header.Set(timestampHeader, testTimestamp)
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)

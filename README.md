@@ -84,6 +84,46 @@ source .env && go run cmd/server/main.go
 
 Full API specification: [`api/`](./api/)
 
+## Webhooks
+
+Admin-registered webhooks (`/admin/webhooks`) deliver audit events as signed
+HTTPS POSTs.
+
+**Target restrictions.** Webhook URLs must use `https`, must not embed
+credentials, and must not point at `localhost` or an IP literal in a loopback,
+private (RFC 1918), link-local (incl. `169.254.0.0/16`), CGNAT
+(`100.64.0.0/10`), unique-local IPv6 or other reserved range. The same ranges
+are refused again when the dispatcher connects, *after* DNS resolution, so a
+hostname that resolves (or later rebinds) to an internal address is rejected.
+Redirects are never followed: a `3xx` answer is recorded as the delivery
+status code. Delivery timeout is 5 s.
+
+**Response data.** The target's response body is not read or stored; deliveries
+record only the status code (`response_body` is no longer returned by
+`GET /admin/webhooks/:id/deliveries`).
+
+**Verifying signatures.** Each request carries:
+
+| Header | Value |
+|--------|-------|
+| `X-Webhook-Timestamp` | Unix time (seconds) at which the request was signed |
+| `X-Signature-256` | `sha256=` + hex `HMAC-SHA256(secret, timestamp + "." + raw_body)` |
+| `X-Webhook-Event` / `X-Webhook-Delivery` | Event type / delivery ID |
+
+Receivers should recompute the HMAC over the timestamp header, a literal `.`
+and the raw request body, compare in constant time, and reject requests whose
+timestamp is outside a tolerance (e.g. 5 minutes) to prevent replay:
+
+```go
+mac := hmac.New(sha256.New, []byte(secret))
+mac.Write([]byte(ts + "."))
+mac.Write(rawBody)
+ok := hmac.Equal([]byte("sha256="+hex.EncodeToString(mac.Sum(nil))), []byte(sigHeader))
+```
+
+> **Breaking change:** signatures previously covered the body only. Receivers
+> must be updated to include the timestamp. No new configuration is required.
+
 ## Architecture
 
 ```mermaid

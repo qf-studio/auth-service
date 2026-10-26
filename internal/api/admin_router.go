@@ -14,6 +14,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/health"
 	"github.com/qf-studio/auth-service/internal/metrics"
 	"github.com/qf-studio/auth-service/internal/middleware"
+	"github.com/qf-studio/auth-service/internal/webhook"
 )
 
 // adminValidator is the shared validator instance for admin request structs.
@@ -25,6 +26,7 @@ var adminValidator = newAdminValidator()
 func newAdminValidator() *validator.Validate {
 	v := validator.New()
 	_ = v.RegisterValidation("http_url_no_fragment", validateHTTPURLNoFragment)
+	_ = v.RegisterValidation("webhook_url", validateWebhookURL)
 	return v
 }
 
@@ -43,6 +45,13 @@ func validateHTTPURLNoFragment(fl validator.FieldLevel) bool {
 		return false
 	}
 	return true
+}
+
+// validateWebhookURL ensures the field is an https URL that does not target
+// localhost or a non-public IP literal (SSRF guard). Hostnames are re-checked
+// after DNS resolution by the webhook dispatcher.
+func validateWebhookURL(fl validator.FieldLevel) bool {
+	return webhook.ValidateTargetURL(fl.Field().String()) == nil
 }
 
 // AdminDeps holds infrastructure dependencies for the admin router.
