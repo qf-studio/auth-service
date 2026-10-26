@@ -13,6 +13,8 @@
 #   SMOKE_BASE_URL  - required. Public API base URL to test against.
 #   SMOKE_GRPC_ADDR - optional. host:port for the gRPC ValidateToken leg;
 #                     skipped when unset.
+#   SMOKE_GRPC_TOKEN - optional. Service token sent on the gRPC leg; needed
+#                     once the deployment runs GRPC_AUTH_MODE=enforce.
 #   SMOKE_ADMIN_URL - optional. Admin API base URL; enables the introspect
 #                     leg when reachable.
 #   SMOKE_ADMIN_TOKEN - one of the deployment's ADMIN_API_TOKENS; required

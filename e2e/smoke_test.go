@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -145,7 +146,12 @@ func TestSmoke_GRPCValidateToken(t *testing.T) {
 		t.Skip("SMOKE_GRPC_ADDR unset — skipping gRPC smoke leg")
 	}
 
-	authc, err := authclient.New(suite.GRPCAddr, authclient.WithInsecure())
+	// SMOKE_GRPC_TOKEN is required once the deployment runs GRPC_AUTH_MODE=enforce.
+	clientOpts := []authclient.Option{authclient.WithInsecure()}
+	if tok := os.Getenv("SMOKE_GRPC_TOKEN"); tok != "" {
+		clientOpts = append(clientOpts, authclient.WithServiceToken(tok))
+	}
+	authc, err := authclient.New(suite.GRPCAddr, clientOpts...)
 	require.NoError(t, err, "dial authclient at %s", suite.GRPCAddr)
 	t.Cleanup(func() { _ = authc.Close() })
 

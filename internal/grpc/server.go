@@ -36,6 +36,11 @@ type ServerDeps struct {
 	Logger    *zap.Logger
 	Port      int
 	Metrics   MetricsRecorder
+
+	// AuthMode selects caller authentication: off, warn, or enforce. Empty
+	// means warn. ClientTokens are the accepted bearer service tokens.
+	AuthMode     AuthMode
+	ClientTokens []string
 }
 
 // NewServer creates a gRPC server with all services registered and interceptors
@@ -46,6 +51,11 @@ func NewServer(deps ServerDeps) (*Server, error) {
 	}
 	if deps.Port <= 0 {
 		return nil, fmt.Errorf("grpc: port must be positive")
+	}
+
+	authn, err := NewAuthenticator(deps.AuthMode, deps.ClientTokens, deps.Logger)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build interceptor chains.
@@ -60,6 +70,10 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		unaryInterceptors = append(unaryInterceptors, UnaryMetricsInterceptor(deps.Metrics))
 		streamInterceptors = append(streamInterceptors, StreamMetricsInterceptor(deps.Metrics))
 	}
+
+	// Auth runs last so rejected calls are still logged and counted.
+	unaryInterceptors = append(unaryInterceptors, authn.Unary())
+	streamInterceptors = append(streamInterceptors, authn.Stream())
 
 	gs := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),

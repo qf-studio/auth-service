@@ -13,6 +13,7 @@ Covers staging and production environments, secrets management, monitoring, roll
 - [Deployment Guide](#deployment-guide)
   - [Staging](#staging-deployment)
   - [Production](#production-deployment)
+- [gRPC Caller Authentication](#grpc-caller-authentication)
 - [Running Migrations from the Image](#running-migrations-from-the-image)
 - [Verifying a Live Deployment (Smoke Image)](#verifying-a-live-deployment-smoke-image)
 - [Monitoring](#monitoring)
@@ -64,6 +65,7 @@ Covers staging and production environments, secrets management, monitoring, roll
 |------|-------------|---------|
 | 4000 | Both | Public API (auth endpoints) |
 | 4001 | Both | Admin API (metrics, management) |
+| 4002 | Both | gRPC (service-to-service; bearer service token, see [gRPC Caller Authentication](#grpc-caller-authentication)) |
 | 80 | Production | HTTP → HTTPS redirect (Caddy) |
 | 443 | Production | HTTPS termination (Caddy) |
 | 5432 | Staging only | PostgreSQL (not exposed in production) |
@@ -306,6 +308,28 @@ setting every client shares one rate-limit bucket.
 
 ---
 
+## gRPC Caller Authentication
+
+The gRPC port (4002) serves `GetUser`, `CheckPermission`, `IntrospectToken` and `ValidateToken`. Callers authenticate with a static bearer service token in the `authorization: Bearer <token>` metadata header. The standard gRPC health service (`grpc.health.v1.Health`) is always allowed without a token.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRPC_AUTH_MODE` | `warn` | `off` allows every call. `warn` allows every call but logs one `WARN` per method per minute for calls without a valid token (fields `grpc.method`, `peer`, `reason`=`missing`\|`invalid`). `enforce` rejects them with `codes.Unauthenticated`. |
+| `GRPC_CLIENT_TOKENS` | _(empty)_ | Comma-separated accepted tokens, each at least 32 bytes. Required (at least one) when `GRPC_AUTH_MODE=enforce`; the service refuses to start otherwise. Generate with `openssl rand -hex 32`, one per consumer so a token can be rotated or revoked individually. |
+
+Treat the tokens as secrets (environment file / secrets manager, never committed). Send them over TLS only: terminate TLS in front of port 4002 or use `authclient.WithTLS`.
+
+### Rollout order
+
+1. Deploy the release with the default `GRPC_AUTH_MODE=warn`. Existing consumers keep working.
+2. Generate one token per consumer, add them all to `GRPC_CLIENT_TOKENS`, redeploy, and give each consumer its token (`authclient.WithServiceToken`).
+3. Watch the logs for `grpc caller not authenticated` warnings. Each remaining `peer` is a consumer that still sends no token or a wrong one. Repeat until the warnings stop.
+4. Set `GRPC_AUTH_MODE=enforce`. Set `SMOKE_GRPC_TOKEN` for the smoke image first if it runs against this deployment.
+
+Rolling back is the same switch: set `GRPC_AUTH_MODE=warn`.
+
+---
+
 ## Running Migrations from the Image
 
 The published image is self-contained: it ships a second binary, `/auth-migrate`, alongside `/auth-service`. `/auth-migrate` embeds the full migration SQL set at compile time, so any consumer can migrate a database using only the image and environment variables — no checkout of this repo, no vendored `migrations/*.sql`, no separate `migrate/migrate` container.
@@ -395,6 +419,7 @@ Exit code `0` means every smoke check passed; non-zero means at least one failed
 | `SMOKE_ADMIN_URL` | No | Admin API base URL. When reachable, enables the token-introspection leg of the golden-path check. Omit for deployments where the admin port isn't network-reachable from wherever the smoke image runs. |
 | `SMOKE_ADMIN_TOKEN` | With `SMOKE_ADMIN_URL` | One of the deployment's `ADMIN_API_TOKENS`, sent as the bearer credential on the introspection leg. |
 | `SMOKE_GRPC_ADDR` | No | `host:port` for the gRPC service. When set, exercises `ValidateToken` via `pkg/authclient`. Omit to skip the gRPC leg. |
+| `SMOKE_GRPC_TOKEN` | No | One of the deployment's `GRPC_CLIENT_TOKENS`, sent as the gRPC service token. Required for the gRPC leg once `GRPC_AUTH_MODE=enforce`. |
 
 ### Full Example
 

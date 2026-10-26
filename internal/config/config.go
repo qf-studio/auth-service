@@ -31,6 +31,23 @@ type Config struct {
 	Proxy        ProxyConfig
 	Admin        AdminConfig
 	Audit        AuditConfig
+	GRPC         GRPCConfig
+}
+
+// gRPC caller-authentication modes (GRPC_AUTH_MODE).
+const (
+	GRPCAuthOff     = "off"
+	GRPCAuthWarn    = "warn"
+	GRPCAuthEnforce = "enforce"
+
+	// minGRPCClientTokenBytes is the minimum length of each GRPC_CLIENT_TOKENS entry.
+	minGRPCClientTokenBytes = 32
+)
+
+// GRPCConfig holds gRPC caller-authentication settings.
+type GRPCConfig struct {
+	AuthMode     string   // GRPC_AUTH_MODE: "off", "warn" (default), or "enforce"
+	ClientTokens []string // GRPC_CLIENT_TOKENS: comma-separated bearer tokens, each >= 32 bytes; required for enforce
 }
 
 // TenantConfig holds multi-tenancy resolution settings.
@@ -366,6 +383,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	grpcCfg, err := loadGRPC(l)
+	if err != nil {
+		return nil, err
+	}
+
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
 	}
@@ -394,7 +416,32 @@ func Load() (*Config, error) {
 		Proxy:        proxyCfg,
 		Admin:        adminCfg,
 		Audit:        auditCfg,
+		GRPC:         grpcCfg,
 	}, nil
+}
+
+// loadGRPC reads GRPC_AUTH_MODE and GRPC_CLIENT_TOKENS. It has no required
+// fields, so it never contributes to l.missing. Enforce mode without tokens is
+// rejected because it would lock out every caller.
+func loadGRPC(l *loader) (GRPCConfig, error) {
+	mode := strings.ToLower(l.optStr("GRPC_AUTH_MODE", GRPCAuthWarn))
+	switch mode {
+	case GRPCAuthOff, GRPCAuthWarn, GRPCAuthEnforce:
+	default:
+		return GRPCConfig{}, fmt.Errorf("GRPC_AUTH_MODE: unsupported value %q (must be off, warn, or enforce)", mode)
+	}
+
+	tokens := splitCSV(os.Getenv("GRPC_CLIENT_TOKENS"))
+	for i, t := range tokens {
+		if len(t) < minGRPCClientTokenBytes {
+			return GRPCConfig{}, fmt.Errorf("GRPC_CLIENT_TOKENS: entry %d is shorter than %d bytes", i+1, minGRPCClientTokenBytes)
+		}
+	}
+	if mode == GRPCAuthEnforce && len(tokens) == 0 {
+		return GRPCConfig{}, fmt.Errorf("GRPC_CLIENT_TOKENS: at least one token is required when GRPC_AUTH_MODE=enforce")
+	}
+
+	return GRPCConfig{AuthMode: mode, ClientTokens: tokens}, nil
 }
 
 // loadHIBP reads the optional HIBP range-endpoint override used to redirect
