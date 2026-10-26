@@ -329,7 +329,6 @@ type AdminWebhookDelivery struct {
 	Payload      string     `json:"payload"`
 	Status       string     `json:"status"`
 	ResponseCode *int       `json:"response_code,omitempty"`
-	ResponseBody *string    `json:"response_body,omitempty"`
 	Attempt      int        `json:"attempt"`
 	NextRetryAt  *time.Time `json:"next_retry_at,omitempty"`
 	DeliveredAt  *time.Time `json:"delivered_at,omitempty"`
@@ -346,13 +345,13 @@ type AdminWebhookDeliveryList struct {
 
 // CreateWebhookRequest is the request body for creating a webhook.
 type CreateWebhookRequest struct {
-	URL        string   `json:"url"         validate:"required,url"`
+	URL        string   `json:"url"         validate:"required,webhook_url"`
 	EventTypes []string `json:"event_types" validate:"required,min=1"`
 }
 
 // UpdateWebhookRequest is the request body for updating a webhook.
 type UpdateWebhookRequest struct {
-	URL        *string  `json:"url"         validate:"omitempty,url"`
+	URL        *string  `json:"url"         validate:"omitempty,webhook_url"`
 	EventTypes []string `json:"event_types" validate:"omitempty"`
 	Active     *bool    `json:"active"      validate:"omitempty"`
 }

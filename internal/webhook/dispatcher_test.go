@@ -2,10 +2,17 @@ package webhook
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -169,11 +176,19 @@ func (r *memDeliveryRepo) FindPendingRetries(_ context.Context, _ uuid.UUID, _ t
 	return nil, nil
 }
 
+// trustLoopbackServer lets d talk to a loopback httptest TLS server: it drops
+// the public-address dial filter (which would refuse 127.0.0.1) but keeps the
+// production redirect policy, and trusts the server's certificate.
+func trustLoopbackServer(d *Dispatcher, ts *httptest.Server) {
+	d.httpClient = newHTTPClient(nil, nil)
+	d.httpClient.Transport.(*http.Transport).TLSClientConfig = ts.Client().Transport.(*http.Transport).TLSClientConfig
+}
+
 // --- Tests ---
 
 func TestDeliverSingle_Success(t *testing.T) {
 	var called atomic.Int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called.Add(1)
 
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
@@ -194,6 +209,7 @@ func TestDeliverSingle_Success(t *testing.T) {
 	delRepo := &memDeliveryRepo{}
 	logger := zap.NewNop()
 	d := NewDispatcher(whRepo, delRepo, logger)
+	trustLoopbackServer(d, ts)
 	defer func() { _ = d.Close() }()
 
 	wh := &domain.Webhook{
@@ -222,7 +238,7 @@ func TestDeliverSingle_Success(t *testing.T) {
 }
 
 func TestDeliverSingle_ServerError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":"boom"}`))
 	}))
@@ -232,6 +248,7 @@ func TestDeliverSingle_ServerError(t *testing.T) {
 	delRepo := &memDeliveryRepo{}
 	logger := zap.NewNop()
 	d := NewDispatcher(whRepo, delRepo, logger)
+	trustLoopbackServer(d, ts)
 	defer func() { _ = d.Close() }()
 
 	wh := &domain.Webhook{
@@ -260,36 +277,171 @@ func TestDispatcher_NameAndClose(t *testing.T) {
 	require.NoError(t, d.Close())
 }
 
-func TestHMACSignature(t *testing.T) {
-	var receivedSig string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedSig = r.Header.Get(signatureHeader)
+func TestHMACSignature_CoversTimestamp(t *testing.T) {
+	var sig, tsHeader string
+	var gotBody []byte
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sig = r.Header.Get(signatureHeader)
+		tsHeader = r.Header.Get(timestampHeader)
+		gotBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
 	}))
 	defer ts.Close()
 
-	whRepo := &memWebhookRepo{}
-	delRepo := &memDeliveryRepo{}
-	d := NewDispatcher(whRepo, delRepo, zap.NewNop())
+	d := NewDispatcher(&memWebhookRepo{}, &memDeliveryRepo{}, zap.NewNop())
 	defer func() { _ = d.Close() }()
+	trustLoopbackServer(d, ts)
+	fixed := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	d.now = func() time.Time { return fixed }
 
-	wh := &domain.Webhook{
-		ID:         uuid.New(),
-		URL:        ts.URL,
-		SecretHash: "my-signing-key",
-		EventTypes: []string{"test"},
-		Active:     true,
-	}
-
-	payload := Payload{
-		ID:        "test-id",
-		EventType: "test",
-		Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
+	wh := &domain.Webhook{ID: uuid.New(), URL: ts.URL, SecretHash: "my-signing-key", Active: true}
+	payload := Payload{ID: "test-id", EventType: "test", Timestamp: fixed}
 
 	_, err := d.DeliverSingle(context.Background(), wh, payload)
 	require.NoError(t, err)
-	assert.True(t, len(receivedSig) > 7, "signature should be present")
-	assert.Equal(t, "sha256=", receivedSig[:7])
+
+	wantTS := strconv.FormatInt(fixed.Unix(), 10)
+	assert.Equal(t, wantTS, tsHeader)
+
+	mac := hmac.New(sha256.New, []byte("my-signing-key"))
+	mac.Write([]byte(wantTS + "." + string(gotBody)))
+	assert.Equal(t, "sha256="+hex.EncodeToString(mac.Sum(nil)), sig)
+
+	// Same body with a different timestamp must produce a different signature.
+	assert.NotEqual(t, sig, signPayload("my-signing-key", "1", gotBody))
+	// A body-only signature (the old scheme) must no longer verify.
+	legacy := hmac.New(sha256.New, []byte("my-signing-key"))
+	legacy.Write(gotBody)
+	assert.NotEqual(t, "sha256="+hex.EncodeToString(legacy.Sum(nil)), sig)
+}
+
+func TestDeliverSingle_RedirectNotFollowed(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	d := NewDispatcher(&memWebhookRepo{}, &memDeliveryRepo{}, zap.NewNop())
+	defer func() { _ = d.Close() }()
+	trustLoopbackServer(d, redirector)
+
+	wh := &domain.Webhook{ID: uuid.New(), URL: redirector.URL, SecretHash: "k", Active: true}
+	delivery, err := d.DeliverSingle(context.Background(), wh, Payload{ID: "id", EventType: "test"})
+
+	require.Error(t, err)
+	require.NotNil(t, delivery)
+	require.NotNil(t, delivery.ResponseCode)
+	assert.Equal(t, http.StatusFound, *delivery.ResponseCode)
+	assert.Zero(t, targetHits.Load(), "redirect must not be followed")
+}
+
+func TestDeliverSingle_ResponseBodyNotStored(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("secret-internal-data"))
+	}))
+	defer ts.Close()
+
+	delRepo := &memDeliveryRepo{}
+	d := NewDispatcher(&memWebhookRepo{}, delRepo, zap.NewNop())
+	defer func() { _ = d.Close() }()
+	trustLoopbackServer(d, ts)
+
+	wh := &domain.Webhook{ID: uuid.New(), URL: ts.URL, Active: true}
+	delivery, err := d.DeliverSingle(context.Background(), wh, Payload{ID: "id", EventType: "test"})
+	require.NoError(t, err)
+
+	require.NotNil(t, delivery.ResponseBody)
+	assert.Empty(t, *delivery.ResponseBody)
+	require.Len(t, delRepo.deliveries, 1)
+	require.NotNil(t, delRepo.deliveries[0].ResponseBody)
+	assert.Empty(t, *delRepo.deliveries[0].ResponseBody)
+}
+
+// fakeResolver returns a net.Resolver whose every lookup is answered by a
+// local UDP DNS server replying with the given A record.
+func fakeResolver(t *testing.T, ip net.IP) *net.Resolver {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pc.Close() })
+
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if n < 12 {
+				continue
+			}
+			// Echo header + question, flag as response; answer A queries only
+			// (other types, e.g. AAAA, get an empty NOERROR answer).
+			qEnd := 12
+			for qEnd < n && buf[qEnd] != 0 {
+				qEnd += int(buf[qEnd]) + 1
+			}
+			qEnd += 5 // root label + QTYPE + QCLASS
+			if qEnd > n {
+				continue
+			}
+			resp := append([]byte{}, buf[:qEnd]...)
+			resp[2], resp[3] = 0x81, 0x80
+			resp[6], resp[7] = 0, 0
+			resp[8], resp[9], resp[10], resp[11] = 0, 0, 0, 0
+			if binary.BigEndian.Uint16(buf[qEnd-4:qEnd-2]) == 1 {
+				resp[7] = 1
+				resp = append(resp, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4)
+				resp = append(resp, ip.To4()...)
+			}
+			_, _ = pc.WriteTo(resp, addr)
+		}
+	}()
+
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dl net.Dialer
+			return dl.DialContext(ctx, "udp", pc.LocalAddr().String())
+		},
+	}
+}
+
+func TestDialer_RefusesHostnameResolvingToLoopback(t *testing.T) {
+	var hits atomic.Int32
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	_, port, err := net.SplitHostPort(ts.Listener.Addr().String())
+	require.NoError(t, err)
+
+	d := NewDispatcher(&memWebhookRepo{}, &memDeliveryRepo{}, zap.NewNop())
+	defer func() { _ = d.Close() }()
+	// Production dial filter, but with a resolver pointing the name at 127.0.0.1.
+	d.httpClient = newHTTPClient(fakeResolver(t, net.ParseIP("127.0.0.1")), controlPublicOnly)
+
+	wh := &domain.Webhook{ID: uuid.New(), URL: "https://rebind.example.test:" + port, Active: true}
+	delivery, err := d.DeliverSingle(context.Background(), wh, Payload{ID: "id", EventType: "test"})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrBlockedAddress)
+	assert.Nil(t, delivery.ResponseCode)
+	assert.Zero(t, hits.Load(), "connection must be refused before reaching the server")
+}
+
+func TestDialer_AllowsHostnameResolvingToPublicAddress(t *testing.T) {
+	// The filter itself is exercised by TestIsBlockedIP; here we only check the
+	// Control func accepts a public literal.
+	require.NoError(t, controlPublicOnly("tcp4", "93.184.216.34:443", nil))
+	require.ErrorIs(t, controlPublicOnly("tcp4", "127.0.0.1:443", nil), ErrBlockedAddress)
+	require.ErrorIs(t, controlPublicOnly("tcp6", "[::1]:443", nil), ErrBlockedAddress)
 }

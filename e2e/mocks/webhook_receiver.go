@@ -15,6 +15,7 @@ import (
 const (
 	signatureHeader = "X-Signature-256"
 	eventTypeHeader = "X-Webhook-Event"
+	timestampHeader = "X-Webhook-Timestamp"
 )
 
 // WebhookDelivery is a captured webhook POST.
@@ -71,7 +72,7 @@ func (m *WebhookReceiverMock) handle(w http.ResponseWriter, r *http.Request) {
 		EventType:      r.Header.Get(eventTypeHeader),
 		Headers:        r.Header.Clone(),
 		Body:           body,
-		SignatureValid: m.verifySignature(body, r.Header.Get(signatureHeader)),
+		SignatureValid: m.verifySignature(r.Header.Get(timestampHeader), body, r.Header.Get(signatureHeader)),
 	}
 
 	m.mu.Lock()
@@ -82,12 +83,13 @@ func (m *WebhookReceiverMock) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // verifySignature mirrors internal/webhook.Dispatcher's HMAC-SHA256
-// "sha256=<hex>" signature scheme.
-func (m *WebhookReceiverMock) verifySignature(body []byte, header string) bool {
-	if m.secret == "" || header == "" {
+// "sha256=<hex>" signature scheme, computed over timestamp + "." + body.
+func (m *WebhookReceiverMock) verifySignature(timestamp string, body []byte, header string) bool {
+	if m.secret == "" || header == "" || timestamp == "" {
 		return false
 	}
 	mac := hmac.New(sha256.New, []byte(m.secret))
+	mac.Write([]byte(timestamp + "."))
 	mac.Write(body)
 	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(want), []byte(header))

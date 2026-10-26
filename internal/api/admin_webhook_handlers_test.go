@@ -282,6 +282,52 @@ func TestAdminCreateWebhook_MissingURL(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
+func TestAdminCreateWebhook_URLRestrictions(t *testing.T) {
+	tests := []struct {
+		url      string
+		wantCode int
+	}{
+		{"https://example.com", http.StatusCreated},
+		{"http://example.com", http.StatusUnprocessableEntity},
+		{"https://127.0.0.1", http.StatusUnprocessableEntity},
+		{"https://169.254.169.254", http.StatusUnprocessableEntity},
+		{"https://10.0.0.1", http.StatusUnprocessableEntity},
+		{"https://100.64.0.1", http.StatusUnprocessableEntity},
+		{"https://[::1]", http.StatusUnprocessableEntity},
+		{"https://[fd00::1]", http.StatusUnprocessableEntity},
+		{"https://localhost", http.StatusUnprocessableEntity},
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			r := newAdminWebhookRouter(&mockAdminWebhookService{})
+			body := map[string]interface{}{"url": tt.url, "event_types": []string{"admin_user_create"}}
+			w := doRequest(r, http.MethodPost, "/admin/webhooks", body)
+			assert.Equal(t, tt.wantCode, w.Code)
+		})
+	}
+}
+
+func TestAdminUpdateWebhook_URLRestrictions(t *testing.T) {
+	tests := []struct {
+		url      string
+		wantCode int
+	}{
+		{"https://example.com", http.StatusOK},
+		{"http://example.com", http.StatusUnprocessableEntity},
+		{"https://127.0.0.1", http.StatusUnprocessableEntity},
+		{"https://169.254.169.254", http.StatusUnprocessableEntity},
+		{"https://10.0.0.1", http.StatusUnprocessableEntity},
+		{"https://[::1]", http.StatusUnprocessableEntity},
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			r := newAdminWebhookRouter(&mockAdminWebhookService{})
+			w := doRequest(r, http.MethodPatch, "/admin/webhooks/wh-1", map[string]interface{}{"url": tt.url})
+			assert.Equal(t, tt.wantCode, w.Code)
+		})
+	}
+}
+
 func TestAdminCreateWebhook_MissingEventTypes(t *testing.T) {
 	r := newAdminWebhookRouter(&mockAdminWebhookService{})
 	body := map[string]interface{}{

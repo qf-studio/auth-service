@@ -10,8 +10,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
+	"net"
 	"net/http"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,12 +24,13 @@ import (
 )
 
 const (
-	deliveryTimeout   = 5 * time.Second
-	maxRetries        = 3
-	dispatchBufSize   = 256
-	signatureHeader   = "X-Signature-256"
-	eventTypeHeader   = "X-Webhook-Event"
-	deliveryIDHeader  = "X-Webhook-Delivery"
+	deliveryTimeout  = 5 * time.Second
+	maxRetries       = 3
+	dispatchBufSize  = 256
+	signatureHeader  = "X-Signature-256"
+	eventTypeHeader  = "X-Webhook-Event"
+	deliveryIDHeader = "X-Webhook-Delivery"
+	timestampHeader  = "X-Webhook-Timestamp"
 )
 
 // retryDelays defines backoff intervals for retry attempts (1s, 5s, 25s).
@@ -47,6 +50,7 @@ type Dispatcher struct {
 	deliveryRepo storage.WebhookDeliveryRepository
 	logger       *zap.Logger
 	httpClient   *http.Client
+	now          func() time.Time
 	ch           chan dispatchJob
 	done         chan struct{}
 }
@@ -66,14 +70,41 @@ func NewDispatcher(
 		webhookRepo:  webhookRepo,
 		deliveryRepo: deliveryRepo,
 		logger:       logger,
-		httpClient: &http.Client{
-			Timeout: deliveryTimeout,
-		},
-		ch:   make(chan dispatchJob, dispatchBufSize),
-		done: make(chan struct{}),
+		httpClient:   newHTTPClient(nil, controlPublicOnly),
+		now:          time.Now,
+		ch:           make(chan dispatchJob, dispatchBufSize),
+		done:         make(chan struct{}),
 	}
 	go d.worker()
 	return d
+}
+
+// newHTTPClient builds the outbound client for webhook deliveries.
+//
+// Decision: the address filter runs in the dialer's Control func, i.e. after
+// DNS resolution, so a hostname that resolves (or rebinds) to an internal
+// address is refused at connect time. Redirects are never followed: a 3xx from
+// the target is recorded as the delivery result, so a public endpoint cannot
+// bounce the request to an internal one. No proxy is configured, otherwise the
+// proxy would be dialed instead of the target and bypass the filter.
+// resolver and control are parameters only so tests can inject a custom
+// resolver and loopback servers.
+func newHTTPClient(resolver *net.Resolver, control func(network, address string, c syscall.RawConn) error) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:  deliveryTimeout,
+		Resolver: resolver,
+		Control:  control,
+	}
+	return &http.Client{
+		Timeout: deliveryTimeout,
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			TLSHandshakeTimeout: deliveryTimeout,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // Dispatch enqueues a webhook delivery for all webhooks subscribed to the event type.
@@ -156,7 +187,18 @@ func (d *Dispatcher) deliver(ctx context.Context, wh *domain.Webhook, payload Pa
 		return nil, fmt.Errorf("create delivery record: %w", err)
 	}
 
-	responseCode, responseBody, deliverErr := d.doHTTPPost(ctx, wh, body, payload)
+	// The target's response body is deliberately never read or stored: it is
+	// attacker-controlled and would turn deliveries into an SSRF read channel.
+	// Only the status code is kept; the column is written as an empty string.
+	responseBody := new(string)
+	start := time.Now()
+	responseCode, deliverErr := d.doHTTPPost(ctx, wh, body, payload)
+	d.logger.Debug("webhook delivery attempt finished",
+		zap.String("webhook_id", wh.ID.String()),
+		zap.Intp("status_code", responseCode),
+		zap.Duration("duration", time.Since(start)),
+		zap.Bool("success", deliverErr == nil),
+	)
 
 	if deliverErr == nil {
 		deliveredAt := time.Now().UTC()
@@ -196,36 +238,43 @@ func (d *Dispatcher) deliver(ctx context.Context, wh *domain.Webhook, payload Pa
 	return delivery, deliverErr
 }
 
-func (d *Dispatcher) doHTTPPost(ctx context.Context, wh *domain.Webhook, body []byte, payload Payload) (*int, *string, error) {
+// signPayload returns the X-Signature-256 value: HMAC-SHA256 over
+// timestamp + "." + body, so a captured request cannot be replayed with a
+// fresh timestamp.
+func signPayload(secret, timestamp string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func (d *Dispatcher) doHTTPPost(ctx context.Context, wh *domain.Webhook, body []byte, payload Payload) (*int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, wh.URL, bytes.NewReader(body))
 	if err != nil {
-		return nil, nil, fmt.Errorf("create webhook request: %w", err)
+		return nil, fmt.Errorf("create webhook request: %w", err)
 	}
+	timestamp := strconv.FormatInt(d.now().Unix(), 10)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(eventTypeHeader, payload.EventType)
 	req.Header.Set(deliveryIDHeader, payload.ID)
+	req.Header.Set(timestampHeader, timestamp)
 
 	// HMAC-SHA256 signature using the webhook's secret hash as the key.
 	if wh.SecretHash != "" {
-		mac := hmac.New(sha256.New, []byte(wh.SecretHash))
-		mac.Write(body)
-		sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-		req.Header.Set(signatureHeader, sig)
+		req.Header.Set(signatureHeader, signPayload(wh.SecretHash, timestamp, body))
 	}
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("webhook HTTP request failed: %w", err)
+		return nil, fmt.Errorf("webhook HTTP request failed: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	_ = resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	code := resp.StatusCode
-	respStr := string(respBody)
-
 	if code >= 200 && code < 300 {
-		return &code, &respStr, nil
+		return &code, nil
 	}
 
-	return &code, &respStr, fmt.Errorf("webhook returned status %d", code)
+	return &code, fmt.Errorf("webhook returned status %d", code)
 }
