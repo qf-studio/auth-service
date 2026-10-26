@@ -81,9 +81,11 @@ func columnExists(t *testing.T, dsn, table, column string) bool {
 
 // TestMigration_ConsentGrantsUpDown proves 000018_consent_grants,
 // 000019_create_api_keys_table, 000020_add_client_audience, and
-// 000021_add_email_change apply and revert cleanly: after `up` both tables
-// exist, clients has an audience column, and users has a pending_email
-// column; reverting the newest migration (000021) drops that column,
+// 000021_add_email_change, and 000022_users_email_case_insensitive_unique
+// apply and revert cleanly: after `up` both tables exist, clients has an
+// audience column, users has a pending_email column and the case-insensitive
+// email index; reverting the newest migration (000022) drops that index,
+// reverting the next (000021) drops the pending_email column,
 // reverting the next one (000020) drops the audience column, and reverting
 // the one after that (`steps -1` again, undoing 000019) drops api_keys
 // while consent_grants — applied by the earlier, non-reverted 000018 — is
@@ -105,12 +107,22 @@ func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	version, dirty, err := m.Version()
 	require.NoError(t, err)
 	require.False(t, dirty, "schema should not be dirty after a clean up")
-	require.Equal(t, uint(21), version, "expected embedded migrations to be at head version 21")
+	require.Equal(t, uint(22), version, "expected embedded migrations to be at head version 22")
 
 	require.True(t, tableExists(t, dsn, "consent_grants"), "consent_grants table should exist after migrate up")
 	require.True(t, tableExists(t, dsn, "api_keys"), "api_keys table should exist after migrate up")
 	require.True(t, columnExists(t, dsn, "clients", "audience"), "clients.audience column should exist after migrate up")
 	require.True(t, columnExists(t, dsn, "users", "pending_email"), "users.pending_email column should exist after migrate up")
+
+	require.True(t, indexExists(t, dsn, "idx_users_tenant_lower_email"), "case-insensitive email index should exist after migrate up")
+
+	require.NoError(t, m.Steps(-1), "migrate down one step (000022 down)")
+	require.False(t, indexExists(t, dsn, "idx_users_tenant_lower_email"), "case-insensitive email index should be dropped after reverting 000022")
+
+	version, dirty, err = m.Version()
+	require.NoError(t, err)
+	require.False(t, dirty)
+	require.Equal(t, uint(21), version, "expected version 21 after reverting 000022")
 
 	require.NoError(t, m.Steps(-1), "migrate down one step (000021 down)")
 	require.False(t, columnExists(t, dsn, "users", "pending_email"), "users.pending_email column should be dropped after reverting 000021")
@@ -136,4 +148,25 @@ func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, dirty)
 	require.Equal(t, uint(18), version, "expected version 18 after reverting 000019")
+}
+
+// indexExists reports whether the given index exists in the public schema.
+func indexExists(t *testing.T, dsn, index string) bool {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	var exists bool
+	err = pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1)`,
+		index,
+	).Scan(&exists)
+	require.NoError(t, err)
+
+	return exists
 }

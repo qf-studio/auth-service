@@ -203,6 +203,7 @@ func (s *Service) SetMFAChecker(mfa MFAChecker) {
 
 // Register creates a new user account with policy-aware password validation.
 func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.UserInfo, error) {
+	email = domain.NormalizeEmail(email)
 	tenantID := domain.TenantIDFromContext(ctx)
 
 	if err := s.policy.ValidatePassword(pwd); err != nil {
@@ -330,6 +331,7 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) error {
 // attempts return ErrRateLimited (429) without verifying the password until
 // the lockout expires. A correct password resets the counter.
 func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult, error) {
+	email = domain.NormalizeEmail(email)
 	tenantID := domain.TenantIDFromContext(ctx)
 	account := loginAccountKey(tenantID, email)
 
@@ -571,6 +573,7 @@ func (s *Service) resetLoginFailures(ctx context.Context, account string) {
 // and emailing the reset link. Returns nil even if the email doesn't exist, and even if
 // delivery fails, to prevent user enumeration via response timing/content.
 func (s *Service) ResetPassword(ctx context.Context, emailAddr string) error {
+	emailAddr = domain.NormalizeEmail(emailAddr)
 	tenantID := domain.TenantIDFromContext(ctx)
 
 	// Look up the user first: unknown addresses skip both token storage and
@@ -906,6 +909,7 @@ func (s *Service) LogoutAll(ctx context.Context, userID string) error {
 // request is rejected with ErrEmailChangeRevertWindowOpen (409), so the revert
 // link already mailed to the previous address stays valid.
 func (s *Service) RequestEmailChange(ctx context.Context, userID, newEmail, pwd string) (*api.EmailChangeResult, error) {
+	newEmail = domain.NormalizeEmail(newEmail)
 	tenantID := domain.TenantIDFromContext(ctx)
 
 	if s.emailEnabled && (s.emailChangeConfirmURLBase == "" || s.emailChangeRevertURLBase == "") {

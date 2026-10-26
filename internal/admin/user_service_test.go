@@ -687,3 +687,42 @@ func TestUserService_CreateUser_BreachedPassword(t *testing.T) {
 		})
 	}
 }
+
+// --- Email normalization (GH-526) ---
+
+func TestUserService_CreateUser_NormalizesEmail(t *testing.T) {
+	var got string
+	repo := &mockAdminUserRepo{
+		createFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+			got = u.Email
+			return u, nil
+		},
+	}
+	svc := newTestUserService(repo)
+
+	user, err := svc.CreateUser(context.Background(), &api.CreateUserRequest{
+		Email:    "  New@Example.COM ",
+		Password: "super-secure-password",
+		Name:     "New User",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "new@example.com", got)
+	assert.Equal(t, "new@example.com", user.Email)
+}
+
+func TestUserService_UpdateUser_NormalizesEmail(t *testing.T) {
+	var got string
+	repo := &mockAdminUserRepo{
+		updateFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+			got = u.Email
+			return u, nil
+		},
+	}
+	svc := newTestUserService(repo)
+
+	email := " Updated@Example.COM "
+	user, err := svc.UpdateUser(context.Background(), "user-1", &api.UpdateUserRequest{Email: &email})
+	require.NoError(t, err)
+	assert.Equal(t, "updated@example.com", got)
+	assert.Equal(t, "updated@example.com", user.Email)
+}

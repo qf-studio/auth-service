@@ -112,7 +112,7 @@ func (s *UserService) CreateUser(ctx context.Context, req *api.CreateUserRequest
 	user := &domain.User{
 		ID:           uuid.New().String(),
 		TenantID:     tenantID,
-		Email:        req.Email,
+		Email:        domain.NormalizeEmail(req.Email),
 		PasswordHash: hash,
 		Name:         req.Name,
 		Roles:        roles,
@@ -152,7 +152,7 @@ func (s *UserService) UpdateUser(ctx context.Context, userID string, req *api.Up
 	}
 
 	if req.Email != nil {
-		existing.Email = *req.Email
+		existing.Email = domain.NormalizeEmail(*req.Email)
 	}
 	if req.Name != nil {
 		existing.Name = *req.Name

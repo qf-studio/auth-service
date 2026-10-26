@@ -129,12 +129,12 @@ func (r *PostgresUserRepository) Create(ctx context.Context, user *domain.User) 
 
 // FindByID retrieves a user by ID. Soft-deleted users are included.
 func (r *PostgresUserRepository) FindByID(ctx context.Context, tenantID uuid.UUID, id string) (*domain.User, error) {
-	return r.findByColumn(ctx, tenantID, "id", id)
+	return r.findByColumn(ctx, tenantID, "id", "id = $1", id)
 }
 
 // FindByEmail retrieves a user by email address. Soft-deleted users are included.
 func (r *PostgresUserRepository) FindByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*domain.User, error) {
-	return r.findByColumn(ctx, tenantID, "email", email)
+	return r.findByColumn(ctx, tenantID, "email", "lower(email) = lower($1)", email)
 }
 
 // UpdateLastLogin sets the last_login_at timestamp for a user.
@@ -152,16 +152,17 @@ func (r *PostgresUserRepository) UpdateLastLogin(ctx context.Context, tenantID u
 	return nil
 }
 
-// findByColumn is a shared helper for single-column lookups.
-func (r *PostgresUserRepository) findByColumn(ctx context.Context, tenantID uuid.UUID, column, value string) (*domain.User, error) {
-	// column is always a trusted constant from this package — not user input.
+// findByColumn is a shared helper for single-column lookups. column labels the
+// lookup in errors; condition is the WHERE predicate over $1 (the value).
+func (r *PostgresUserRepository) findByColumn(ctx context.Context, tenantID uuid.UUID, column, condition, value string) (*domain.User, error) {
+	// condition is always a trusted constant from this package — not user input.
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, email, password_hash, name, roles, locked, locked_at, locked_reason,
 		       email_verified, email_verify_token, email_verify_token_expires_at,
 		       last_login_at, force_password_change, password_changed_at,
 		       created_at, updated_at, deleted_at
 		FROM users
-		WHERE %s = $1 AND tenant_id = $2`, column)
+		WHERE %s AND tenant_id = $2`, condition)
 
 	user := &domain.User{}
 	err := r.pool.QueryRow(ctx, query, value, tenantID).Scan(
