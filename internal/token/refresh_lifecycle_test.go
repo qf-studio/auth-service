@@ -283,3 +283,76 @@ func TestRefresh_ActiveUserGetsCurrentRoles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"editor"}, claims.Roles)
 }
+
+func TestRefresh_DPoPBinding(t *testing.T) {
+	const jkt = "thumbprint-A"
+
+	tests := []struct {
+		name      string
+		bound     bool   // issue the original pair with a DPoP thumbprint
+		proof     string // thumbprint presented on refresh ("" = no proof)
+		wantErr   bool
+		wantJKT   string // expected cnf.jkt / record JKT on the new pair
+		wantType  string
+		tokenLive bool // original refresh token still valid after the call
+	}{
+		{name: "bound record, matching proof", bound: true, proof: jkt, wantJKT: jkt, wantType: "DPoP"},
+		{name: "bound record, no proof", bound: true, proof: "", wantErr: true, tokenLive: true},
+		{name: "bound record, different thumbprint", bound: true, proof: "thumbprint-B", wantErr: true, tokenLive: true},
+		{name: "unbound record, no proof", bound: false, proof: "", wantJKT: "", wantType: "Bearer"},
+		{name: "unbound record, proof binds new pair", bound: false, proof: jkt, wantJKT: jkt, wantType: "DPoP"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, mr := newES256Service(t)
+			ctx := context.Background()
+			svc.SetUserLookup(activeUsers("user"))
+
+			var pair *api.AuthResult
+			var err error
+			if tt.bound {
+				pair, err = svc.IssueTokenPairWithDPoP(ctx, "user-dpop", nil, nil, domain.ClientTypeUser, jkt)
+			} else {
+				pair, err = svc.IssueTokenPair(ctx, "user-dpop", nil, nil, domain.ClientTypeUser)
+			}
+			require.NoError(t, err)
+			oldKey := refreshKey(t, pair.RefreshToken)
+
+			var rotated *api.AuthResult
+			if tt.proof != "" {
+				rotated, err = svc.RefreshWithDPoP(ctx, pair.RefreshToken, tt.proof)
+			} else {
+				rotated, err = svc.Refresh(ctx, pair.RefreshToken)
+			}
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, api.ErrUnauthorized)
+				assert.True(t, mr.Exists("rt_sig:"+oldKey), "failed attempt must not consume the token")
+				assert.False(t, mr.Exists("rt_used:"+oldKey))
+				if tt.tokenLive {
+					// The legitimate client can still refresh with the right proof.
+					_, err = svc.RefreshWithDPoP(ctx, pair.RefreshToken, jkt)
+					assert.NoError(t, err)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantType, rotated.TokenType)
+
+			claims, err := svc.ValidateToken(ctx, strings.TrimPrefix(rotated.AccessToken, "qf_at_"))
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantJKT, claims.JKTThumbprint)
+
+			raw, err := mr.Get("rt_sig:" + refreshKey(t, rotated.RefreshToken))
+			require.NoError(t, err)
+			var rec struct {
+				JKT string `json:"jkt"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(raw), &rec))
+			assert.Equal(t, tt.wantJKT, rec.JKT, "new refresh record must carry the binding")
+		})
+	}
+}

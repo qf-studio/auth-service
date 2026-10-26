@@ -11,6 +11,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -212,7 +213,7 @@ func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, sco
 		return nil, fmt.Errorf("issue access token: %w", err)
 	}
 
-	refreshToken, err := s.issueRefreshToken(ctx, subject, clientID)
+	refreshToken, err := s.issueRefreshToken(ctx, subject, clientID, jktThumbprint)
 	if err != nil {
 		return nil, fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -246,6 +247,19 @@ func (s *Service) refreshInternal(ctx context.Context, rawRefreshToken, jktThumb
 		return nil, fmt.Errorf("invalid refresh token: %w", api.ErrUnauthorized)
 	}
 	subject, clientID := record.Subject, record.ClientID
+
+	// DPoP binding (GH-539): a refresh token issued with a DPoP key stays
+	// bound to it. The stored thumbprint is the source of truth; the caller's
+	// proof must match it. Checked before anything is consumed or deleted so a
+	// failed attempt cannot burn the legitimate client's token, and the error
+	// is identical to an invalid token so the binding is not disclosed.
+	// Decision: unbound records (empty JKT) keep the pre-existing behaviour,
+	// and with a proof the rotated pair becomes bound.
+	if record.JKT != "" {
+		if subtle.ConstantTimeCompare([]byte(record.JKT), []byte(jktThumbprint)) != 1 {
+			return nil, fmt.Errorf("invalid refresh token: %w", api.ErrUnauthorized)
+		}
+	}
 
 	tenantID := domain.TenantIDFromContext(ctx)
 
@@ -664,9 +678,12 @@ type refreshTokenData struct {
 	// subject's revocation epoch (see refresh_lifecycle.go). Zero for
 	// records written before it existed.
 	IssuedAt int64 `json:"iat,omitempty"`
+	// JKT is the DPoP key thumbprint the token was issued with (GH-539).
+	// Empty for unbound tokens and for records written before it existed.
+	JKT string `json:"jkt,omitempty"`
 }
 
-func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID string) (string, error) {
+func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID, jktThumbprint string) (string, error) {
 	if len(s.cfg.SystemSecrets) == 0 {
 		return "", fmt.Errorf("no system secrets configured")
 	}
@@ -684,7 +701,7 @@ func (s *Service) issueRefreshToken(ctx context.Context, subject, clientID strin
 
 	// Store the signature in Redis keyed by encoded key, value is the JSON
 	// encoding of refreshTokenData (subject + originating client, if any).
-	encoded, err := json.Marshal(refreshTokenData{Subject: subject, ClientID: clientID, IssuedAt: time.Now().UnixNano()})
+	encoded, err := json.Marshal(refreshTokenData{Subject: subject, ClientID: clientID, IssuedAt: time.Now().UnixNano(), JKT: jktThumbprint})
 	if err != nil {
 		return "", fmt.Errorf("encode refresh token data: %w", err)
 	}
