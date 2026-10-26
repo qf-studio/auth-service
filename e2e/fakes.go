@@ -16,6 +16,10 @@ const (
 	// service-to-service secrets, unrelated to user passwords).
 	fakeSystemSecret = "e2e-not-a-real-system-secret-0000000000" //nolint:gosec // fake, test-only
 
+	// fakeAdminAPIToken seeds ADMIN_API_TOKENS (>= 32 bytes) and is attached
+	// to every request the harness HTTP client sends to the admin port.
+	fakeAdminAPIToken = "e2e-not-a-real-admin-api-token-0000000" //nolint:gosec // fake, test-only
+
 	// fakePasswordPepper seeds PASSWORD_PEPPER for Argon2id hashing.
 	fakePasswordPepper = "e2e-not-a-real-password-pepper" //nolint:gosec // fake, test-only
 

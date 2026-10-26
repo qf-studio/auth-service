@@ -4,11 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 // suite is populated by TestMain before any test runs, unless -short was
@@ -62,12 +60,14 @@ func TestMain(m *testing.M) {
 // SMOKE_* environment variables, in place of the testcontainers-managed
 // stack setupSuite boots. AdminBaseURL and GRPCAddr are optional: the
 // TestSmoke* tests skip the legs that need them (introspect, gRPC
-// ValidateToken) when SMOKE_ADMIN_URL/SMOKE_GRPC_ADDR are unset.
+// ValidateToken) when SMOKE_ADMIN_URL/SMOKE_GRPC_ADDR are unset. SMOKE_ADMIN_TOKEN must hold one of the
+// deployment's ADMIN_API_TOKENS for the introspect leg to authenticate.
 func liveEnv(baseURL string) *Env {
+	adminURL := strings.TrimRight(os.Getenv("SMOKE_ADMIN_URL"), "/")
 	return &Env{
 		PublicBaseURL: strings.TrimRight(baseURL, "/"),
-		AdminBaseURL:  strings.TrimRight(os.Getenv("SMOKE_ADMIN_URL"), "/"),
+		AdminBaseURL:  adminURL,
 		GRPCAddr:      os.Getenv("SMOKE_GRPC_ADDR"),
-		HTTPClient:    &http.Client{Timeout: 15 * time.Second},
+		HTTPClient:    newAdminAuthClient(adminURL, os.Getenv("SMOKE_ADMIN_TOKEN")),
 	}
 }

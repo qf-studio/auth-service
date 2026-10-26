@@ -63,11 +63,19 @@ type AdminDeps struct {
 	// X-Forwarded-For is used to derive the client IP (see
 	// middleware.ConfigureClientIP). Empty (default) trusts nothing.
 	TrustedProxyCIDRs []*net.IPNet
+
+	// APITokens are the accepted ADMIN_API_TOKENS bearer credentials. Empty
+	// disables every /admin/* route (503 admin_api_disabled).
+	APITokens []string
+
+	// RequestSize caps request bodies on the admin engine; nil disables it.
+	RequestSize gin.HandlerFunc
 }
 
 // NewAdminRouter creates a *gin.Engine with the admin API route tree.
-// Only correlation ID middleware is applied (no auth, no rate limiting).
-// The admin port is protected at the network level.
+// Every /admin/* route requires a bearer credential from deps.APITokens
+// (503 admin_api_disabled when none are configured); /health stays open.
+// There is no rate limiting; the admin port is also network-restricted.
 // Client-IP derivation is restricted to deps.TrustedProxyCIDRs; an error is
 // returned if that list cannot be applied.
 func NewAdminRouter(svc *AdminServices, deps *AdminDeps) (*gin.Engine, error) {
@@ -77,12 +85,16 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) (*gin.Engine, error) {
 	}
 	r.Use(gin.Recovery())
 	r.Use(middleware.CorrelationID())
+	if deps.RequestSize != nil {
+		r.Use(deps.RequestSize)
+	}
 
 	// Health probe with dependency checks.
 	hh := newHealthHandlers(deps.Health)
 	r.GET("/health", hh.health)
 
 	admin := r.Group("/admin")
+	admin.Use(middleware.AdminToken(deps.APITokens))
 
 	// Metrics endpoints.
 	if deps.Metrics != nil {
@@ -235,7 +247,7 @@ func NewAdminRouter(svc *AdminServices, deps *AdminDeps) (*gin.Engine, error) {
 		// Client creation uses the existing POST /admin/clients endpoint;
 		// the approve endpoint activates pending third-party clients.
 		if svc.ClientApproval != nil {
-			admin.GET("/clients/:id/approve", consentH.ApproveClient)
+			admin.POST("/clients/:id/approve", consentH.ApproveClient)
 		}
 	}
 

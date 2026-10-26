@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
-	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // --- Mock AdminAPIKeyService ---
@@ -144,7 +143,7 @@ func (m *mockAdminAPIKeyService) RotateAPIKey(ctx context.Context, keyID string)
 
 func newAdminAPIKeyRouter(apiKeySvc api.AdminAPIKeyService) *gin.Engine {
 	svc := &api.AdminServices{APIKeys: apiKeySvc}
-	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	return mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 }
 
 // --- List API Keys ---

@@ -137,7 +137,7 @@ var adminGoldenRoutes = []routeCheck{
 	{http.MethodPut, "/admin/oauth/auth/requests/login"},
 	{http.MethodGet, "/admin/oauth/auth/requests/consent"},
 	{http.MethodPut, "/admin/oauth/auth/requests/consent"},
-	{http.MethodGet, "/admin/clients/:id/approve"},
+	{http.MethodPost, "/admin/clients/:id/approve"},
 }
 
 // TestGoldenRouteList_PublicRouter and TestGoldenRouteList_AdminRouter

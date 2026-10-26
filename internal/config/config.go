@@ -29,6 +29,7 @@ type Config struct {
 	Tenant       TenantConfig
 	HIBP         HIBPConfig
 	Proxy        ProxyConfig
+	Admin        AdminConfig
 }
 
 // TenantConfig holds multi-tenancy resolution settings.
@@ -93,6 +94,18 @@ type DPoPConfig struct {
 // HIBPConfig holds HaveIBeenPwned Pwned Passwords API settings.
 type HIBPConfig struct {
 	APIURL string // HIBP_API_URL: base range-endpoint URL; empty uses internal/hibp's built-in pwnedpasswords.com default
+}
+
+// MinAdminTokenBytes is the minimum length of each ADMIN_API_TOKENS value.
+const MinAdminTokenBytes = 32
+
+// AdminConfig holds admin API (:4001) authentication settings.
+type AdminConfig struct {
+	// APITokens: ADMIN_API_TOKENS, comma-separated static bearer tokens, each
+	// at least MinAdminTokenBytes long. Any one of them authenticates a
+	// request, so two can be configured at once to rotate. Empty disables
+	// every /admin/* route (503 admin_api_disabled) without failing startup.
+	APITokens []string
 }
 
 // ProxyConfig holds trusted reverse-proxy settings.
@@ -332,6 +345,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	adminCfg, err := loadAdmin(l)
+	if err != nil {
+		return nil, err
+	}
+
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
 	}
@@ -358,6 +376,7 @@ func Load() (*Config, error) {
 		Tenant:       tenantCfg,
 		HIBP:         hibpCfg,
 		Proxy:        proxyCfg,
+		Admin:        adminCfg,
 	}, nil
 }
 
@@ -370,6 +389,16 @@ func loadHIBP(l *loader) HIBPConfig {
 
 // loadProxy reads TRUSTED_PROXY_CIDRS and parses each entry as a CIDR. It has
 // no required fields, so it never contributes to l.missing.
+func loadAdmin(l *loader) (AdminConfig, error) {
+	tokens := splitCSV(l.optStr("ADMIN_API_TOKENS", ""))
+	for i, tok := range tokens {
+		if len(tok) < MinAdminTokenBytes {
+			return AdminConfig{}, fmt.Errorf("ADMIN_API_TOKENS: token %d is shorter than %d bytes", i+1, MinAdminTokenBytes)
+		}
+	}
+	return AdminConfig{APITokens: tokens}, nil
+}
+
 func loadProxy(l *loader) (ProxyConfig, error) {
 	raw := l.optStr("TRUSTED_PROXY_CIDRS", "")
 	entries := splitCSV(raw)

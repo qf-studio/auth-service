@@ -14,7 +14,6 @@ import (
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/domain"
-	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // --- Mock AdminUserService ---
@@ -151,7 +150,7 @@ func (m *mockAdminUserService) UnlockUser(ctx context.Context, userID string) (*
 
 func newAdminUserRouter(userSvc api.AdminUserService) *gin.Engine {
 	svc := &api.AdminServices{Users: userSvc}
-	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	return mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 }
 
 // --- List Users ---

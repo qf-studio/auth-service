@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
-	"github.com/qf-studio/auth-service/internal/health"
 )
 
 // --- Mock AdminBrokerService ---
@@ -135,7 +134,7 @@ func (m *mockAdminBrokerService) RotateCredential(ctx context.Context, credentia
 
 func newAdminBrokerRouter(brokerSvc api.AdminBrokerService) *gin.Engine {
 	svc := &api.AdminServices{Brokers: brokerSvc}
-	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
+	return mustRouter(api.NewAdminRouter(svc, testAdminDeps()))
 }
 
 // --- List Credentials ---

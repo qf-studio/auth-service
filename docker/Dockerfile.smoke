@@ -15,6 +15,8 @@
 #                     skipped when unset.
 #   SMOKE_ADMIN_URL - optional. Admin API base URL; enables the introspect
 #                     leg when reachable.
+#   SMOKE_ADMIN_TOKEN - one of the deployment's ADMIN_API_TOKENS; required
+#                     for the introspect leg (admin API needs a bearer token).
 #
 # Exit code is 0 on pass, non-zero on failure; stdout is plain `go test -v`
 # text (see e2e/main_test.go's liveEnv for how these env vars are consumed).

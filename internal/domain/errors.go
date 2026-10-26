@@ -21,6 +21,10 @@ const (
 	// the endpoint requires (RFC 6750 §3.1; e.g. userinfo without openid).
 	CodeInsufficientScope = "insufficient_scope"
 
+	// CodeAdminAPIDisabled is returned (503) by every /admin/* route when no
+	// ADMIN_API_TOKENS are configured (GH-524).
+	CodeAdminAPIDisabled = "admin_api_disabled"
+
 	// CodeInvalidPassword is returned when a password-verification step (e.g.
 	// confirming an email change) fails. Lowercase per the email-change API
 	// contract (GH-518), unlike the other, longer-standing UPPER_SNAKE_CASE codes.
