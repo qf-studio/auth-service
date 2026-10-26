@@ -250,13 +250,20 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
 
-	// GH-512: persist the client id alongside the refresh token (via
+	// GH-541: a refresh token is issued only when offline_access was granted
+	// (OIDC Core §11). Decision: the check uses the granted code.Scopes, never
+	// the raw request.
+	// GH-512: when it is issued, persist the client id alongside it (via
 	// IssueTokenPairForClient instead of IssueTokenPair) so a later refresh
 	// can re-resolve this client's Audience rather than falling back to the
 	// global JWT_AUDIENCE.
-	result, err := s.tokens.IssueTokenPairForClient(ctx, user.ID, user.Roles, code.Scopes, domain.ClientTypeUser, req.ClientID, client.Audience...)
+	issue := s.tokens.IssueAccessTokenForClient
+	if containsScope(code.Scopes, "offline_access") {
+		issue = s.tokens.IssueTokenPairForClient
+	}
+	result, err := issue(ctx, user.ID, user.Roles, code.Scopes, domain.ClientTypeUser, req.ClientID, client.Audience...)
 	if err != nil {
-		s.logger.Error("exchange code: issue token pair failed", zap.Error(err))
+		s.logger.Error("exchange code: issue tokens failed", zap.Error(err))
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
 

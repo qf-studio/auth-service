@@ -30,9 +30,10 @@ func (f *fakeUserLookup) FindByID(ctx context.Context, tenantID uuid.UUID, id st
 
 // fakeTokenIssuer is a configurable fake for oidc.TokenIssuer.
 type fakeTokenIssuer struct {
-	issueTokenPairFn          func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error)
-	issueTokenPairForClientFn func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
-	issueIDTokenFn            func(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
+	issueTokenPairFn            func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error)
+	issueTokenPairForClientFn   func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
+	issueAccessTokenForClientFn func(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
+	issueIDTokenFn              func(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
 }
 
 func (f *fakeTokenIssuer) IssueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, audience ...string) (*api.AuthResult, error) {
@@ -44,6 +45,19 @@ func (f *fakeTokenIssuer) IssueTokenPairForClient(ctx context.Context, subject s
 		return f.issueTokenPairForClientFn(ctx, subject, roles, scopes, clientType, clientID, audience...)
 	}
 	return f.issueTokenPairFn(ctx, subject, roles, scopes, clientType, audience...)
+}
+
+func (f *fakeTokenIssuer) IssueAccessTokenForClient(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error) {
+	if f.issueAccessTokenForClientFn != nil {
+		return f.issueAccessTokenForClientFn(ctx, subject, roles, scopes, clientType, clientID, audience...)
+	}
+	res, err := f.issueTokenPairFn(ctx, subject, roles, scopes, clientType, audience...)
+	if err != nil || res == nil {
+		return res, err
+	}
+	out := *res
+	out.RefreshToken = ""
+	return &out, nil
 }
 
 func (f *fakeTokenIssuer) IssueIDToken(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error) {

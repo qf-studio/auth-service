@@ -1556,3 +1556,21 @@ func TestIssueTokenPair_UniqueJTI(t *testing.T) {
 		jtis[claims.TokenID] = true
 	}
 }
+
+// TestIssueAccessTokenForClient_NoRefreshToken covers GH-541: the access-only
+// issuer returns a valid access token and no refresh token.
+func TestIssueAccessTokenForClient_NoRefreshToken(t *testing.T) {
+	svc, _ := newES256Service(t)
+	ctx := context.Background()
+
+	result, err := svc.IssueAccessTokenForClient(ctx, "user-gh541", []string{"user"}, []string{"openid"}, domain.ClientTypeUser, uuid.New().String(), "https://client-x.example.com")
+	require.NoError(t, err)
+	assert.Empty(t, result.RefreshToken)
+	assert.Equal(t, "Bearer", result.TokenType)
+	assert.Positive(t, result.ExpiresIn)
+
+	claims, err := svc.ValidateToken(ctx, strings.TrimPrefix(result.AccessToken, "qf_at_"))
+	require.NoError(t, err)
+	assert.Equal(t, "user-gh541", claims.Subject)
+	assert.Equal(t, []string{"https://client-x.example.com"}, claims.Audience)
+}

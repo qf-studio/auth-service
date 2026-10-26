@@ -208,7 +208,7 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `MFA_BACKUP_CODE_COUNT` | `10` | Number of backup codes |
 | `OIDC_ISSUER_URL` | `https://auth.qf.studio` | OIDC issuer URL (also sets the `iss` claim on JWTs) |
 | `OIDC_ID_TOKEN_TTL` | `1h` | ID token lifetime |
-| `OIDC_SUPPORTED_SCOPES` | `openid,profile,email,offline_access` | Supported OIDC scopes |
+| `OIDC_SUPPORTED_SCOPES` | `openid,profile,email,offline_access` | Supported OIDC scopes. OIDC clients must request `offline_access` (and have it in their client scopes) to receive a refresh token from the authorization-code grant |
 | `SAML_ENABLED` | `false` | Enable SAML SSO |
 | `TENANT_DEFAULT_ID` | _(empty)_ | Default tenant ID |
 | `TENANT_RESOLUTION_MODE` | `both` | Tenant resolution: `subdomain`, `header`, or `both` |

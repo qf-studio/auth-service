@@ -31,6 +31,9 @@ type TokenIssuer interface {
 	// re-resolve the client and reapply its current Audience (GH-512)
 	// instead of falling back to the global JWT_AUDIENCE.
 	IssueTokenPairForClient(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
+	// IssueAccessTokenForClient mints an access token with no refresh token,
+	// for code exchanges where offline_access was not granted.
+	IssueAccessTokenForClient(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error)
 	IssueIDToken(ctx context.Context, subject, clientID, nonce string, authTime time.Time) (string, error)
 }
 

@@ -207,6 +207,23 @@ func (s *Service) IssueTokenPairForClient(ctx context.Context, subject string, r
 	return s.issueTokenPair(ctx, subject, roles, scopes, clientType, "", clientID, audience)
 }
 
+// IssueAccessTokenForClient generates an access token only, with no refresh
+// token, for a request made on behalf of a known OAuth2 client. The OIDC
+// code-exchange grant uses it when offline_access was not granted (OIDC Core
+// §11). audience behaves as documented on IssueTokenPair.
+func (s *Service) IssueAccessTokenForClient(_ context.Context, subject string, roles, scopes []string, clientType domain.ClientType, clientID string, audience ...string) (*api.AuthResult, error) {
+	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, "", audience)
+	if err != nil {
+		return nil, fmt.Errorf("issue access token: %w", err)
+	}
+
+	return &api.AuthResult{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   int(s.cfg.AccessTokenTTL.Seconds()),
+	}, nil
+}
+
 func (s *Service) issueTokenPair(ctx context.Context, subject string, roles, scopes []string, clientType domain.ClientType, jktThumbprint, clientID string, audience []string) (*api.AuthResult, error) {
 	accessToken, err := s.issueAccessToken(subject, roles, scopes, clientType, jktThumbprint, audience)
 	if err != nil {

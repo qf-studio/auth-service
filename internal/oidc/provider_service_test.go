@@ -430,7 +430,7 @@ func TestProviderService_ExchangeCode_Success_WithOpenIDScope(t *testing.T) {
 		Subject:             user.ID,
 		ClientID:            client.ID.String(),
 		RedirectURI:         client.RedirectURIs[0],
-		Scopes:              []string{"openid", "profile"},
+		Scopes:              []string{"openid", "profile", "offline_access"},
 		Nonce:               "nonce-xyz",
 		CodeChallenge:       oauth.S256Challenge("verifier-1"),
 		CodeChallengeMethod: "S256",
@@ -451,7 +451,7 @@ func TestProviderService_ExchangeCode_Success_WithOpenIDScope(t *testing.T) {
 	assert.Equal(t, "at", resp.AccessToken)
 	assert.Equal(t, "rt", resp.RefreshToken)
 	assert.Equal(t, "id-token-abc", resp.IDToken)
-	assert.Equal(t, "openid profile", resp.Scope)
+	assert.Equal(t, "openid profile offline_access", resp.Scope)
 	assert.Equal(t, "nonce-xyz", issuedNonce)
 	assert.Equal(t, client.ID.String(), issuedClientID)
 }
@@ -575,7 +575,7 @@ func TestProviderService_ExchangeCode_PersistsClientIDForRefresh(t *testing.T) {
 		Subject:             user.ID,
 		ClientID:            client.ID.String(),
 		RedirectURI:         client.RedirectURIs[0],
-		Scopes:              []string{"profile"},
+		Scopes:              []string{"profile", "offline_access"},
 		CodeChallenge:       oauth.S256Challenge("verifier-cid"),
 		CodeChallengeMethod: "S256",
 		AuthTime:            time.Now().UTC(),
@@ -883,4 +883,79 @@ func TestProviderService_GetUserInfo_NotFound(t *testing.T) {
 	_, err := svc.GetUserInfo(context.Background(), "missing-user", []string{"openid"})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrNotFound)
+}
+
+// TestProviderService_ExchangeCode_RefreshTokenOnlyWithOfflineAccess covers
+// GH-541: the code exchange returns a refresh token only when offline_access
+// is among the granted scopes (OIDC Core §11).
+func TestProviderService_ExchangeCode_RefreshTokenOnlyWithOfflineAccess(t *testing.T) {
+	tests := []struct {
+		name        string
+		scopes      []string
+		wantRefresh bool
+	}{
+		{"openid and offline_access", []string{"openid", "offline_access"}, true},
+		{"openid only", []string{"openid"}, false},
+		{"openid profile email", []string{"openid", "profile", "email"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := testConfidentialClient()
+			user := testUserForOIDC()
+			clients := &fakeClientLookup{
+				findByIDFn: func(_ context.Context, _, _ uuid.UUID) (*domain.Client, error) { return client, nil },
+			}
+			users := &fakeUserLookup{
+				findByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) { return user, nil },
+			}
+			var pairCalls, accessOnlyCalls int
+			tokens := &fakeTokenIssuer{
+				issueTokenPairForClientFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ string, _ ...string) (*api.AuthResult, error) {
+					pairCalls++
+					return &api.AuthResult{AccessToken: "at", TokenType: "Bearer", ExpiresIn: 900, RefreshToken: "rt"}, nil
+				},
+				issueAccessTokenForClientFn: func(_ context.Context, _ string, _, _ []string, _ domain.ClientType, _ string, _ ...string) (*api.AuthResult, error) {
+					accessOnlyCalls++
+					return &api.AuthResult{AccessToken: "at", TokenType: "Bearer", ExpiresIn: 900}, nil
+				},
+				issueIDTokenFn: func(_ context.Context, _, _, _ string, _ time.Time) (string, error) {
+					return "id-token", nil
+				},
+			}
+
+			svc, store := newTestProviderService(t, testOIDCConfig(), clients, users, tokens, nil)
+			seedAuthCode(t, store, &oidc.AuthorizationCode{
+				Code:                "auth-code-oa",
+				Subject:             user.ID,
+				ClientID:            client.ID.String(),
+				RedirectURI:         client.RedirectURIs[0],
+				Scopes:              tc.scopes,
+				CodeChallenge:       oauth.S256Challenge("verifier-oa"),
+				CodeChallengeMethod: "S256",
+				AuthTime:            time.Now().UTC(),
+				ExpiresAt:           time.Now().UTC().Add(time.Minute),
+			})
+
+			resp, err := svc.ExchangeCode(context.Background(), &api.CodeExchangeRequest{
+				GrantType:    "authorization_code",
+				Code:         "auth-code-oa",
+				RedirectURI:  client.RedirectURIs[0],
+				ClientID:     client.ID.String(),
+				ClientSecret: "correct-secret",
+				CodeVerifier: "verifier-oa",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, "at", resp.AccessToken)
+			assert.Equal(t, "id-token", resp.IDToken)
+			if tc.wantRefresh {
+				assert.Equal(t, "rt", resp.RefreshToken)
+				assert.Equal(t, 1, pairCalls)
+				assert.Zero(t, accessOnlyCalls)
+			} else {
+				assert.Empty(t, resp.RefreshToken)
+				assert.Zero(t, pairCalls)
+				assert.Equal(t, 1, accessOnlyCalls)
+			}
+		})
+	}
 }
