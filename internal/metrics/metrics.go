@@ -38,6 +38,10 @@ type Collector struct {
 	// endpoint breakdown keyed by "METHOD /path"
 	endpointMu     sync.RWMutex
 	endpointCounts map[string]int64
+
+	// audit events not persisted, keyed by reason
+	auditMu      sync.RWMutex
+	auditDropped map[string]int64
 }
 
 // New creates a Collector with default histogram buckets.
@@ -57,6 +61,7 @@ func NewWithBuckets(buckets []float64) *Collector {
 		bucketCounts:   make([]atomic.Int64, len(sorted)+1),
 		authEvents:     make(map[string]int64),
 		endpointCounts: make(map[string]int64),
+		auditDropped:   make(map[string]int64),
 	}
 }
 
@@ -114,6 +119,18 @@ func (c *Collector) RecordAuthEvent(eventType, outcome string) {
 	c.authMu.Unlock()
 }
 
+// RecordAuditDropped increments the counter of audit events that were not
+// persisted to the audit log, labeled with the reason (e.g. "buffer_full",
+// "sink_error"). The event may still be present in the zap log.
+func (c *Collector) RecordAuditDropped(reason string, n int) {
+	if n <= 0 {
+		return
+	}
+	c.auditMu.Lock()
+	c.auditDropped[reason] += int64(n)
+	c.auditMu.Unlock()
+}
+
 // Middleware returns a Gin middleware that records request duration, status
 // code, and endpoint for every request processed.
 func (c *Collector) Middleware() gin.HandlerFunc {
@@ -133,6 +150,7 @@ type JSONSnapshot struct {
 	Endpoints     map[string]int64 `json:"endpoints"`
 	Duration      DurationSnapshot `json:"duration"`
 	AuthEvents    map[string]int64 `json:"auth_events"`
+	AuditDropped  map[string]int64 `json:"audit_dropped"`
 }
 
 // DurationSnapshot holds histogram data for JSON export.
@@ -155,6 +173,7 @@ func (c *Collector) JSONExport() interface{} {
 		StatusCodes:   make(map[string]int64),
 		Endpoints:     make(map[string]int64),
 		AuthEvents:    make(map[string]int64),
+		AuditDropped:  make(map[string]int64),
 	}
 
 	c.statusMu.RLock()
@@ -192,6 +211,12 @@ func (c *Collector) JSONExport() interface{} {
 		snap.AuthEvents[key] = cnt
 	}
 	c.authMu.RUnlock()
+
+	c.auditMu.RLock()
+	for reason, cnt := range c.auditDropped {
+		snap.AuditDropped[reason] = cnt
+	}
+	c.auditMu.RUnlock()
 
 	return snap
 }
@@ -260,6 +285,26 @@ func (c *Collector) PrometheusExport() string {
 			eventType, outcome := parts[0], parts[1]
 			_, _ = fmt.Fprintf(&b, "auth_events_total{event=\"%s\",outcome=\"%s\"} %d\n",
 				eventType, outcome, authSnap[key])
+		}
+	}
+
+	c.auditMu.RLock()
+	auditReasons := make([]string, 0, len(c.auditDropped))
+	for r := range c.auditDropped {
+		auditReasons = append(auditReasons, r)
+	}
+	sort.Strings(auditReasons)
+	auditSnap := make(map[string]int64, len(c.auditDropped))
+	for _, r := range auditReasons {
+		auditSnap[r] = c.auditDropped[r]
+	}
+	c.auditMu.RUnlock()
+
+	if len(auditReasons) > 0 {
+		b.WriteString("\n# HELP audit_events_dropped_total Audit events not persisted to audit_logs.\n")
+		b.WriteString("# TYPE audit_events_dropped_total counter\n")
+		for _, r := range auditReasons {
+			_, _ = fmt.Fprintf(&b, "audit_events_dropped_total{reason=\"%s\"} %d\n", r, auditSnap[r])
 		}
 	}
 

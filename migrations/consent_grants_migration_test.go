@@ -81,11 +81,13 @@ func columnExists(t *testing.T, dsn, table, column string) bool {
 
 // TestMigration_ConsentGrantsUpDown proves 000018_consent_grants,
 // 000019_create_api_keys_table, 000020_add_client_audience, and
-// 000021_add_email_change, and 000022_users_email_case_insensitive_unique
-// apply and revert cleanly: after `up` both tables exist, clients has an
-// audience column, users has a pending_email column and the case-insensitive
-// email index; reverting the newest migration (000022) drops that index,
-// reverting the next (000021) drops the pending_email column,
+// 000021_add_email_change, 000022_users_email_case_insensitive_unique and
+// 000023_audit_logs_user_agent apply and revert cleanly: after `up` both
+// tables exist, clients has an audience column, users has a pending_email
+// column and the case-insensitive email index, and audit_logs has a
+// user_agent column; reverting the newest migration (000023) drops
+// user_agent, reverting the next (000022) drops that index, reverting the
+// next (000021) drops the pending_email column,
 // reverting the next one (000020) drops the audience column, and reverting
 // the one after that (`steps -1` again, undoing 000019) drops api_keys
 // while consent_grants — applied by the earlier, non-reverted 000018 — is
@@ -107,7 +109,7 @@ func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	version, dirty, err := m.Version()
 	require.NoError(t, err)
 	require.False(t, dirty, "schema should not be dirty after a clean up")
-	require.Equal(t, uint(22), version, "expected embedded migrations to be at head version 22")
+	require.Equal(t, uint(23), version, "expected embedded migrations to be at head version 23")
 
 	require.True(t, tableExists(t, dsn, "consent_grants"), "consent_grants table should exist after migrate up")
 	require.True(t, tableExists(t, dsn, "api_keys"), "api_keys table should exist after migrate up")
@@ -115,6 +117,15 @@ func TestMigration_ConsentGrantsUpDown(t *testing.T) {
 	require.True(t, columnExists(t, dsn, "users", "pending_email"), "users.pending_email column should exist after migrate up")
 
 	require.True(t, indexExists(t, dsn, "idx_users_tenant_lower_email"), "case-insensitive email index should exist after migrate up")
+	require.True(t, columnExists(t, dsn, "audit_logs", "user_agent"), "audit_logs.user_agent column should exist after migrate up")
+
+	require.NoError(t, m.Steps(-1), "migrate down one step (000023 down)")
+	require.False(t, columnExists(t, dsn, "audit_logs", "user_agent"), "audit_logs.user_agent column should be dropped after reverting 000023")
+
+	version, dirty, err = m.Version()
+	require.NoError(t, err)
+	require.False(t, dirty)
+	require.Equal(t, uint(22), version, "expected version 22 after reverting 000023")
 
 	require.NoError(t, m.Steps(-1), "migrate down one step (000022 down)")
 	require.False(t, indexExists(t, dsn, "idx_users_tenant_lower_email"), "case-insensitive email index should be dropped after reverting 000022")

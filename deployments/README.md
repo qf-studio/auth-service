@@ -149,6 +149,7 @@ Security practices:
 - The private key file should be mode 600, owned by the service user
 - Rotate `SYSTEM_SECRETS` by prepending a new value (comma-separated, newest first)
 - Rotate `ADMIN_API_TOKENS` with two values live at once: deploy `<new>,<old>`, switch admin callers (and `SMOKE_ADMIN_TOKEN`) to `<new>`, then deploy `<new>` alone
+- **Audit persistence (GH-527):** audit events are now written to `audit_logs` (zap logging continues). Migration `000023` adds `audit_logs.user_agent` — run `/auth-migrate up` before rolling the new image. `AUDIT_RETENTION_DAYS` (default `365`, `0` = keep forever) controls the daily purge; no secret is involved. Dropped events (full buffer or DB error) are exported as `audit_events_dropped_total{reason}`
 - **Deployment order (GH-524):** every `/admin/*` route requires `Authorization: Bearer <token>`. Add `ADMIN_API_TOKENS` to the task definition / `.env.<environment>` **before** deploying this release. If it is unset the service still starts (public API unaffected) and logs one `ERROR`, but every `/admin/*` route returns `503 admin_api_disabled`. `/health` stays unauthenticated
 
 ### Phase 3: HashiCorp Vault (Upgrade Path)
