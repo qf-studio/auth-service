@@ -1,0 +1,4 @@
+# Custom self-hosted runner labels used by the workflows (declared so actionlint does not flag them).
+self-hosted-runner:
+  labels:
+    - aws-quantflow-deployer
