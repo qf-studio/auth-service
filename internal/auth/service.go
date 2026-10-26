@@ -718,6 +718,14 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 		return fmt.Errorf("update password: %w", err)
 	}
 
+	// A new password ends every existing session: refresh tokens issued
+	// under the old password stop working. Best-effort — the password is
+	// already changed.
+	if err := s.tokens.RevokeAllForUser(ctx, tenantID, userID); err != nil {
+		s.logger.Error("failed to revoke sessions after password change",
+			zap.String("user_id", userID), zap.Error(err))
+	}
+
 	s.audit.LogEvent(ctx, audit.Event{
 		Type:     audit.EventPasswordChange,
 		ActorID:  userID,
@@ -742,18 +750,14 @@ func (s *Service) Logout(ctx context.Context, userID, token, refreshToken string
 		return fmt.Errorf("revoke access token: %w", err)
 	}
 
+	// Revoke the refresh token: its Redis record (authoritative) and its
+	// Postgres row. Best-effort — the access token is already revoked.
 	if refreshToken != "" {
-		if sig, ok := domain.RefreshTokenSignature(refreshToken); ok {
-			tenantID := domain.TenantIDFromContext(ctx)
-			if err := s.tokens.Revoke(ctx, tenantID, sig); err != nil {
-				s.logger.Warn("failed to revoke refresh token on logout",
-					zap.String("user_id", userID),
-					zap.Error(err),
-				)
-			}
-		} else {
-			s.logger.Warn("logout: malformed refresh token, skipping DB revoke",
-				zap.String("user_id", userID))
+		if err := s.issuer.Revoke(ctx, refreshToken); err != nil {
+			s.logger.Warn("failed to revoke refresh token on logout",
+				zap.String("user_id", userID),
+				zap.Error(err),
+			)
 		}
 	}
 

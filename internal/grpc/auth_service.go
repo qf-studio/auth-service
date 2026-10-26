@@ -60,6 +60,18 @@ func (s *AuthServiceServer) ValidateToken(ctx context.Context, req *authv1.Valid
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
 	}
 
+	revoked, err := s.tokenSvc.IsRevoked(ctx, claims.TokenID)
+	if err != nil {
+		s.logger.Error("grpc: revocation check failed",
+			zap.String("token_id", claims.TokenID),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "revocation check failed")
+	}
+	if revoked {
+		return &authv1.ValidateTokenResponse{Valid: false}, nil
+	}
+
 	return &authv1.ValidateTokenResponse{
 		Valid:  true,
 		Claims: domainClaimsToProto(claims),

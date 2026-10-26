@@ -257,6 +257,21 @@ func TestValidateToken_Success(t *testing.T) {
 	assert.Equal(t, "user", resp.GetClaims().GetClientType())
 }
 
+func TestValidateToken_RevokedToken_Invalid(t *testing.T) {
+	deps, tokenSvc := defaultTestDeps(t)
+	client, _ := setupBufConn(t, deps)
+
+	result, err := tokenSvc.IssueTokenPair(context.Background(), "user-123", []string{"user"}, nil, domain.ClientTypeUser)
+	require.NoError(t, err)
+	require.NoError(t, tokenSvc.Revoke(context.Background(), result.AccessToken))
+
+	resp, err := client.ValidateToken(context.Background(), &authv1.ValidateTokenRequest{
+		AccessToken: result.AccessToken,
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.GetValid(), "a revoked access token must not validate")
+}
+
 func TestValidateToken_InvalidToken(t *testing.T) {
 	deps, _ := defaultTestDeps(t)
 	client, _ := setupBufConn(t, deps)

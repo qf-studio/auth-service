@@ -112,6 +112,11 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// reissued access token keeps that client's Audience instead of falling
 	// back to the global JWT_AUDIENCE (GH-512).
 	tokenSvc.SetClientLookup(clientRepo)
+	// Revoke-all-sessions paths (logout-all, password reset/change, email
+	// change/revert, admin) go through this repository; the wrapper also
+	// invalidates the user's refresh tokens in Redis, where refresh validity
+	// is decided.
+	sessionTokenRepo := tokenSvc.WrapRefreshTokenRepository(refreshTokenRepo)
 	hibpClient := hibp.NewClient(http.DefaultClient, cfg.HIBP.APIURL)
 
 	// ── Email ────────────────────────────────────────────────────────────
@@ -127,7 +132,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Logger:                    log,
 		Auditor:                   auditSvc,
 		Users:                     userRepo,
-		Tokens:                    refreshTokenRepo,
+		Tokens:                    sessionTokenRepo,
 		Issuer:                    tokenSvc,
 		Hasher:                    hasher,
 		Breaches:                  hibpClient,
@@ -247,7 +252,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Admin services ────────────────────────────────────────────────────
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
-	adminTokenSvc := admin.NewTokenService(tokenSvc, refreshTokenRepo, "auth-service", log, auditSvc)
+	adminTokenSvc := admin.NewTokenService(tokenSvc, sessionTokenRepo, "auth-service", log, auditSvc)
 	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, log, auditSvc)
 	adminWebhookSvc := admin.NewWebhookService(webhookRepo, webhookDeliveryRepo, webhookDispatcher, log, auditSvc)
 

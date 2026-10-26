@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/config"
 	"github.com/qf-studio/auth-service/internal/domain"
@@ -1035,30 +1036,38 @@ func TestRefresh_NoRolesClaimWhenUserLookupUnset(t *testing.T) {
 	assert.Empty(t, refreshClaims.Roles)
 }
 
-// TestRefresh_UserLookupErrorFailsOpenWithNoRoles verifies that a transient
-// user-lookup failure during refresh doesn't fail the whole refresh (fail-open
-// for availability, matching this codebase's convention elsewhere), it just
-// results in an access token without the roles claim.
-func TestRefresh_UserLookupErrorFailsOpenWithNoRoles(t *testing.T) {
+// TestRefresh_UserLookupErrorFailsWithoutConsumingToken verifies that a
+// transient user-lookup failure fails the refresh (no tokens for a user whose
+// state cannot be checked) but leaves the refresh token usable, so the
+// client can retry once the lookup recovers.
+func TestRefresh_UserLookupErrorFailsWithoutConsumingToken(t *testing.T) {
 	svc, _ := newES256Service(t)
 	ctx := context.Background()
 
-	userLookup := &mocks.MockUserRepository{
-		FindByIDFn: func(_ context.Context, _ uuid.UUID, _ string) (*domain.User, error) {
-			return nil, errors.New("db unavailable")
+	lookupErr := errors.New("db unavailable")
+	svc.SetUserLookup(&mocks.MockUserRepository{
+		FindByIDFn: func(_ context.Context, _ uuid.UUID, id string) (*domain.User, error) {
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			return &domain.User{ID: id, Roles: []string{"admin"}}, nil
 		},
-	}
-	svc.SetUserLookup(userLookup)
+	})
 
 	result, err := svc.IssueTokenPair(ctx, "user-123", []string{"admin"}, nil, domain.ClientTypeUser)
 	require.NoError(t, err)
 
+	_, err = svc.Refresh(ctx, result.RefreshToken)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, api.ErrInternalError)
+
+	lookupErr = nil
 	refreshResult, err := svc.Refresh(ctx, result.RefreshToken)
-	require.NoError(t, err)
+	require.NoError(t, err, "token must survive a failed lookup")
 
 	refreshClaims, err := svc.ValidateToken(ctx, strings.TrimPrefix(refreshResult.AccessToken, "qf_at_"))
 	require.NoError(t, err)
-	assert.Empty(t, refreshClaims.Roles)
+	assert.Equal(t, []string{"admin"}, refreshClaims.Roles)
 }
 
 // ── Refresh Token Postgres Bookkeeping (GH-486) ─────────────────────────────
