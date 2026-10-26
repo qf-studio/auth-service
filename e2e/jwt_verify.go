@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"net/http"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -100,9 +99,10 @@ func jwkToECDSAPublicKey(k jwk) (*ecdsa.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode jwk y: %w", err)
 	}
-	return &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(xBytes),
-		Y:     new(big.Int).SetBytes(yBytes),
-	}, nil
+	point := append(append([]byte{0x04}, xBytes...), yBytes...)
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+	if err != nil {
+		return nil, fmt.Errorf("parse jwk point: %w", err)
+	}
+	return pub, nil
 }

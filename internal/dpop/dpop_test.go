@@ -80,8 +80,9 @@ func newES256ProofBuilder(t *testing.T, key *ecdsa.PrivateKey) *proofBuilder {
 	t.Helper()
 	pub := key.PublicKey
 	byteLen := (pub.Curve.Params().BitSize + 7) / 8
-	xBytes := padLeftTest(pub.X.Bytes(), byteLen)
-	yBytes := padLeftTest(pub.Y.Bytes(), byteLen)
+	raw, err := pub.Bytes()
+	require.NoError(t, err)
+	xBytes, yBytes := raw[1:1+byteLen], raw[1+byteLen:]
 
 	return &proofBuilder{
 		t: t,
@@ -186,15 +187,6 @@ func (b *proofBuilder) build() string {
 	signed, err := token.SignedString(b.signKey)
 	require.NoError(b.t, err)
 	return signed
-}
-
-func padLeftTest(b []byte, size int) []byte {
-	if len(b) >= size {
-		return b
-	}
-	padded := make([]byte, size)
-	copy(padded[size-len(b):], b)
-	return padded
 }
 
 // ── ValidateProof tests ─────────────────────────────────────────────────────
@@ -439,8 +431,9 @@ func TestValidateProof_SignatureVerification(t *testing.T) {
 		// Build proof with differentKey's public key in the header but sign with signingKey
 		pub := differentKey.PublicKey
 		byteLen := (pub.Curve.Params().BitSize + 7) / 8
-		xBytes := padLeftTest(pub.X.Bytes(), byteLen)
-		yBytes := padLeftTest(pub.Y.Bytes(), byteLen)
+		raw, err := pub.Bytes()
+		require.NoError(t, err)
+		xBytes, yBytes := raw[1:1+byteLen], raw[1+byteLen:]
 
 		proofJWT := newES256ProofBuilder(t, signingKey).
 			withHeader("jwk", map[string]interface{}{
@@ -451,7 +444,7 @@ func TestValidateProof_SignatureVerification(t *testing.T) {
 			}).
 			build()
 
-		_, err := v.ValidateProof(context.Background(), proofJWT, testMethod, testURL, "")
+		_, err = v.ValidateProof(context.Background(), proofJWT, testMethod, testURL, "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "signature verification failed")
 	})

@@ -769,14 +769,13 @@ func publicKeyToJWK(pub crypto.PublicKey, algorithm, kid string) (map[string]int
 			return nil, fmt.Errorf("unsupported ECDSA curve")
 		}
 		byteLen := (k.Curve.Params().BitSize + 7) / 8
-		xBytes := k.X.Bytes()
-		yBytes := k.Y.Bytes()
-
-		// Pad to fixed length.
-		xPadded := make([]byte, byteLen)
-		yPadded := make([]byte, byteLen)
-		copy(xPadded[byteLen-len(xBytes):], xBytes)
-		copy(yPadded[byteLen-len(yBytes):], yBytes)
+		// SEC 1 uncompressed point: 0x04 || X || Y, coordinates fixed-length.
+		raw, err := k.Bytes()
+		if err != nil {
+			return nil, fmt.Errorf("encode ECDSA public key: %w", err)
+		}
+		xPadded := raw[1 : 1+byteLen]
+		yPadded := raw[1+byteLen:]
 
 		return map[string]interface{}{
 			"kty": "EC",
@@ -820,13 +819,11 @@ func jwkThumbprint(pub crypto.PublicKey) (string, error) {
 			return "", fmt.Errorf("unsupported ECDSA curve")
 		}
 		byteLen := (k.Curve.Params().BitSize + 7) / 8
-		xBytes := k.X.Bytes()
-		yBytes := k.Y.Bytes()
-
-		xPadded := make([]byte, byteLen)
-		yPadded := make([]byte, byteLen)
-		copy(xPadded[byteLen-len(xBytes):], xBytes)
-		copy(yPadded[byteLen-len(yBytes):], yBytes)
+		raw, err := k.Bytes()
+		if err != nil {
+			return "", fmt.Errorf("encode ECDSA public key: %w", err)
+		}
+		xPadded, yPadded := raw[1:1+byteLen], raw[1+byteLen:]
 
 		canonical = fmt.Sprintf(`{"crv":"P-256","kty":"EC","x":%q,"y":%q}`,
 			base64.RawURLEncoding.EncodeToString(xPadded),
