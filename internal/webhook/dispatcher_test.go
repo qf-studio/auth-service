@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -395,7 +396,7 @@ func fakeResolver(t *testing.T, ip net.IP) *net.Resolver {
 			resp[2], resp[3] = 0x81, 0x80
 			resp[6], resp[7] = 0, 0
 			resp[8], resp[9], resp[10], resp[11] = 0, 0, 0, 0
-			if buf[qEnd-4] == 0 && buf[qEnd-3] == 1 {
+			if binary.BigEndian.Uint16(buf[qEnd-4:qEnd-2]) == 1 {
 				resp[7] = 1
 				resp = append(resp, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4)
 				resp = append(resp, ip.To4()...)
