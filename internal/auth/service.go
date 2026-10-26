@@ -66,6 +66,14 @@ type TokenIssuer interface {
 	Revoke(ctx context.Context, token string) error
 }
 
+// LoginThrottle tracks consecutive failed logins per account. This is a
+// narrow interface satisfied by middleware.AccountRateLimiter.
+type LoginThrottle interface {
+	CheckAccount(ctx context.Context, account string) (blocked bool, retryAfter time.Duration, err error)
+	RecordFailure(ctx context.Context, account string) (attempts int64, locked bool, err error)
+	ResetAttempts(ctx context.Context, account string) error
+}
+
 // MFAChecker abstracts MFA status checking and token generation.
 // This is a narrow interface satisfied by mfa.Service.
 type MFAChecker interface {
@@ -102,6 +110,10 @@ type Service struct {
 	// token DB rows. Falls back to defaultRefreshTokenTTL when unset (e.g.
 	// tests that don't configure it), matching the previous hardcoded value.
 	refreshTokenTTL time.Duration
+
+	// loginThrottle enforces per-account login lockout. Nil disables it
+	// (unit tests); cmd/server/main.go always wires one.
+	loginThrottle LoginThrottle
 }
 
 // defaultRefreshTokenTTL is used when ServiceDeps.RefreshTokenTTL is unset.
@@ -144,6 +156,11 @@ type ServiceDeps struct {
 	// (cfg.JWT.RefreshTokenTTL) so the DB row doesn't outlive or expire
 	// before the Redis-backed token it introspects for.
 	RefreshTokenTTL time.Duration
+
+	// LoginThrottle locks an account (tenant + lower-cased email) out of
+	// password login after too many consecutive failures. Optional: nil
+	// disables per-account throttling.
+	LoginThrottle LoginThrottle
 }
 
 // NewService creates a new auth Service.
@@ -168,6 +185,7 @@ func NewService(deps ServiceDeps) *Service {
 		emailChangeConfirmURLBase: deps.EmailChangeConfirmURLBase,
 		emailChangeRevertURLBase:  deps.EmailChangeRevertURLBase,
 		refreshTokenTTL:           deps.RefreshTokenTTL,
+		loginThrottle:             deps.LoginThrottle,
 		policy:                    password.NewPolicyValidator(password.DefaultPolicy(), deps.Hasher),
 	}
 }
@@ -301,12 +319,28 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) error {
 
 // Login authenticates a user by email and password.
 // Returns a generic ErrUnauthorized for all failure modes to prevent user enumeration.
+//
+// Per-account throttling: every failed attempt (unknown email included, so
+// the lockout doesn't reveal which addresses exist) counts against the
+// account key tenant + lower-cased email. Once the limit is reached, further
+// attempts return ErrRateLimited (429) without verifying the password until
+// the lockout expires. A correct password resets the counter.
 func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
+	account := loginAccountKey(tenantID, email)
+
+	if s.loginLocked(ctx, account) {
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventLoginFailure,
+			Metadata: map[string]string{"reason": "account_throttled"},
+		})
+		return nil, fmt.Errorf("too many failed login attempts: %w", api.ErrRateLimited)
+	}
 
 	user, err := s.users.FindByEmail(ctx, tenantID, email)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
+			s.recordLoginFailure(ctx, account)
 			s.audit.LogEvent(ctx, audit.Event{
 				Type:     audit.EventLoginFailure,
 				Metadata: map[string]string{"reason": "user_not_found"},
@@ -323,6 +357,7 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	// block dogfood and design-partner signups whose links may go unclicked.
 	// Do not add an EmailVerified check without a product decision to enforce it.
 	if user.DeletedAt != nil {
+		s.recordLoginFailure(ctx, account)
 		s.audit.LogEvent(ctx, audit.Event{
 			Type:     audit.EventLoginFailure,
 			ActorID:  user.ID,
@@ -332,6 +367,7 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		return nil, fmt.Errorf("account suspended: %w", api.ErrUnauthorized)
 	}
 	if user.Locked {
+		s.recordLoginFailure(ctx, account)
 		s.audit.LogEvent(ctx, audit.Event{
 			Type:     audit.EventLoginFailure,
 			ActorID:  user.ID,
@@ -347,6 +383,7 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		return nil, fmt.Errorf("verify password: %w", err)
 	}
 	if !match {
+		s.recordLoginFailure(ctx, account)
 		s.audit.LogEvent(ctx, audit.Event{
 			Type:     audit.EventLoginFailure,
 			ActorID:  user.ID,
@@ -355,6 +392,11 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 		})
 		return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
 	}
+
+	// The password is correct: the first factor succeeded, so the
+	// consecutive-failure counter starts over (an MFA step, if any, has its
+	// own counter).
+	s.resetLoginFailures(ctx, account)
 
 	// Transparent hash upgrade: re-hash bcrypt → argon2id on successful login.
 	if s.hasher.NeedsUpgrade(user.PasswordHash) {
@@ -473,6 +515,52 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	})
 
 	return result, nil
+}
+
+// loginAccountKey is the per-account throttle key: tenant plus the
+// lower-cased, trimmed email, so case variants of one address share a counter.
+func loginAccountKey(tenantID uuid.UUID, email string) string {
+	return "login:" + tenantID.String() + ":" + strings.ToLower(strings.TrimSpace(email))
+}
+
+// loginLocked reports whether the account is currently locked out.
+//
+// Decision: fail open. If the throttle store (Redis) errors, the error is
+// logged and login proceeds; a Redis outage must not lock every user out.
+// Password verification and the per-IP limiter still apply in that case.
+func (s *Service) loginLocked(ctx context.Context, account string) bool {
+	if s.loginThrottle == nil {
+		return false
+	}
+	blocked, _, err := s.loginThrottle.CheckAccount(ctx, account)
+	if err != nil {
+		s.logger.Warn("login throttle check failed; continuing without per-account limit", zap.Error(err))
+		return false
+	}
+	return blocked
+}
+
+// recordLoginFailure counts a failed login against the account. Errors are
+// logged and otherwise ignored (fail open, see loginLocked).
+func (s *Service) recordLoginFailure(ctx context.Context, account string) {
+	if s.loginThrottle == nil {
+		return
+	}
+	if _, _, err := s.loginThrottle.RecordFailure(ctx, account); err != nil {
+		s.logger.Warn("failed to record login failure", zap.Error(err))
+	}
+}
+
+// resetLoginFailures clears the account's failure counter after a correct
+// password. Errors are logged and otherwise ignored (fail open, see
+// loginLocked).
+func (s *Service) resetLoginFailures(ctx context.Context, account string) {
+	if s.loginThrottle == nil {
+		return
+	}
+	if err := s.loginThrottle.ResetAttempts(ctx, account); err != nil {
+		s.logger.Warn("failed to reset login failures", zap.Error(err))
+	}
 }
 
 // ResetPassword initiates a password reset by generating a token, storing it in Redis,

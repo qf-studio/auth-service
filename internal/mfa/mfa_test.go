@@ -102,6 +102,8 @@ type mockMFATokenStore struct {
 	consumeFn        func(ctx context.Context, token string) (string, error)
 	recordFailedFn   func(ctx context.Context, userID string) (int, error)
 	clearFailedFn    func(ctx context.Context, userID string) error
+	exceededFn       func(ctx context.Context, userID string) (bool, error)
+	markUsedFn       func(ctx context.Context, userID string, step uint64, ttl time.Duration) (bool, error)
 }
 
 func (m *mockMFATokenStore) StoreMFAToken(ctx context.Context, token, userID string) error {
@@ -130,6 +132,20 @@ func (m *mockMFATokenStore) ClearFailedAttempts(ctx context.Context, userID stri
 		return m.clearFailedFn(ctx, userID)
 	}
 	return nil
+}
+
+func (m *mockMFATokenStore) FailedAttemptsExceeded(ctx context.Context, userID string) (bool, error) {
+	if m.exceededFn != nil {
+		return m.exceededFn(ctx, userID)
+	}
+	return false, nil
+}
+
+func (m *mockMFATokenStore) MarkTOTPUsed(ctx context.Context, userID string, step uint64, ttl time.Duration) (bool, error) {
+	if m.markUsedFn != nil {
+		return m.markUsedFn(ctx, userID, step, ttl)
+	}
+	return true, nil
 }
 
 type mockTokenIssuer struct {

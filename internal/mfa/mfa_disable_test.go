@@ -25,6 +25,7 @@ func (f fakePasswordVerifier) Verify(pwd, _ string) (bool, error) {
 }
 
 func TestDisableWithVerification(t *testing.T) {
+	waitForFreshTOTPStep()
 	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Test", AccountName: "alice@test.com"})
 	require.NoError(t, err)
 	validCode, err := totp.GenerateCode(key.Secret(), time.Now())
