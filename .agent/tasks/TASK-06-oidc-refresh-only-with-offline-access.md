@@ -1,7 +1,7 @@
 # TASK-06: fix(oidc): issue a refresh token from the authorization-code grant only when offline_access is granted
 
 **Created:** 2026-10-26
-**Status:** 📋 Filed as #541 without the `pilot` label — add it after #533 merges
+**Status:** 🚀 Dispatched to Pilot (label `pilot` added 2026-10-26 after #533 merged as #544)
 **Last Updated:** 2026-10-26
 
 ## Context

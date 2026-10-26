@@ -1,7 +1,7 @@
 # TASK-08: fix(oidc): check subject and client state when the login challenge is accepted, and audit the decision
 
 **Created:** 2026-10-26
-**Status:** 📋 Filed as #543 without the `pilot` label — add it after #533 merges
+**Status:** 🚀 Dispatched to Pilot (label `pilot` added 2026-10-26 after #533 merged as #544)
 **Last Updated:** 2026-10-26
 
 ## Context

@@ -1,7 +1,7 @@
 # TASK-03: ci(deploy): pass tag names and dispatch inputs to shell through env and validate them
 
 **Created:** 2026-10-26
-**Status:** 🚀 Dispatched to Pilot (label `pilot`)
+**Status:** ✅ Merged as #549 (reviewed 2026-10-26: clean)
 **Last Updated:** 2026-10-26
 
 ## Context
