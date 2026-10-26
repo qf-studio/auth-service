@@ -175,6 +175,7 @@ func TestOIDCFlow_AuthorizeLoginTokenUserinfo(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "token exchange status")
 	require.NotEmpty(t, tokens.AccessToken, "token exchange must return an access token")
 	require.NotEmpty(t, tokens.IDToken, "openid scope was granted, ID token expected")
+	require.Empty(t, tokens.RefreshToken, "offline_access was not granted, refresh token must be omitted (GH-541)")
 
 	// 6. Validate the ID token against the live JWKS endpoint: aud, nonce,
 	// iss.
@@ -231,4 +232,83 @@ func putJSON(t *testing.T, client *http.Client, target string, body, out any) (i
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(out), "decode response from PUT %s", target)
 	}
 	return resp.StatusCode, resp.Header
+}
+
+// TestOIDCFlow_OfflineAccessIssuesRefreshToken covers GH-541: when the client
+// has offline_access in its scopes and the authorize request asks for it, the
+// code exchange returns a refresh token that the refresh grant accepts.
+func TestOIDCFlow_OfflineAccessIssuesRefreshToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode (requires Docker)")
+	}
+
+	client := suite.HTTPClient
+
+	registered := registerUser(t, client, newE2EEmail("oidc-offline"), fakeUserPassword)
+	redirectURI := "http://e2e-oidc-offline.invalid/callback"
+
+	var adminClient adminClientResponse
+	status, _ := postJSON(t, client, suite.AdminBaseURL+"/admin/clients", map[string]any{
+		"name":          "E2E OIDC Offline Client " + uuid.NewString(),
+		"client_type":   "public",
+		"scopes":        []string{"openid", "offline_access"},
+		"redirect_uris": []string{redirectURI},
+	}, &adminClient)
+	require.Equal(t, http.StatusCreated, status, "create client status")
+
+	verifier := oauth.GenerateVerifier()
+	state := "state-" + uuid.NewString()
+	authorizeQuery := url.Values{
+		"client_id":             {adminClient.ID},
+		"redirect_uri":          {redirectURI},
+		"response_type":         {"code"},
+		"scope":                 {"openid offline_access"},
+		"state":                 {state},
+		"nonce":                 {"nonce-" + uuid.NewString()},
+		"code_challenge":        {oauth.S256Challenge(verifier)},
+		"code_challenge_method": {"S256"},
+	}
+	authorizeReq, err := http.NewRequest(http.MethodGet, suite.PublicBaseURL+"/oauth/authorize?"+authorizeQuery.Encode(), http.NoBody)
+	require.NoError(t, err)
+	authorizeResp, err := noRedirectClient.Do(authorizeReq)
+	require.NoError(t, err, "authorize request")
+	defer func() { _ = authorizeResp.Body.Close() }()
+	require.Equal(t, http.StatusFound, authorizeResp.StatusCode, "authorize status")
+
+	loginRedirect, err := url.Parse(authorizeResp.Header.Get("Location"))
+	require.NoError(t, err)
+	loginChallenge := loginRedirect.Query().Get("login_challenge")
+	require.NotEmpty(t, loginChallenge)
+
+	var loginAccept redirectResponse
+	status, _ = putJSON(t, client, fmt.Sprintf("%s/admin/oauth/auth/requests/login?login_challenge=%s&accept=true",
+		suite.AdminBaseURL, url.QueryEscape(loginChallenge)),
+		map[string]string{"subject": registered.ID}, &loginAccept)
+	require.Equal(t, http.StatusOK, status, "accept login status")
+
+	codeRedirect, err := url.Parse(loginAccept.RedirectTo)
+	require.NoError(t, err)
+	code := codeRedirect.Query().Get("code")
+	require.NotEmpty(t, code)
+
+	var tokens oidcTokenResponse
+	status, _ = postJSON(t, client, suite.PublicBaseURL+"/oauth/token", map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          code,
+		"redirect_uri":  redirectURI,
+		"client_id":     adminClient.ID,
+		"code_verifier": verifier,
+	}, &tokens)
+	require.Equal(t, http.StatusOK, status, "token exchange status")
+	require.NotEmpty(t, tokens.AccessToken)
+	require.NotEmpty(t, tokens.RefreshToken, "offline_access was granted, refresh token expected")
+
+	var refreshed authResponse
+	status, _ = postJSON(t, client, suite.PublicBaseURL+"/auth/token", map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": tokens.RefreshToken,
+	}, &refreshed)
+	require.Equal(t, http.StatusOK, status, "refresh grant status")
+	require.NotEmpty(t, refreshed.AccessToken)
+	require.NotEmpty(t, refreshed.RefreshToken)
 }
