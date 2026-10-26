@@ -123,7 +123,7 @@ func newAdminConsentRouter(consentSvc api.ConsentService, approvalSvc api.AdminC
 		Consent:        consentSvc,
 		ClientApproval: approvalSvc,
 	}
-	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 }
 
 // ── Login Request Tests ────────────────────────────────────────────────────
@@ -281,7 +281,7 @@ func TestAdminConsentRoutes_NotRegisteredWhenNil(t *testing.T) {
 	svc := &api.AdminServices{
 		// Consent: nil, ClientApproval: nil
 	}
-	r := api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	r := mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 
 	tests := []struct {
 		method string

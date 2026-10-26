@@ -139,7 +139,7 @@ func (m *mockAdminSAMLService) GetAttributeMapping(ctx context.Context, idpID st
 
 func newAdminSAMLRouter(samlSvc api.AdminSAMLService) *gin.Engine {
 	svc := &api.AdminServices{SAML: samlSvc}
-	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 }
 
 // --- List IdPs ---
@@ -484,7 +484,7 @@ func TestAdminSAMLRoutes_NotRegisteredWhenNil(t *testing.T) {
 	svc := &api.AdminServices{
 		// SAML is nil
 	}
-	r := api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	r := mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 
 	tests := []struct {
 		method string

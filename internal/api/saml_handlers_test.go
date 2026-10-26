@@ -64,7 +64,7 @@ func newSAMLRouter(samlSvc api.SAMLService) *gin.Engine {
 		Token: &mockTokenService{},
 		SAML:  samlSvc,
 	}
-	return api.NewPublicRouter(svc, nil, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, nil, health.NewService()))
 }
 
 func doFormPost(router *gin.Engine, path string, formData url.Values) *httptest.ResponseRecorder {
@@ -246,7 +246,7 @@ func TestSAMLRoutes_NotRegisteredWhenNil(t *testing.T) {
 		Token: &mockTokenService{},
 		// SAML is nil
 	}
-	r := api.NewPublicRouter(svc, nil, health.NewService())
+	r := mustRouter(api.NewPublicRouter(svc, nil, health.NewService()))
 
 	tests := []struct {
 		method string

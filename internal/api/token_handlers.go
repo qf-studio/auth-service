@@ -19,8 +19,8 @@ type TokenHandlers struct {
 }
 
 // NewTokenHandlers creates a new TokenHandlers with the given TokenService and optional DPoPService.
-// trustedProxyCIDRs controls when X-Forwarded-Proto / X-Forwarded-Host are honored while
-// reconstructing the request URI for DPoP htu matching (see middleware.RequestURI).
+// trustedProxyCIDRs controls when X-Forwarded-Proto is honored while reconstructing
+// the request URI for DPoP htu matching (see middleware.RequestURI).
 func NewTokenHandlers(token TokenService, dpop DPoPService, trustedProxyCIDRs []*net.IPNet) *TokenHandlers {
 	return &TokenHandlers{token: token, dpop: dpop, trustedProxyCIDRs: trustedProxyCIDRs}
 }

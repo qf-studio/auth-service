@@ -361,8 +361,10 @@ type Services struct {
 	Broker  BrokerTokenService
 	SAML    SAMLService
 
-	// TrustedProxyCIDRs controls when X-Forwarded-Proto / X-Forwarded-Host are
-	// honored while reconstructing the request URI for DPoP htu matching (see
+	// TrustedProxyCIDRs lists the reverse proxies (TRUSTED_PROXY_CIDRS) whose
+	// X-Forwarded-For is used to derive the client IP (see
+	// middleware.ConfigureClientIP) and whose X-Forwarded-Proto is honored
+	// while reconstructing the request URI for DPoP htu matching (see
 	// middleware.RequestURI). Empty (default) trusts nothing.
 	TrustedProxyCIDRs []*net.IPNet
 }

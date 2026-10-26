@@ -10,12 +10,19 @@ import (
 
 	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/health"
+	"github.com/qf-studio/auth-service/internal/middleware"
 )
 
 // NewPublicRouter creates a *gin.Engine with the full public API route tree.
 // Middleware stack order: correlation ID → security headers → rate limit → request size → metrics → routes.
-func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Service) *gin.Engine {
+// Client-IP derivation is restricted to svc.TrustedProxyCIDRs (see
+// middleware.ConfigureClientIP); an error is returned if that list cannot be
+// applied.
+func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Service) (*gin.Engine, error) {
 	r := gin.New()
+	if err := middleware.ConfigureClientIP(r, svc.TrustedProxyCIDRs); err != nil {
+		return nil, fmt.Errorf("public router: %w", err)
+	}
 	r.Use(gin.Recovery())
 
 	// Global middleware in specified order.
@@ -175,7 +182,7 @@ func NewPublicRouter(svc *Services, mw *MiddlewareStack, healthSvc *health.Servi
 		userinfo.GET("/userinfo", oidcH.UserInfo)
 	}
 
-	return r
+	return r, nil
 }
 
 // ValidateReq creates validation middleware for the given request struct type.

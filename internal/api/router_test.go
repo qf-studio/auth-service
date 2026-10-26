@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,15 @@ import (
 
 func init() {
 	gin.SetMode(gin.TestMode)
+}
+
+// mustRouter unwraps a NewPublicRouter / NewAdminRouter result for test
+// helpers that have no *testing.T; construction errors abort the test binary.
+func mustRouter(r *gin.Engine, err error) *gin.Engine {
+	if err != nil {
+		panic(err)
+	}
+	return r
 }
 
 // --- Mock services ---
@@ -204,7 +214,7 @@ func newTestRouter(authSvc api.AuthService, tokenSvc api.TokenService) *gin.Engi
 		c.Next()
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
-	return api.NewPublicRouter(svc, mw, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 }
 
 func jsonBody(v interface{}) *bytes.Buffer {
@@ -1068,11 +1078,100 @@ func TestMiddlewareOrdering(t *testing.T) {
 	}
 
 	svc := &api.Services{Auth: &mockAuthService{}, Token: &mockTokenService{}}
-	router := api.NewPublicRouter(svc, mw, health.NewService())
+	router := mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 
 	w := doRequest(router, http.MethodGet, "/health", nil)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	expected := []string{"correlation_id", "security_headers", "rate_limit", "request_size"}
 	assert.Equal(t, expected, order)
+}
+
+// --- Client IP derivation (TRUSTED_PROXY_CIDRS) ---
+
+// TestRouters_ClientIPFromTrustedProxiesOnly checks that both engines derive
+// c.ClientIP() — used by the rate limiter and session records — only via the
+// configured proxy CIDRs, never from a client-supplied X-Forwarded-For.
+func TestRouters_ClientIPFromTrustedProxiesOnly(t *testing.T) {
+	albCIDRs := make([]*net.IPNet, 0, 2)
+	for _, s := range []string{"10.40.0.0/24", "10.40.1.0/24"} {
+		_, n, err := net.ParseCIDR(s)
+		require.NoError(t, err)
+		albCIDRs = append(albCIDRs, n)
+	}
+
+	routers := map[string]func(t *testing.T, cidrs []*net.IPNet) *gin.Engine{
+		"public": func(t *testing.T, cidrs []*net.IPNet) *gin.Engine {
+			r, err := api.NewPublicRouter(&api.Services{Auth: &mockAuthService{}, TrustedProxyCIDRs: cidrs}, nil, health.NewService())
+			require.NoError(t, err)
+			return r
+		},
+		"admin": func(t *testing.T, cidrs []*net.IPNet) *gin.Engine {
+			r, err := api.NewAdminRouter(&api.AdminServices{}, &api.AdminDeps{Health: health.NewService(), TrustedProxyCIDRs: cidrs})
+			require.NoError(t, err)
+			return r
+		},
+	}
+
+	tests := []struct {
+		name       string
+		cidrs      []*net.IPNet
+		remoteAddr string
+		xff        string
+		want       string
+	}{
+		{
+			name:       "empty config: nothing trusted",
+			cidrs:      nil,
+			remoteAddr: "10.40.0.5:1234",
+			xff:        "1.2.3.4",
+			want:       "10.40.0.5",
+		},
+		{
+			name:       "untrusted peer: forwarded header ignored",
+			cidrs:      albCIDRs,
+			remoteAddr: "198.51.100.7:1234",
+			xff:        "1.2.3.4",
+			want:       "198.51.100.7",
+		},
+		{
+			name:       "trusted peer: real client appended by the ALB wins",
+			cidrs:      albCIDRs,
+			remoteAddr: "10.40.0.5:1234",
+			xff:        "203.0.113.9, 1.2.3.4",
+			want:       "1.2.3.4",
+		},
+	}
+
+	for routerName, build := range routers {
+		for _, tt := range tests {
+			t.Run(routerName+"/"+tt.name, func(t *testing.T) {
+				r := build(t, tt.cidrs)
+				r.GET("/test-client-ip", func(c *gin.Context) {
+					c.String(http.StatusOK, c.ClientIP())
+				})
+
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, "/test-client-ip", http.NoBody)
+				req.RemoteAddr = tt.remoteAddr
+				req.Header.Set("X-Forwarded-For", tt.xff)
+				r.ServeHTTP(w, req)
+
+				require.Equal(t, http.StatusOK, w.Code)
+				assert.Equal(t, tt.want, w.Body.String())
+			})
+		}
+	}
+}
+
+func TestRouters_InvalidTrustedProxyCIDRFailsConstruction(t *testing.T) {
+	bad := []*net.IPNet{nil}
+
+	_, err := api.NewPublicRouter(&api.Services{Auth: &mockAuthService{}, TrustedProxyCIDRs: bad}, nil, health.NewService())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "public router")
+
+	_, err = api.NewAdminRouter(&api.AdminServices{}, &api.AdminDeps{Health: health.NewService(), TrustedProxyCIDRs: bad})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "admin router")
 }

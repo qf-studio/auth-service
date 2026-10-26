@@ -150,7 +150,7 @@ func (m *mockAdminUserService) UnlockUser(ctx context.Context, userID string) (*
 
 func newAdminUserRouter(userSvc api.AdminUserService) *gin.Engine {
 	svc := &api.AdminServices{Users: userSvc}
-	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 }
 
 // --- List Users ---

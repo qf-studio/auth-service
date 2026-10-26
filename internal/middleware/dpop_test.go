@@ -322,3 +322,84 @@ func TestDPoPMiddleware_NoTrustedProxiesConfigured_ForwardedHeadersIgnored(t *te
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "http://auth.quantflow.studio/protected", dpopValidator.gotHTU)
 }
+
+// --- Host source for htu reconstruction ---
+
+func TestDPoPMiddleware_RequestURI_HostFromRequestHost(t *testing.T) {
+	_, albCIDR, err := net.ParseCIDR("10.40.0.0/24")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		cidrs      []*net.IPNet
+		remoteAddr string
+		headers    map[string]string
+		wantHTU    string
+	}{
+		{
+			name:       "trusted peer: X-Forwarded-Host is ignored, X-Forwarded-Proto honored",
+			cidrs:      []*net.IPNet{albCIDR},
+			remoteAddr: "10.40.0.5:5555",
+			headers: map[string]string{
+				"X-Forwarded-Host":  "evil.example",
+				"X-Forwarded-Proto": "https",
+			},
+			wantHTU: "https://auth.quantflow.studio/protected",
+		},
+		{
+			name:       "trusted peer: X-Forwarded-Host alone does not change host",
+			cidrs:      []*net.IPNet{albCIDR},
+			remoteAddr: "10.40.0.5:5555",
+			headers:    map[string]string{"X-Forwarded-Host": "evil.example"},
+			wantHTU:    "http://auth.quantflow.studio/protected",
+		},
+		{
+			name:       "untrusted peer: both forwarded headers ignored",
+			cidrs:      []*net.IPNet{albCIDR},
+			remoteAddr: "203.0.113.9:4444",
+			headers: map[string]string{
+				"X-Forwarded-Host":  "evil.example",
+				"X-Forwarded-Proto": "https",
+			},
+			wantHTU: "http://auth.quantflow.studio/protected",
+		},
+		{
+			name:       "no CIDRs configured: both forwarded headers ignored",
+			cidrs:      nil,
+			remoteAddr: "10.40.0.5:5555",
+			headers: map[string]string{
+				"X-Forwarded-Host":  "evil.example",
+				"X-Forwarded-Proto": "https",
+			},
+			wantHTU: "http://auth.quantflow.studio/protected",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokenValidator := &mockValidator{
+				claims: &domain.TokenClaims{
+					Subject:       "user-1",
+					TokenID:       "tok-1",
+					JKTThumbprint: "jkt-1",
+				},
+			}
+			dpopValidator := &mockDPoPValidator{enabled: true, thumbprint: "jkt-1"}
+			router := newDPoPTestRouter(tokenValidator, dpopValidator, tt.cidrs)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/protected", http.NoBody)
+			req.Host = "auth.quantflow.studio"
+			req.RemoteAddr = tt.remoteAddr
+			req.Header.Set("Authorization", "Bearer qf_at_valid")
+			req.Header.Set("DPoP", "proof")
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, tt.wantHTU, dpopValidator.gotHTU)
+		})
+	}
+}

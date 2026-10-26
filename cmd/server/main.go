@@ -302,8 +302,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	adminDeps := &api.AdminDeps{
-		Health:  healthSvc,
-		Metrics: metricsCollector,
+		Health:            healthSvc,
+		Metrics:           metricsCollector,
+		TrustedProxyCIDRs: cfg.Proxy.TrustedCIDRs,
 	}
 
 	// ── RBAC ─────────────────────────────────────────────────────────────
@@ -328,8 +329,14 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	// ── HTTP servers ──────────────────────────────────────────────────────
-	publicRouter := api.NewPublicRouter(services, mw, healthSvc)
-	adminRouter := api.NewAdminRouter(adminServices, adminDeps)
+	publicRouter, err := api.NewPublicRouter(services, mw, healthSvc)
+	if err != nil {
+		return fmt.Errorf("public router init failed: %w", err)
+	}
+	adminRouter, err := api.NewAdminRouter(adminServices, adminDeps)
+	if err != nil {
+		return fmt.Errorf("admin router init failed: %w", err)
+	}
 
 	publicSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.App.PublicPort),

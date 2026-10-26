@@ -144,7 +144,7 @@ func (m *mockAdminAPIKeyService) RotateAPIKey(ctx context.Context, keyID string)
 
 func newAdminAPIKeyRouter(apiKeySvc api.AdminAPIKeyService) *gin.Engine {
 	svc := &api.AdminServices{APIKeys: apiKeySvc}
-	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 }
 
 // --- List API Keys ---
