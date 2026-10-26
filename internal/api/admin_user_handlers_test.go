@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/api"
+	"github.com/qf-studio/auth-service/internal/domain"
 	"github.com/qf-studio/auth-service/internal/health"
 )
 
@@ -279,6 +280,23 @@ func TestAdminCreateUser_Conflict(t *testing.T) {
 	w := doRequest(r, http.MethodPost, "/admin/users", body)
 
 	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+func TestAdminCreateUser_BreachedPassword(t *testing.T) {
+	svc := &mockAdminUserService{
+		createUserFn: func(_ context.Context, _ *api.CreateUserRequest) (*api.AdminUser, error) {
+			return nil, domain.ErrPasswordBreached
+		},
+	}
+	r := newAdminUserRouter(svc)
+	w := doRequest(r, http.MethodPost, "/admin/users", map[string]interface{}{
+		"email":    "new@example.com",
+		"password": "super-secure-password-123",
+		"name":     "New User",
+	})
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "password appears in a known data breach; choose another")
 }
 
 // --- Update User ---

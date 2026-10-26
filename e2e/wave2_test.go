@@ -109,18 +109,12 @@ func TestWave2_UserRoleTokenRejectedOnAdminRoute(t *testing.T) {
 		"a plain user-role access token must not be accepted on an admin route, got status %d", status)
 }
 
-// TestWave2_RegisterRejectsBreachedPassword (review-003 wave-2) would prove
-// registering with a password HIBPMock reports as breached is rejected. It
-// is skipped because internal/auth.Service never calls its
-// hibp.BreachChecker: the field (internal/auth/service.go:64) is wired in
-// but grep for "breaches." in that file turns up nothing outside the
-// struct/constructor — Register never consults it.
+// TestWave2_RegisterRejectsBreachedPassword proves registering with a
+// password HIBPMock reports as breached is rejected (GH-535).
 func TestWave2_RegisterRejectsBreachedPassword(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping e2e test in short mode (requires Docker)")
 	}
-	t.Skip("review-003: HIBP never called (internal/auth.Service.breaches is wired but Register never invokes it) — unskip when fixed")
-
 	breachedPassword := "e2e-known-breached-password-wave2" //nolint:gosec // fake, test-only
 	suite.HIBP.MarkPasswordBreached(breachedPassword, 42)
 

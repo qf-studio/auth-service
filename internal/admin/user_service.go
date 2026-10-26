@@ -14,6 +14,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/audit"
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
@@ -25,6 +26,7 @@ type UserService struct {
 	hasher    password.Hasher
 	logger    *zap.Logger
 	audit     audit.EventLogger
+	breaches  hibp.BreachChecker
 }
 
 // NewUserService creates a new admin user service.
@@ -35,6 +37,12 @@ func NewUserService(repo storage.AdminUserRepository, hasher password.Hasher, lo
 		logger: logger,
 		audit:  auditor,
 	}
+}
+
+// SetBreachChecker enables the breached-password check on CreateUser. Nil (the
+// default) disables it.
+func (s *UserService) SetBreachChecker(c hibp.BreachChecker) {
+	s.breaches = c
 }
 
 // SetAuditReadRepo sets the audit read repository for activity timeline queries.
@@ -86,6 +94,9 @@ func (s *UserService) GetUser(ctx context.Context, userID string) (*api.AdminUse
 // CreateUser creates a new user with a hashed password.
 func (s *UserService) CreateUser(ctx context.Context, req *api.CreateUserRequest) (*api.AdminUser, error) {
 	tenantID := domain.TenantIDFromContext(ctx)
+	if err := password.CheckNotBreached(ctx, s.breaches, s.logger, s.audit, "", "admin_user_create", req.Password); err != nil {
+		return nil, err
+	}
 	hash, err := s.hasher.Hash(req.Password)
 	if err != nil {
 		s.logger.Error("password hash failed", zap.Error(err))

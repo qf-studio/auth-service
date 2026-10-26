@@ -14,7 +14,7 @@ Authentication and authorization service for the QuantFlow Studio ecosystem. Ser
 - **Asymmetric JWT** — ES256 / EdDSA signing with JWKS endpoint
 - **Dual Client Model** — Users (interactive) and Systems (machine-to-machine)
 - **Argon2id Password Hashing** — 19 MiB memory, 2 iterations, HMAC pepper
-- **NIST Password Policy** — 15-char minimum, breached-password blocklist, no composition rules
+- **NIST Password Policy** — 15-char minimum, breached-password blocklist, no composition rules. New passwords (register, reset confirm, change, admin user create) are checked against HIBP Pwned Passwords via the k-anonymity range API (only a 5-char SHA-1 prefix leaves the service; 3 s timeout). The check **fails open**: if HIBP is unreachable the password is accepted, a `WARN` is logged and a `password_breach_check_failed` audit event is emitted. Breached passwords are rejected with `400` and a `password_breached` audit event.
 - **Token Security** — Prefixed tokens (`qf_at_`, `qf_rt_`, `qf_ac_`, `qf_ak_`), only signatures stored in DB
 - **Dual-Port Architecture** — Public (:4000) and Admin (:4001) with network-level isolation
 - **Rate Limiting** — Per-IP with progressive delay and account lockout
@@ -198,7 +198,7 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `EMAIL_SENDER_ADDRESS` | _(empty)_ | From address for outgoing mail (required when `EMAIL_ENABLED=true`) |
 | `PASSWORD_RESET_URL_BASE` | _(empty)_ | Base URL password reset links are built from: `<base>?token=<token>` (required when `EMAIL_ENABLED=true`) |
 | `EMAIL_VERIFY_URL_BASE` | _(empty)_ | Base URL email verification links are built from: `<base>?token=<token>` (required when `EMAIL_ENABLED=true`) |
-| `HIBP_API_URL` | _(empty)_ | Pwned Passwords range-endpoint base URL override; empty uses the real `api.pwnedpasswords.com` API (used to redirect at a fake server in tests) |
+| `HIBP_API_URL` | _(empty)_ | Pwned Passwords range-endpoint base URL override; empty uses the real `api.pwnedpasswords.com` API (used to redirect at a fake server in tests). The request timeout is fixed at 3 s and not configurable; the check fails open on errors |
 | `DPOP_ENABLED` | `false` | Enable DPoP proof binding |
 | `DPOP_NONCE_TTL` | `5m` | DPoP nonce lifetime |
 | `DPOP_JTI_WINDOW` | `1m` | DPoP replay window |

@@ -209,6 +209,10 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 		return nil, fmt.Errorf("password policy: %w", err)
 	}
 
+	if err := password.CheckNotBreached(ctx, s.breaches, s.logger, s.audit, "", "register", pwd); err != nil {
+		return nil, err
+	}
+
 	hash, err := s.hasher.Hash(pwd)
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
@@ -646,6 +650,10 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword s
 		return fmt.Errorf("password policy: %w", err)
 	}
 
+	if err := password.CheckNotBreached(ctx, s.breaches, s.logger, s.audit, "", "password_reset", newPassword); err != nil {
+		return err
+	}
+
 	// Find user to get current hash for history.
 	user, err := s.users.FindByEmail(ctx, tenantID, email)
 	if err != nil {
@@ -772,6 +780,10 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	// Validate new password against policy.
 	if err := s.policy.ValidatePassword(newPassword); err != nil {
 		return fmt.Errorf("password policy: %w", err)
+	}
+
+	if err := password.CheckNotBreached(ctx, s.breaches, s.logger, s.audit, userID, "password_change", newPassword); err != nil {
+		return err
 	}
 
 	// Check password history for reuse.

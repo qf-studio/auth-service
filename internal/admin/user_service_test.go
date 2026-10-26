@@ -637,3 +637,53 @@ func TestDomainUserToAdmin(t *testing.T) {
 	assert.Equal(t, &now, admin.LockedAt)
 	assert.Equal(t, "test reason", admin.LockedReason)
 }
+
+type fakeBreachChecker struct {
+	breached bool
+	err      error
+	calls    int
+}
+
+func (f *fakeBreachChecker) IsBreached(_ context.Context, _ string) (bool, error) {
+	f.calls++
+	return f.breached, f.err
+}
+
+func TestUserService_CreateUser_BreachedPassword(t *testing.T) {
+	tests := []struct {
+		name        string
+		checker     *fakeBreachChecker
+		wantErr     error
+		wantCreated bool
+	}{
+		{"breached rejected", &fakeBreachChecker{breached: true}, domain.ErrPasswordBreached, false},
+		{"not breached created", &fakeBreachChecker{}, nil, true},
+		{"service error fails open", &fakeBreachChecker{err: fmt.Errorf("hibp down")}, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			created := false
+			repo := &mockAdminUserRepo{
+				createFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+					created = true
+					return u, nil
+				},
+			}
+			svc := newTestUserService(repo)
+			svc.SetBreachChecker(tt.checker)
+
+			_, err := svc.CreateUser(context.Background(), &api.CreateUserRequest{
+				Email:    "new@example.com",
+				Password: "super-secure-password",
+				Name:     "New User",
+			})
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantCreated, created)
+			assert.Equal(t, 1, tt.checker.calls)
+		})
+	}
+}

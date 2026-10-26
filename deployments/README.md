@@ -69,6 +69,8 @@ Covers staging and production environments, secrets management, monitoring, roll
 | 5432 | Staging only | PostgreSQL (not exposed in production) |
 | 6379 | Staging only | Redis (not exposed in production) |
 
+**Outbound:** the service calls `https://api.pwnedpasswords.com/range/` (HTTPS, 3 s timeout) to check new passwords against known breaches; only a 5-character SHA-1 prefix is sent. Allow this egress, or set `HIBP_API_URL` to an internal mirror. If HIBP is unreachable the check **fails open** (password accepted, `WARN` log + `password_breach_check_failed` audit event), so blocked egress degrades the blocklist rather than registration or password changes.
+
 ---
 
 ## Prerequisites

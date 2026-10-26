@@ -321,6 +321,8 @@ func handleServiceError(c *gin.Context, err error) {
 		domain.RespondWithError(c, http.StatusConflict, domain.CodeBadRequest, err.Error())
 	case errors.Is(err, ErrBadRequest):
 		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, err.Error())
+	case errors.Is(err, domain.ErrPasswordBreached):
+		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, domain.ErrPasswordBreached.Error())
 	case errors.Is(err, ErrInsufficientScope):
 		c.Header("WWW-Authenticate", `Bearer error="insufficient_scope"`)
 		domain.RespondWithError(c, http.StatusForbidden, domain.CodeInsufficientScope, err.Error())

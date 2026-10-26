@@ -10,9 +10,15 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const defaultAPIURL = "https://api.pwnedpasswords.com/range/"
+
+// RequestTimeout is the http.Client timeout callers should configure for the
+// HIBP client. Callers fail open on breach-check errors, so a slow API must
+// not stall password flows for long.
+const RequestTimeout = 3 * time.Second
 
 // BreachChecker determines whether a password has appeared in a data breach.
 type BreachChecker interface {
