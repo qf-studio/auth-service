@@ -136,8 +136,8 @@ func (m *mockDPoPMWValidator) ValidateProof(_ context.Context, _, _, httpURI str
 }
 
 // newDPoPIntegrationRouter builds a full public router with DPoP support.
-// trustedProxyCIDRs controls when X-Forwarded-Proto / X-Forwarded-Host are
-// honored while reconstructing the request URI for htu matching.
+// trustedProxyCIDRs controls when X-Forwarded-Proto is honored while
+// reconstructing the request URI for htu matching.
 func newDPoPIntegrationRouter(
 	authSvc api.AuthService,
 	tokenSvc api.TokenService,
@@ -153,7 +153,7 @@ func newDPoPIntegrationRouter(
 	if dpopValidator != nil {
 		mw.DPoP = middleware.DPoPMiddleware(dpopValidator, trustedProxyCIDRs)
 	}
-	return api.NewPublicRouter(svc, mw, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 }
 
 // --- Integration Tests ---
@@ -382,6 +382,84 @@ func TestDPoP_TokenEndpoint_NoTrustedProxiesConfigured_ForwardedHeaderIgnored(t 
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "http://auth.quantflow.studio/auth/token", dpopSvc.gotHTU)
+}
+
+func TestDPoP_TokenEndpoint_HostFromRequestHost(t *testing.T) {
+	// The htu host always comes from Request.Host: the ALB preserves the
+	// original Host header but forwards a client-supplied X-Forwarded-Host
+	// unchanged, so that header is never read, even from a trusted peer.
+	_, albCIDR, err := net.ParseCIDR("10.40.0.0/24")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		cidrs      []*net.IPNet
+		remoteAddr string
+		headers    map[string]string
+		wantHTU    string
+	}{
+		{
+			name:       "trusted peer: X-Forwarded-Host ignored, X-Forwarded-Proto honored",
+			cidrs:      []*net.IPNet{albCIDR},
+			remoteAddr: "10.40.0.5:9999",
+			headers: map[string]string{
+				"X-Forwarded-Host":  "evil.example",
+				"X-Forwarded-Proto": "https",
+			},
+			wantHTU: "https://auth.quantflow.studio/auth/token",
+		},
+		{
+			name:       "untrusted peer: both forwarded headers ignored",
+			cidrs:      []*net.IPNet{albCIDR},
+			remoteAddr: "203.0.113.9:4444",
+			headers: map[string]string{
+				"X-Forwarded-Host":  "evil.example",
+				"X-Forwarded-Proto": "https",
+			},
+			wantHTU: "http://auth.quantflow.studio/auth/token",
+		},
+		{
+			name:       "no CIDRs configured: both forwarded headers ignored",
+			cidrs:      nil,
+			remoteAddr: "10.40.0.5:9999",
+			headers: map[string]string{
+				"X-Forwarded-Host":  "evil.example",
+				"X-Forwarded-Proto": "https",
+			},
+			wantHTU: "http://auth.quantflow.studio/auth/token",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dpopSvc := &mockDPoPService{enabled: true, thumbprint: "jkt-host"}
+			tokenSvc := &mockTokenService{
+				refreshFn: func(_ context.Context, _ string) (*api.AuthResult, error) {
+					return &api.AuthResult{AccessToken: "qf_at_h", TokenType: "DPoP", ExpiresIn: 900}, nil
+				},
+			}
+			validator := &mockTokenValidator{
+				claims: &domain.TokenClaims{Subject: "user-1", TokenID: "tok-1"},
+			}
+
+			router := newDPoPIntegrationRouter(&mockAuthService{}, tokenSvc, dpopSvc, validator, nil, tt.cidrs)
+
+			body := `{"grant_type":"refresh_token","refresh_token":"qf_rt_valid"}`
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/token", strings.NewReader(body))
+			req.Host = "auth.quantflow.studio"
+			req.RemoteAddr = tt.remoteAddr
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("DPoP", "proof")
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, tt.wantHTU, dpopSvc.gotHTU)
+		})
+	}
 }
 
 func TestDPoP_TokenEndpoint_InvalidProof(t *testing.T) {

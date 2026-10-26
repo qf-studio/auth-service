@@ -117,7 +117,7 @@ func newMFATestRouter(mfaSvc api.MFAService) *gin.Engine {
 		c.Next()
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
-	return api.NewPublicRouter(svc, mw, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 }
 
 // ── MFA Setup Tests ──────────────────────────────────────────────────────────
@@ -316,7 +316,7 @@ func TestLogin_MFAChallenge(t *testing.T) {
 		c.Next()
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
-	router := api.NewPublicRouter(svc, mw, health.NewService())
+	router := mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 
 	// Step 1: Login returns MFA challenge
 	body := map[string]string{

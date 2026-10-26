@@ -104,7 +104,7 @@ func (m *mockAdminClientService) RotateSecret(ctx context.Context, clientID stri
 
 func newAdminClientRouter(clientSvc api.AdminClientService) *gin.Engine {
 	svc := &api.AdminServices{Clients: clientSvc}
-	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 }
 
 // --- List Clients ---

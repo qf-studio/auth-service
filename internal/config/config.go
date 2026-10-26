@@ -97,13 +97,16 @@ type HIBPConfig struct {
 
 // ProxyConfig holds trusted reverse-proxy settings.
 type ProxyConfig struct {
-	// TrustedCIDRs: TRUSTED_PROXY_CIDRS, comma-separated CIDRs. Requests whose
-	// immediate peer address falls within one of these ranges are allowed to
-	// set X-Forwarded-Proto / X-Forwarded-Host, which the server then trusts
-	// when reconstructing the externally-visible request URL (e.g. for DPoP
-	// htu matching behind a TLS-terminating AWS ALB). Empty (the default)
-	// trusts nothing — headers are ignored and the scheme/host come from
-	// Request.TLS / Request.Host, exactly as before this setting existed.
+	// TrustedCIDRs: TRUSTED_PROXY_CIDRS, comma-separated CIDRs of the reverse
+	// proxies / load balancers in front of the service. For requests whose
+	// immediate peer address falls within one of these ranges the server:
+	//   - derives the client IP (rate limiting, session records) from
+	//     X-Forwarded-For, taking the rightmost address outside these ranges;
+	//   - honors X-Forwarded-Proto when reconstructing the externally-visible
+	//     request URL (DPoP htu matching behind a TLS-terminating AWS ALB).
+	// The host is always taken from Request.Host. Empty (the default) trusts
+	// nothing — the client IP is the TCP peer and the scheme comes from
+	// Request.TLS.
 	TrustedCIDRs []*net.IPNet
 }
 

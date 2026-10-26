@@ -41,7 +41,7 @@ func newBrokerRouter(brokerSvc api.BrokerTokenService) *gin.Engine {
 		Token:  &mockTokenService{},
 		Broker: brokerSvc,
 	}
-	return api.NewPublicRouter(svc, nil, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, nil, health.NewService()))
 }
 
 // --- POST /auth/broker/token ---
@@ -122,7 +122,7 @@ func TestBrokerToken_NotRegistered(t *testing.T) {
 		Auth:  &mockAuthService{},
 		Token: &mockTokenService{},
 	}
-	r := api.NewPublicRouter(svc, nil, health.NewService())
+	r := mustRouter(api.NewPublicRouter(svc, nil, health.NewService()))
 	body := map[string]interface{}{
 		"client_id":     "agent-client-id",
 		"client_secret": "agent-client-secret",

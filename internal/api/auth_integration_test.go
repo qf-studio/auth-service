@@ -54,7 +54,7 @@ func newIntegrationRouter(
 	mw := &api.MiddlewareStack{
 		Auth: middleware.AuthMiddleware(validator),
 	}
-	return api.NewPublicRouter(svc, mw, health.NewService())
+	return mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
 }
 
 // TestProtectedRoutes_RequireAuth verifies that all protected endpoints

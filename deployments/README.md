@@ -280,14 +280,23 @@ further configuration the server reconstructs every request URL as
 signs its proof against the public `https://...` URL, so the `htu` scheme
 never matches and every DPoP-bound request is rejected (GH-508).
 
-Set `TRUSTED_PROXY_CIDRS` to the VPC CIDR(s) the ALB's target group lives in
-so the server trusts the ALB's `X-Forwarded-Proto` / `X-Forwarded-Host`
-headers when reconstructing the request URL. Leave it unset (the default) for
-any deployment where the load balancer's peer address isn't otherwise
-trusted — the headers are then ignored and the scheme falls back to
+Set `TRUSTED_PROXY_CIDRS` to the ALB subnets (e.g. `10.40.0.0/24,10.40.1.0/24`)
+so the server trusts the ALB's `X-Forwarded-Proto` header when reconstructing
+the request URL. The host is always taken from the `Host` header, which the
+ALB preserves; `X-Forwarded-Host` is not read. Leave it unset (the default)
+for any deployment where the load balancer's peer address isn't otherwise
+trusted — the header is then ignored and the scheme falls back to
 `Request.TLS`, same as before this setting existed. Do not set it to `0.0.0.0/0`
 or anything broader than the actual proxy network: any peer inside a trusted
-CIDR can spoof the scheme seen by DPoP validation.
+CIDR can set the scheme seen by DPoP validation and the client IP below.
+
+`TRUSTED_PROXY_CIDRS` also controls client-IP derivation for per-IP rate
+limiting and session records. For a peer inside these ranges the client IP is
+the rightmost `X-Forwarded-For` entry outside them (the ALB appends the real
+client address after anything the client sent); from any other peer, or with
+the setting empty, it is the TCP peer address and `X-Forwarded-For` is
+ignored. Behind the ALB the TCP peer is always the ALB, so without this
+setting every client shares one rate-limit bucket.
 
 ---
 

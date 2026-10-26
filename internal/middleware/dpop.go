@@ -36,9 +36,9 @@ func (v *dpopProofValidator) ValidateProof(ctx context.Context, proofJWT, httpMe
 //  3. Validates the proof's JWK thumbprint matches the token's cnf.jkt
 //  4. Non-bound tokens (no cnf.jkt) pass through without DPoP check
 //
-// trustedProxyCIDRs controls when X-Forwarded-Proto / X-Forwarded-Host are
-// honored while reconstructing the request URI for htu matching (see
-// RequestURI); pass nil to trust nothing (default, pre-existing behavior).
+// trustedProxyCIDRs controls when X-Forwarded-Proto is honored while
+// reconstructing the request URI for htu matching (see RequestURI); pass nil
+// to trust nothing (default, pre-existing behavior).
 func DPoPMiddleware(validator DPoPProofValidator, trustedProxyCIDRs []*net.IPNet) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, err := GetClaims(c)
@@ -99,29 +99,29 @@ func DPoPMiddleware(validator DPoPProofValidator, trustedProxyCIDRs []*net.IPNet
 // URL, and every DPoP-bound request is rejected.
 //
 // To fix this without trusting arbitrary clients to set their own scheme,
-// X-Forwarded-Proto / X-Forwarded-Host are only honored when the immediate
-// peer address (Request.RemoteAddr) falls within trustedProxyCIDRs — i.e.
-// only for connections from proxies this deployment explicitly configured
-// via TRUSTED_PROXY_CIDRS. With no trusted CIDRs configured (the default),
-// behavior is unchanged: scheme comes from Request.TLS and host from
-// Request.Host.
+// X-Forwarded-Proto is only honored when the immediate peer address
+// (Request.RemoteAddr) falls within trustedProxyCIDRs — i.e. only for
+// connections from proxies this deployment explicitly configured via
+// TRUSTED_PROXY_CIDRS. With no trusted CIDRs configured (the default), the
+// scheme comes from Request.TLS.
+//
+// The host always comes from Request.Host. X-Forwarded-Host is not read, even
+// from trusted proxies: the AWS ALB passes a client-supplied X-Forwarded-Host
+// through unchanged, while it preserves the original Host header, so
+// Request.Host is the value the client actually addressed.
 func RequestURI(c *gin.Context, trustedProxyCIDRs []*net.IPNet) string {
 	scheme := "https"
 	if c.Request.TLS == nil {
 		scheme = "http"
 	}
-	host := c.Request.Host
 
 	if isTrustedProxy(c.Request.RemoteAddr, trustedProxyCIDRs) {
 		if fwdProto := c.GetHeader("X-Forwarded-Proto"); fwdProto != "" {
 			scheme = fwdProto
 		}
-		if fwdHost := c.GetHeader("X-Forwarded-Host"); fwdHost != "" {
-			host = fwdHost
-		}
 	}
 
-	return fmt.Sprintf("%s://%s%s", scheme, host, c.Request.URL.Path)
+	return fmt.Sprintf("%s://%s%s", scheme, c.Request.Host, c.Request.URL.Path)
 }
 
 // isTrustedProxy reports whether remoteAddr (host:port, or a bare host as

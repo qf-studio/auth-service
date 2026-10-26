@@ -87,7 +87,7 @@ func (m *mockAdminTenantService) DeleteTenant(ctx context.Context, tenantID stri
 
 func newAdminTenantRouter(tenantSvc api.AdminTenantService) *gin.Engine {
 	svc := &api.AdminServices{Tenants: tenantSvc}
-	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 }
 
 // --- List Tenants ---

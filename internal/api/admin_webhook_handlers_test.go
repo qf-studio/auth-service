@@ -167,7 +167,7 @@ func (m *mockAdminWebhookService) TestWebhook(ctx context.Context, webhookID str
 
 func newAdminWebhookRouter(webhookSvc api.AdminWebhookService) *gin.Engine {
 	svc := &api.AdminServices{Webhooks: webhookSvc}
-	return api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()})
+	return mustRouter(api.NewAdminRouter(svc, &api.AdminDeps{Health: health.NewService()}))
 }
 
 // --- List Webhooks ---
