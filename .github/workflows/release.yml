@@ -158,10 +158,12 @@ jobs:
         # binary can clear a dirty flag and re-pin schema_migrations
         # in-image, which is the exact recovery path operators need
         # after a failed migration (2026-07-24 Pointer incident).
+        env:
+          SCHEMA_VERSION: ${{ steps.version.outputs.version }}
         run: |
           docker run --rm --network host --entrypoint /auth-migrate \
             -e DATABASE_URL \
-            "$IMAGE" force "${{ steps.version.outputs.version }}"
+            "$IMAGE" force "$SCHEMA_VERSION"
 
       - name: Migrate version (confirm force cleared dirty state)
         run: |
@@ -190,6 +192,7 @@ jobs:
       - name: Fire repository_dispatch on qf-studio/auth-service-canary
         env:
           GH_TOKEN: ${{ secrets.CANARY_GH_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "CANARY_GH_TOKEN not set — skipping canary dispatch (daily cron will cover)"
@@ -197,4 +200,4 @@ jobs:
           fi
           gh api repos/qf-studio/auth-service-canary/dispatches \
             -f event_type=auth-service-release \
-            -F 'client_payload[tag]=${{ github.ref_name }}'
+            -F "client_payload[tag]=$TAG_NAME"
