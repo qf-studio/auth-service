@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"math/big"
 	"net/url"
 	"strings"
 	"time"
@@ -357,11 +358,8 @@ func JWKThumbprint(pub crypto.PublicKey) (string, error) {
 			return "", fmt.Errorf("unsupported EC curve for thumbprint")
 		}
 		byteLen := (k.Curve.Params().BitSize + 7) / 8
-		raw, err := k.Bytes()
-		if err != nil {
-			return "", fmt.Errorf("encode EC public key: %w", err)
-		}
-		xBytes, yBytes := raw[1:1+byteLen], raw[1+byteLen:]
+		xBytes := padLeft(k.X.Bytes(), byteLen)
+		yBytes := padLeft(k.Y.Bytes(), byteLen)
 		// RFC 7638: members sorted lexicographically by key name.
 		// String concatenation used intentionally to produce canonical JSON —
 		// fmt.Sprintf %q adds Go-style escaping which breaks the canonical form.
@@ -492,10 +490,13 @@ func parseECPublicKey(jwk map[string]interface{}) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("decode y: %w", err)
 	}
 
-	// ParseUncompressedPublicKey validates the point is on the curve.
-	point := append(append([]byte{0x04}, padLeft(xBytes, 32)...), padLeft(yBytes, 32)...)
-	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
-	if err != nil {
+	pub := &ecdsa.PublicKey{
+		Curve: elliptic.P256(),
+		X:     new(big.Int).SetBytes(xBytes),
+		Y:     new(big.Int).SetBytes(yBytes),
+	}
+
+	if !pub.IsOnCurve(pub.X, pub.Y) {
 		return nil, fmt.Errorf("EC point is not on curve")
 	}
 

@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -257,10 +258,13 @@ func svcParseECPublicKey(jwk map[string]interface{}) (crypto.PublicKey, error) {
 		return nil, fmt.Errorf("decode y: %w", err)
 	}
 
-	// ParseUncompressedPublicKey validates the point is on the curve.
-	point := append(append([]byte{0x04}, padLeft(xBytes, 32)...), padLeft(yBytes, 32)...)
-	key, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
-	if err != nil {
+	key := &ecdsa.PublicKey{
+		Curve: elliptic.P256(),
+		X:     new(big.Int).SetBytes(xBytes),
+		Y:     new(big.Int).SetBytes(yBytes),
+	}
+
+	if !key.Curve.IsOnCurve(key.X, key.Y) {
 		return nil, fmt.Errorf("EC point not on curve")
 	}
 

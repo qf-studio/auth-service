@@ -38,11 +38,12 @@ func generateECKey(t *testing.T) *ecdsa.PrivateKey {
 
 func ecPublicJWK(pub *ecdsa.PublicKey) map[string]interface{} {
 	byteLen := (pub.Curve.Params().BitSize + 7) / 8
-	raw, err := pub.Bytes()
-	if err != nil {
-		panic(err)
-	}
-	xPadded, yPadded := raw[1:1+byteLen], raw[1+byteLen:]
+	xBytes := pub.X.Bytes()
+	yBytes := pub.Y.Bytes()
+	xPadded := make([]byte, byteLen)
+	yPadded := make([]byte, byteLen)
+	copy(xPadded[byteLen-len(xBytes):], xBytes)
+	copy(yPadded[byteLen-len(yBytes):], yBytes)
 	return map[string]interface{}{
 		"kty": "EC",
 		"crv": "P-256",
