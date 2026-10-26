@@ -3,6 +3,7 @@ package storage_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -300,6 +301,42 @@ func TestPostgresUserRepository_FindByEmail(t *testing.T) {
 	found, err := repo.FindByEmail(ctx, domain.DefaultTenantID, user.Email)
 	require.NoError(t, err)
 	assert.Equal(t, user.ID, found.ID)
+}
+
+func TestPostgresUserRepository_FindByEmail_CaseInsensitive(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	user.Email = "Mixed.Case-" + user.ID + "@Example.COM"
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	found, err := repo.FindByEmail(ctx, domain.DefaultTenantID, strings.ToUpper(user.Email))
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, found.ID)
+
+	found, err = repo.FindByEmail(ctx, domain.DefaultTenantID, strings.ToLower(user.Email))
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, found.ID)
+}
+
+func TestPostgresUserRepository_Create_DuplicateEmailDifferentCase(t *testing.T) {
+	pool := testPool(t)
+	repo := storage.NewPostgresUserRepository(pool)
+	ctx := context.Background()
+
+	user := newTestUser()
+	user.Email = "Dup.Case-" + user.ID + "@Example.com"
+	_, err := repo.Create(ctx, user)
+	require.NoError(t, err)
+
+	dup := newTestUser()
+	dup.Email = strings.ToLower(user.Email)
+	_, err = repo.Create(ctx, dup)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrDuplicateEmail)
 }
 
 func TestPostgresUserRepository_FindByEmail_NotFound(t *testing.T) {

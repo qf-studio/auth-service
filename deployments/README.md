@@ -359,6 +359,18 @@ docker run --rm --entrypoint /auth-migrate -e DATABASE_URL="$DATABASE_URL" \
   ghcr.io/qf-studio/auth-service:<tag> up
 ```
 
+### Case-Insensitive Email Uniqueness (migration 000022)
+
+Migration `000022` adds a unique index on `(tenant_id, lower(email))`; the service also trims and lower-cases every email it accepts. Existing accounts are never merged or rewritten. If any tenant already has two users whose emails differ only by case, the migration **fails** with a message such as `cannot enforce case-insensitive email uniqueness: 2 (tenant_id, lower(email)) group(s) in users ...`, and the deploy script aborts before restarting the service. To resolve:
+
+```sql
+-- list the colliding accounts per tenant (soft-deleted rows included)
+SELECT tenant_id, lower(email), array_agg(id) FROM users
+GROUP BY 1, 2 HAVING COUNT(*) > 1;
+```
+
+Delete, rename, or merge the duplicates by hand, then clear the dirty flag with `force 21` (see above) and re-run `up`. No new configuration is required.
+
 ---
 
 ## Verifying a Live Deployment (Smoke Image)
