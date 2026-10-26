@@ -812,6 +812,11 @@ func TestLoad_AdminAPITokens(t *testing.T) {
 		{"two for rotation, whitespace trimmed", " " + tokA + " , " + tokB, []string{tokA, tokB}, ""},
 		{"too short", strings.Repeat("a", MinAdminTokenBytes-1), nil, "ADMIN_API_TOKENS"},
 		{"second too short", tokA + ",short", nil, "ADMIN_API_TOKENS"},
+		{"production example placeholder", "CHANGE_ME_production_admin_api_token_at_least_32_bytes", nil, "placeholder"},
+		{"placeholder lowercase", "change_me_" + tokA, nil, "placeholder"},
+		{"placeholder mixed case", "Change_Me_" + tokA, nil, "placeholder"},
+		{"placeholder second of two", tokA + ",CHANGE_ME_staging_admin_api_token_at_least_32_bytes", nil, "token 2 is a placeholder"},
+		{"random hex token", "4f9c2a7e1b3d5f6a8c0e2b4d6f8a1c3e5b7d9f0a2c4e6b8d1f3a5c7e9b0d2f4a", []string{"4f9c2a7e1b3d5f6a8c0e2b4d6f8a1c3e5b7d9f0a2c4e6b8d1f3a5c7e9b0d2f4a"}, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
