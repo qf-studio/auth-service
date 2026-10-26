@@ -249,6 +249,10 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 		s.logger.Error("exchange code: find user failed", zap.Error(err))
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
+	// The user may have been locked or deleted after the code was issued.
+	if !user.IsActive() {
+		return nil, fmt.Errorf("user %s is not active: %w", code.Subject, api.ErrUnauthorized)
+	}
 
 	// GH-541: a refresh token is issued only when offline_access was granted
 	// (OIDC Core §11). Decision: the check uses the granted code.Scopes, never

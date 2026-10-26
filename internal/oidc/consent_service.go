@@ -2,6 +2,8 @@ package oidc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -23,6 +25,7 @@ type ConsentService struct {
 	cfg     config.OIDCConfig
 	store   Store
 	clients ClientLookup
+	users   UserLookup
 	grants  ConsentGrantStore
 	logger  *zap.Logger
 	audit   audit.EventLogger
@@ -33,6 +36,7 @@ func NewConsentService(
 	cfg config.OIDCConfig,
 	store Store,
 	clients ClientLookup,
+	users UserLookup,
 	grants ConsentGrantStore,
 	logger *zap.Logger,
 	auditor audit.EventLogger,
@@ -41,6 +45,7 @@ func NewConsentService(
 		cfg:     cfg,
 		store:   store,
 		clients: clients,
+		users:   users,
 		grants:  grants,
 		logger:  logger,
 		audit:   auditor,
@@ -107,6 +112,25 @@ func (s *ConsentService) AcceptLogin(ctx context.Context, challenge string, req 
 		return nil, fmt.Errorf("accept login: %w", api.ErrInternalError)
 	}
 
+	if !client.IsActive() {
+		return nil, fmt.Errorf("client %s is not active: %w", lr.ClientID, api.ErrForbidden)
+	}
+
+	// The login UI is trusted to authenticate req.Subject, but not to name
+	// an account that is unknown, locked, suspended or deleted: no code may
+	// be issued for one.
+	user, err := s.users.FindByID(ctx, tenantID, req.Subject)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("subject %s: %w", req.Subject, api.ErrNotFound)
+		}
+		s.logger.Error("accept login: find subject failed", zap.Error(err))
+		return nil, fmt.Errorf("accept login: %w", api.ErrInternalError)
+	}
+	if !user.IsActive() {
+		return nil, fmt.Errorf("subject %s is not active: %w", req.Subject, api.ErrForbidden)
+	}
+
 	now := time.Now().UTC()
 
 	skipConsent := !isThirdParty(client)
@@ -126,6 +150,7 @@ func (s *ConsentService) AcceptLogin(ctx context.Context, challenge string, req 
 		if err != nil {
 			return nil, err
 		}
+		s.auditLoginAccept(ctx, req.Subject, lr.ClientID, challenge, true)
 		return &api.RedirectResponse{RedirectTo: redirectTo}, nil
 	}
 
@@ -159,6 +184,7 @@ func (s *ConsentService) AcceptLogin(ctx context.Context, challenge string, req 
 		return nil, fmt.Errorf("accept login: %w", api.ErrInternalError)
 	}
 
+	s.auditLoginAccept(ctx, req.Subject, lr.ClientID, challenge, false)
 	return &api.RedirectResponse{RedirectTo: consentURL}, nil
 }
 
@@ -173,6 +199,15 @@ func (s *ConsentService) RejectLogin(ctx context.Context, challenge string, req 
 		s.logger.Error("reject login: consume login request failed", zap.Error(err))
 		return nil, fmt.Errorf("reject login: %w", api.ErrInternalError)
 	}
+
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventOIDCLoginReject,
+		TargetID: lr.ClientID,
+		Metadata: map[string]string{
+			"challenge_ref": challengeRef(challenge),
+			"error":         req.Error,
+		},
+	})
 
 	return &api.RedirectResponse{RedirectTo: buildRedirectError(lr.RedirectURI, req.Error, req.ErrorDescription, lr.State)}, nil
 }
@@ -277,7 +312,40 @@ func (s *ConsentService) RejectConsent(ctx context.Context, challenge string, re
 		return nil, fmt.Errorf("reject consent: %w", api.ErrInternalError)
 	}
 
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventOIDCConsentReject,
+		ActorID:  cr.Subject,
+		TargetID: cr.ClientID,
+		Metadata: map[string]string{
+			"challenge_ref": challengeRef(challenge),
+			"error":         req.Error,
+		},
+	})
+
 	return &api.RedirectResponse{RedirectTo: buildRedirectError(cr.RedirectURI, req.Error, req.ErrorDescription, cr.State)}, nil
+}
+
+// auditLoginAccept records an accepted login challenge. consentSkipped is
+// true when an authorization code was issued directly (first-party client or
+// covering remembered grant) rather than redirecting to the consent UI.
+func (s *ConsentService) auditLoginAccept(ctx context.Context, subject, clientID, challenge string, consentSkipped bool) {
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventOIDCLoginAccept,
+		ActorID:  subject,
+		TargetID: clientID,
+		Metadata: map[string]string{
+			"consent_skipped": fmt.Sprintf("%t", consentSkipped),
+			"challenge_ref":   challengeRef(challenge),
+		},
+	})
+}
+
+// challengeRef returns a short correlation reference for a login or consent
+// challenge: the first 8 hex chars of its SHA-256. The challenge itself is a
+// bearer secret for the accept/reject endpoints and must never be logged.
+func challengeRef(challenge string) string {
+	sum := sha256.Sum256([]byte(challenge))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 // consentUIURL returns the configured consent UI base URL, falling back to
