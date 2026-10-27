@@ -111,6 +111,7 @@
 | [TASK-08](./tasks/TASK-08-oidc-login-accept-checks.md) | Login-accept checks + audit (#543) | ✅ #551 (reviewed) |
 | [TASK-09](./tasks/TASK-09-govulncheck-gate-and-pins.md) | Toolchain pin, govulncheck gate, pins (#552) | ✅ #553 |
 | [TASK-10](./tasks/TASK-10-prod-secrets-for-hardening-waves.md) | Prod secrets/settings for waves 2–3 (#568, Nelya) | 📋 Assigned |
+| [TASK-11](./tasks/TASK-11-prod-email-collision-check.md) | Prod email case-collision check before migration 000022 (#573, Nelya) | 📋 Assigned — hold next release deploy |
 | `tasks/gh-NN.md` | Per-issue specs; active ones match open `pilot`-labeled issues | Various |
 
 ---
