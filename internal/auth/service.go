@@ -68,7 +68,7 @@ const (
 	// it when the email is unknown so the unknown-email path costs the same
 	// Argon2id work as a known email (GH-528). It never matches a real
 	// password and protects nothing.
-	dummyPasswordHash = "$argon2id$v=19$m=19456,t=2,p=1$4e1JA0u+gjjeSeMIfDdTRw$KFc3mG/V8T7Yjn5uLQqtwYAoMR/SVHAvYviCBgv99CU"
+	dummyPasswordHash = "$argon2id$v=19$m=19456,t=2,p=1$4e1JA0u+gjjeSeMIfDdTRw$KFc3mG/V8T7Yjn5uLQqtwYAoMR/SVHAvYviCBgv99CU" //nolint:gosec // G101: fixed throwaway Argon2id hash, not a credential
 )
 
 // TokenIssuer abstracts token pair creation for the auth service.
