@@ -43,9 +43,11 @@ func TestRegister_CaseVariantDuplicateRejected(t *testing.T) {
 	}
 	svc := newUnitService(t, users, &mockRefreshTokenRepository{}, &mockTokenIssuer{}, &mockHasher{})
 
-	_, err := svc.Register(context.Background(), "ALICE@x.com", "valid-password-12345", "Alice")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, storage.ErrDuplicateEmail)
+	// A case-variant duplicate is normalised and then treated like any other
+	// duplicate: neutral success, no error (GH-528).
+	info, err := svc.Register(context.Background(), "ALICE@x.com", "valid-password-12345", "Alice")
+	require.NoError(t, err)
+	assert.Equal(t, "alice@x.com", info.Email)
 }
 
 func TestLogin_NormalizesEmail(t *testing.T) {
@@ -75,6 +77,7 @@ func TestResetPassword_NormalizesEmail(t *testing.T) {
 	svc := newIntegrationServiceWithDeps(t, users, sender, "https://app.example.com/reset")
 
 	require.NoError(t, svc.ResetPassword(context.Background(), " Alice@X.com "))
+	svc.waitBackground()
 	assert.Equal(t, "alice@x.com", lookedUp)
 	require.Len(t, sender.sent, 1)
 	assert.Equal(t, "alice@x.com", sender.sent[0].To)

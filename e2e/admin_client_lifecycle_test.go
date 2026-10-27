@@ -42,8 +42,9 @@ type redirectResponse struct {
 
 // errorEnvelope mirrors domain.ErrorResponse's JSON shape.
 type errorEnvelope struct {
-	Error string `json:"error"`
-	Code  string `json:"code"`
+	Error            string `json:"error"`
+	Code             string `json:"code"`
+	ErrorDescription string `json:"error_description"` // RFC 6749 §5.2 token endpoint errors
 }
 
 // noRedirectClient never follows redirects, so callers can inspect the
@@ -136,7 +137,8 @@ func TestAdminClientLifecycle(t *testing.T) {
 	authCode, authVerifier := issueAuthCode(t, created.ID, redirectURI, subject.ID, "openid")
 	wrongSecretStatus, wrongSecretErr := attemptCodeExchange(t, authCode, authVerifier, redirectURI, created.ID, "qf_cs_0000000000000000000000000000000000000000000000000000000000000000")
 	require.Equal(t, http.StatusUnauthorized, wrongSecretStatus, "wrong secret must be rejected")
-	require.Equal(t, "UNAUTHORIZED", wrongSecretErr.Code)
+	require.Equal(t, "invalid_client", wrongSecretErr.Error, "token endpoint errors use the RFC 6749 §5.2 shape")
+	require.NotEmpty(t, wrongSecretErr.ErrorDescription)
 
 	// 6. Update scopes.
 	updateBody, err := json.Marshal(map[string]interface{}{"scopes": []string{"openid", "profile"}})

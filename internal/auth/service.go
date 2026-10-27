@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,6 +58,17 @@ const (
 
 	// emailChangeRateWindow is the window emailChangeRateLimit applies over.
 	emailChangeRateWindow = time.Hour
+
+	// backgroundEmailTimeout bounds a detached email send started by
+	// sendEmailAsync, so a hung SMTP server cannot leak goroutines.
+	backgroundEmailTimeout = 15 * time.Second
+
+	// dummyPasswordHash is a fixed Argon2id hash (m=19456,t=2,p=1 — the
+	// production parameters) of a throwaway password. Login verifies against
+	// it when the email is unknown so the unknown-email path costs the same
+	// Argon2id work as a known email (GH-528). It never matches a real
+	// password and protects nothing.
+	dummyPasswordHash = "$argon2id$v=19$m=19456,t=2,p=1$4e1JA0u+gjjeSeMIfDdTRw$KFc3mG/V8T7Yjn5uLQqtwYAoMR/SVHAvYviCBgv99CU"
 )
 
 // TokenIssuer abstracts token pair creation for the auth service.
@@ -114,6 +126,10 @@ type Service struct {
 	// loginThrottle enforces per-account login lockout. Nil disables it
 	// (unit tests); cmd/server/main.go always wires one.
 	loginThrottle LoginThrottle
+
+	// background tracks detached email sends (see sendEmailAsync) so tests can
+	// wait for them.
+	background sync.WaitGroup
 }
 
 // defaultRefreshTokenTTL is used when ServiceDeps.RefreshTokenTTL is unset.
@@ -234,6 +250,9 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 
 	created, err := s.users.Create(ctx, user)
 	if err != nil {
+		if errors.Is(err, storage.ErrDuplicateEmail) {
+			return s.registerDuplicate(ctx, email, name, user.ID), nil
+		}
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 
@@ -261,6 +280,55 @@ func (s *Service) Register(ctx context.Context, email, pwd, name string) (*api.U
 		Metadata: map[string]string{"email": email},
 	})
 	return info, nil
+}
+
+// registerDuplicate answers a registration for an address that already has an
+// account. Decision (GH-528): the response is indistinguishable from a
+// successful registration (same status and shape, with a placeholder ID that
+// matches no account), so the endpoint is not an account-existence oracle. The
+// real owner is told by email instead. The password was already hashed by the
+// caller, so the work done matches a new registration.
+func (s *Service) registerDuplicate(ctx context.Context, emailAddr, name, placeholderID string) *api.UserInfo {
+	s.audit.LogEvent(ctx, audit.Event{
+		Type:     audit.EventRegisterDuplicate,
+		Metadata: map[string]string{"email": emailAddr},
+	})
+
+	if s.emailEnabled && s.email != nil {
+		s.sendEmailAsync(ctx, email.Message{
+			To:      emailAddr,
+			Subject: "Sign-up attempt on your account",
+			Body:    "Someone tried to create an account with this email address, but an account already exists.\n\nIf this was you, sign in or use the password reset link on the sign-in page. If it was not you, no action is needed.",
+		}, func() {
+			s.logger.Error("failed to send account-already-exists email")
+		})
+	}
+
+	return &api.UserInfo{ID: placeholderID, Email: emailAddr, Name: name}
+}
+
+// sendEmailAsync delivers msg on a detached goroutine bounded by
+// backgroundEmailTimeout, so request latency does not depend on whether a
+// message is sent at all (GH-528). onFail runs when delivery fails; the error
+// itself is never surfaced to the caller.
+func (s *Service) sendEmailAsync(ctx context.Context, msg email.Message, onFail func()) {
+	// The request context is canceled as soon as the response is written.
+	sendCtx := context.WithoutCancel(ctx)
+	s.background.Add(1)
+	go func() {
+		defer s.background.Done()
+		ctx, cancel := context.WithTimeout(sendCtx, backgroundEmailTimeout)
+		defer cancel()
+		if err := s.email.Send(ctx, msg); err != nil {
+			s.logger.Error("background email delivery failed", zap.String("subject", msg.Subject), zap.Error(err))
+			onFail()
+		}
+	}()
+}
+
+// waitBackground blocks until all detached email sends have finished.
+func (s *Service) waitBackground() {
+	s.background.Wait()
 }
 
 // issueEmailVerification generates a verification token, persists it with a
@@ -346,43 +414,25 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	user, err := s.users.FindByEmail(ctx, tenantID, email)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
+			// Spend the same Argon2id work as a known email so response time
+			// does not reveal whether the address exists (GH-528). The result
+			// is irrelevant; the hash never matches.
+			_, _ = s.hasher.Verify(pwd, dummyPasswordHash)
 			s.recordLoginFailure(ctx, account)
 			s.audit.LogEvent(ctx, audit.Event{
 				Type:     audit.EventLoginFailure,
 				Metadata: map[string]string{"reason": "user_not_found"},
 			})
-			return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
+			return nil, errInvalidCredentials()
 		}
 		s.logger.Error("failed to find user by email", zap.Error(err))
 		return nil, fmt.Errorf("find user: %w", err)
 	}
 
-	// Check account status before verifying password.
-	// Note: user.EmailVerified is intentionally NOT checked here. In v1, email
-	// verification is informational only (GH-478) — gating login on it would
-	// block dogfood and design-partner signups whose links may go unclicked.
-	// Do not add an EmailVerified check without a product decision to enforce it.
-	if user.DeletedAt != nil {
-		s.recordLoginFailure(ctx, account)
-		s.audit.LogEvent(ctx, audit.Event{
-			Type:     audit.EventLoginFailure,
-			ActorID:  user.ID,
-			TargetID: user.ID,
-			Metadata: map[string]string{"reason": "account_suspended"},
-		})
-		return nil, fmt.Errorf("account suspended: %w", api.ErrUnauthorized)
-	}
-	if user.Locked {
-		s.recordLoginFailure(ctx, account)
-		s.audit.LogEvent(ctx, audit.Event{
-			Type:     audit.EventLoginFailure,
-			ActorID:  user.ID,
-			TargetID: user.ID,
-			Metadata: map[string]string{"reason": "account_locked"},
-		})
-		return nil, fmt.Errorf("account locked: %w", api.ErrUnauthorized)
-	}
-
+	// Decision (GH-528): the password is verified before the account state is
+	// looked at. Locked/suspended is only revealed to a caller who proved they
+	// know the password; everyone else gets the same generic failure as for an
+	// unknown email or a wrong password.
 	match, err := s.hasher.Verify(pwd, user.PasswordHash)
 	if err != nil {
 		s.logger.Error("password verification error", zap.Error(err))
@@ -396,7 +446,32 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 			TargetID: user.ID,
 			Metadata: map[string]string{"reason": "invalid_password"},
 		})
-		return nil, fmt.Errorf("invalid credentials: %w", api.ErrUnauthorized)
+		return nil, errInvalidCredentials()
+	}
+
+	// Note: user.EmailVerified is intentionally NOT checked here. In v1, email
+	// verification is informational only (GH-478) — gating login on it would
+	// block dogfood and design-partner signups whose links may go unclicked.
+	// Do not add an EmailVerified check without a product decision to enforce it.
+	if user.DeletedAt != nil {
+		s.recordLoginFailure(ctx, account)
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventLoginFailure,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"reason": "account_suspended"},
+		})
+		return nil, fmt.Errorf("%w: %w", domain.ErrAccountSuspended, api.ErrUnauthorized)
+	}
+	if user.Locked {
+		s.recordLoginFailure(ctx, account)
+		s.audit.LogEvent(ctx, audit.Event{
+			Type:     audit.EventLoginFailure,
+			ActorID:  user.ID,
+			TargetID: user.ID,
+			Metadata: map[string]string{"reason": "account_locked"},
+		})
+		return nil, fmt.Errorf("%w: %w", domain.ErrAccountLocked, api.ErrUnauthorized)
 	}
 
 	// The password is correct: the first factor succeeded, so the
@@ -523,6 +598,13 @@ func (s *Service) Login(ctx context.Context, email, pwd string) (*api.AuthResult
 	return result, nil
 }
 
+// errInvalidCredentials is the single failure returned for every login
+// attempt that has not proven knowledge of the password. The HTTP layer maps
+// domain.ErrInvalidCredentials to a fixed "invalid credentials" body.
+func errInvalidCredentials() error {
+	return fmt.Errorf("%w: %w", domain.ErrInvalidCredentials, api.ErrUnauthorized)
+}
+
 // loginAccountKey is the per-account throttle key: tenant plus the
 // lower-cased, trimmed email, so case variants of one address share a counter.
 func loginAccountKey(tenantID uuid.UUID, email string) string {
@@ -617,15 +699,16 @@ func (s *Service) ResetPassword(ctx context.Context, emailAddr string) error {
 			Subject: "Reset your password",
 			Body:    fmt.Sprintf("Use the link below to reset your password:\n\n%s\n\nThis link expires in %s.", link, humanizeDuration(resetTokenTTL)),
 		}
-		if sendErr := s.email.Send(ctx, msg); sendErr != nil {
-			// Delivery failure must not become an enumeration oracle: log and
-			// audit, but still return nil so the handler responds 202.
-			s.logger.Error("failed to send password reset email", zap.Error(sendErr))
-			s.audit.LogEvent(ctx, audit.Event{
+		// Sent in the background (GH-528) so response time does not depend on
+		// whether the address exists. A delivery failure must not become an
+		// enumeration oracle either: it is logged and audited only.
+		auditCtx := context.WithoutCancel(ctx)
+		s.sendEmailAsync(ctx, msg, func() {
+			s.audit.LogEvent(auditCtx, audit.Event{
 				Type:     audit.EventPasswordResetEmailFailed,
 				Metadata: map[string]string{"email": emailAddr},
 			})
-		}
+		})
 	}
 
 	return nil

@@ -63,6 +63,27 @@ go run cmd/migrate/main.go up
 source .env && go run cmd/server/main.go
 ```
 
+## Account-State Disclosure
+
+Public endpoints do not reveal whether an account exists or what state it is in:
+
+- **Login** verifies the password first (an unknown email costs one dummy
+  Argon2id verification, so timing matches). Unknown email, wrong password,
+  locked and suspended accounts all return `401 invalid credentials`; `account
+  locked` / `account suspended` are returned only after a correct password.
+- **Register** with an address that already has an account returns the same
+  `201` and body shape as a new registration (with a placeholder `id`). When
+  `EMAIL_ENABLED=true` the existing owner receives an "account already exists"
+  email. No `409` is returned; no new configuration.
+- **Password reset** requests send the email in the background (15 s timeout,
+  failures logged and audited), so response time does not depend on whether the
+  address exists.
+- **`POST /oauth/token`** errors use the RFC 6749 §5.2 body
+  `{"error", "error_description"}` with a fixed description per code
+  (`invalid_request`, `invalid_client` 401, `invalid_grant` 400,
+  `unsupported_grant_type`, `server_error`). Which check failed (client, code
+  binding, redirect URI, PKCE verifier) is logged server-side only.
+
 ## API Surface
 
 | Method | Endpoint | Description |

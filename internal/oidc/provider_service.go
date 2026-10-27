@@ -195,24 +195,24 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 
 	clientID, err := uuid.Parse(req.ClientID)
 	if err != nil {
-		return nil, fmt.Errorf("unknown client_id: %w", api.ErrUnauthorized)
+		return nil, s.tokenError(ctx, api.ErrInvalidClient, "client_id is not a valid UUID", req)
 	}
 	client, err := s.clients.FindByID(ctx, tenantID, clientID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			return nil, fmt.Errorf("client %s: %w", req.ClientID, api.ErrUnauthorized)
+			return nil, s.tokenError(ctx, api.ErrInvalidClient, "unknown client", req)
 		}
 		s.logger.Error("exchange code: find client failed", zap.Error(err))
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
 	if !client.IsActive() {
-		return nil, fmt.Errorf("client %s is not active: %w", req.ClientID, api.ErrUnauthorized)
+		return nil, s.tokenError(ctx, api.ErrInvalidClient, "client is not active", req)
 	}
 
 	isPublic := client.ClientType == domain.ClientTypePublic
 	if !isPublic {
 		if req.ClientSecret == "" || !s.verifyClientSecret(client, req.ClientSecret) {
-			return nil, fmt.Errorf("invalid client credentials: %w", api.ErrUnauthorized)
+			return nil, s.tokenError(ctx, api.ErrInvalidClient, "client secret missing or wrong", req)
 		}
 	}
 
@@ -220,39 +220,39 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 	if err != nil {
 		if errors.Is(err, ErrAuthorizationCodeNotFound) {
 			s.handleCodeReuse(ctx, req)
-			return nil, fmt.Errorf("invalid or expired authorization code: %w", api.ErrUnauthorized)
+			return nil, s.tokenError(ctx, api.ErrInvalidGrant, "authorization code unknown, expired or already redeemed", req)
 		}
 		s.logger.Error("exchange code: consume code failed", zap.Error(err))
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
 
 	if code.ClientID != req.ClientID {
-		return nil, fmt.Errorf("authorization code was not issued to this client: %w", api.ErrUnauthorized)
+		return nil, s.tokenError(ctx, api.ErrInvalidGrant, "authorization code was not issued to this client", req)
 	}
 	if code.RedirectURI != req.RedirectURI {
-		return nil, fmt.Errorf("redirect_uri mismatch: %w", api.ErrUnauthorized)
+		return nil, s.tokenError(ctx, api.ErrInvalidGrant, "redirect_uri mismatch", req)
 	}
 
 	if code.CodeChallenge == "" {
 		// Defense in depth: Authorize requires PKCE for every client, so a
 		// code without a challenge should never reach here.
-		return nil, fmt.Errorf("authorization code has no code_challenge: %w", api.ErrUnauthorized)
+		return nil, s.tokenError(ctx, api.ErrInvalidGrant, "authorization code has no code_challenge", req)
 	}
 	if req.CodeVerifier == "" || oauth.S256Challenge(req.CodeVerifier) != code.CodeChallenge {
-		return nil, fmt.Errorf("code_verifier does not match code_challenge: %w", api.ErrUnauthorized)
+		return nil, s.tokenError(ctx, api.ErrInvalidGrant, "code_verifier does not match code_challenge", req)
 	}
 
 	user, err := s.users.FindByID(ctx, tenantID, code.Subject)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			return nil, fmt.Errorf("user %s: %w", code.Subject, api.ErrUnauthorized)
+			return nil, s.tokenError(ctx, api.ErrInvalidGrant, "code subject no longer exists", req)
 		}
 		s.logger.Error("exchange code: find user failed", zap.Error(err))
 		return nil, fmt.Errorf("exchange code: %w", api.ErrInternalError)
 	}
 	// The user may have been locked or deleted after the code was issued.
 	if !user.IsActive() {
-		return nil, fmt.Errorf("user %s is not active: %w", code.Subject, api.ErrUnauthorized)
+		return nil, s.tokenError(ctx, api.ErrInvalidGrant, "code subject is not active", req)
 	}
 
 	// GH-541: a refresh token is issued only when offline_access was granted
@@ -295,7 +295,7 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 	case replayed:
 		// The replay handler already logged the audit event.
 		s.revokeCodeTokens(ctx, req.ClientID, iss)
-		return nil, fmt.Errorf("invalid or expired authorization code: %w", api.ErrUnauthorized)
+		return nil, s.tokenError(ctx, api.ErrInvalidGrant, "authorization code redeemed concurrently", req)
 	}
 
 	resp := &api.OIDCTokenResponse{
@@ -322,6 +322,19 @@ func (s *ProviderService) ExchangeCode(ctx context.Context, req *api.CodeExchang
 	})
 
 	return resp, nil
+}
+
+// tokenError logs why a token request was refused and returns the bare RFC 6749
+// §5.2 sentinel (api.ErrInvalidClient or api.ErrInvalidGrant). The reason stays
+// server-side: the client sees the same body for every cause of one error code
+// (GH-528).
+func (s *ProviderService) tokenError(ctx context.Context, sentinel error, reason string, req *api.CodeExchangeRequest) error {
+	s.logger.Warn("token request refused",
+		zap.String("error", sentinel.Error()),
+		zap.String("reason", reason),
+		zap.String("client_id", req.ClientID),
+		zap.String("tenant_id", domain.TenantIDFromContext(ctx).String()))
+	return sentinel
 }
 
 // handleCodeReuse runs when a code is not found at redemption. If it was

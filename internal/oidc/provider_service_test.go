@@ -492,7 +492,7 @@ func TestProviderService_ExchangeCode_RequiresVerifier(t *testing.T) {
 				CodeVerifier: tc.verifier,
 			})
 			require.Error(t, err)
-			assert.ErrorIs(t, err, api.ErrUnauthorized)
+			assert.ErrorIs(t, err, api.ErrInvalidGrant)
 		})
 	}
 }
@@ -550,7 +550,7 @@ func TestProviderService_ExchangeCode_UserNoLongerActive(t *testing.T) {
 				CodeVerifier: "verifier-inactive",
 			})
 			require.Error(t, err)
-			assert.ErrorIs(t, err, api.ErrUnauthorized)
+			assert.ErrorIs(t, err, api.ErrInvalidGrant)
 		})
 	}
 }
@@ -713,7 +713,7 @@ func TestProviderService_ExchangeCode_InvalidCode(t *testing.T) {
 		ClientSecret: "correct-secret",
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, api.ErrUnauthorized)
+	assert.ErrorIs(t, err, api.ErrInvalidGrant)
 }
 
 func TestProviderService_ExchangeCode_PKCEMismatch(t *testing.T) {
@@ -744,7 +744,7 @@ func TestProviderService_ExchangeCode_PKCEMismatch(t *testing.T) {
 		CodeVerifier: "verifier-wrong",
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, api.ErrUnauthorized)
+	assert.ErrorIs(t, err, api.ErrInvalidGrant)
 }
 
 func TestProviderService_ExchangeCode_ClientSecretVerification(t *testing.T) {
@@ -772,7 +772,7 @@ func TestProviderService_ExchangeCode_ClientSecretVerification(t *testing.T) {
 			ClientSecret: "wrong-secret",
 		})
 		require.Error(t, err)
-		assert.ErrorIs(t, err, api.ErrUnauthorized)
+		assert.ErrorIs(t, err, api.ErrInvalidClient)
 	})
 
 	t.Run("grace period previous secret accepted", func(t *testing.T) {
@@ -843,7 +843,7 @@ func TestProviderService_ExchangeCode_ClientSecretVerification(t *testing.T) {
 			ClientSecret: "old-secret",
 		})
 		require.Error(t, err)
-		assert.ErrorIs(t, err, api.ErrUnauthorized)
+		assert.ErrorIs(t, err, api.ErrInvalidClient)
 	})
 }
 
@@ -1110,8 +1110,8 @@ func TestProviderService_ExchangeCode_Reuse_RevokesTokensOfThatCodeOnly(t *testi
 	require.Empty(t, fams)
 
 	_, err = f.exchange("code-a")
-	require.ErrorIs(t, err, api.ErrUnauthorized, "reused code is still rejected as before")
-	assert.Contains(t, err.Error(), "invalid or expired authorization code", "error response is unchanged")
+	require.ErrorIs(t, err, api.ErrInvalidGrant, "reused code is still rejected as before")
+	assert.Equal(t, api.ErrInvalidGrant.Error(), err.Error(), "the error carries no detail beyond the RFC 6749 code")
 
 	jtis, fams = f.tokens.revoked()
 	assert.Equal(t, []string{"jti-1"}, jtis, "only the first code's access token is revoked")
@@ -1141,7 +1141,7 @@ func TestProviderService_ExchangeCode_Reuse_AccessTokenOnlyRevokesJTIOnly(t *tes
 	_, err := f.exchange("code-at-only")
 	require.NoError(t, err)
 	_, err = f.exchange("code-at-only")
-	require.ErrorIs(t, err, api.ErrUnauthorized)
+	require.ErrorIs(t, err, api.ErrInvalidGrant)
 
 	jtis, fams := f.tokens.revoked()
 	assert.Equal(t, []string{"jti-only"}, jtis)
@@ -1152,7 +1152,7 @@ func TestProviderService_ExchangeCode_UnknownCode_RevokesNothing(t *testing.T) {
 	f := newCodeReuseFixture(t, nil)
 
 	_, err := f.exchange("never-issued")
-	require.ErrorIs(t, err, api.ErrUnauthorized)
+	require.ErrorIs(t, err, api.ErrInvalidGrant)
 
 	jtis, fams := f.tokens.revoked()
 	assert.Empty(t, jtis)
@@ -1180,8 +1180,8 @@ func TestProviderService_ExchangeCode_Reuse_DuringIssuanceRevokesOwnTokens(t *te
 
 	resp, err := f.exchange("code-race")
 
-	require.ErrorIs(t, replayErr, api.ErrUnauthorized)
-	require.ErrorIs(t, err, api.ErrUnauthorized, "the first redemption fails like a reused code")
+	require.ErrorIs(t, replayErr, api.ErrInvalidGrant)
+	require.ErrorIs(t, err, api.ErrInvalidGrant, "the first redemption fails like a reused code")
 	assert.Nil(t, resp, "no tokens are returned")
 	jtis, fams := f.tokens.revoked()
 	assert.Equal(t, []string{"jti-first"}, jtis)

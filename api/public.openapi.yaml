@@ -46,6 +46,12 @@ paths:
     post:
       operationId: register
       summary: Register a new user
+      description: |
+        Responds identically whether or not the address already has an account
+        (no account-existence disclosure). For an address that is already
+        registered no account is created: the response carries a placeholder
+        `id` and, when email delivery is enabled, the existing owner is sent an
+        "account already exists" notice instead.
       tags: [Auth]
       requestBody:
         required: true
@@ -55,20 +61,23 @@ paths:
               $ref: "#/components/schemas/RegisterRequest"
       responses:
         "201":
-          description: User created
+          description: User created, or the address was already registered (indistinguishable)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserInfo"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "409":
-          description: Email already registered
 
   /auth/login:
     post:
       operationId: login
       summary: Authenticate with email and password
+      description: |
+        Every failure before the password is verified (unknown email, wrong
+        password, locked or suspended account) returns the same 401 with the
+        message `invalid credentials`. `account locked` / `account suspended`
+        are only returned once the correct password was supplied.
       tags: [Auth]
       requestBody:
         required: true
