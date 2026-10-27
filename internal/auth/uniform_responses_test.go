@@ -227,6 +227,57 @@ func TestResetPassword_ReturnsBeforeEmailIsSent(t *testing.T) {
 	svc.waitBackground()
 }
 
+// TestRegister_ReturnsBeforeVerificationEmailIsSent covers the new-account
+// half of the duplicate-registration decision: the duplicate path sends its
+// notice in the background, so the new-account path must too, or the extra
+// email round trip tells an observer the address was new (GH-528). The
+// verification token must already be persisted when Register returns.
+func TestRegister_ReturnsBeforeVerificationEmailIsSent(t *testing.T) {
+	tokenStored := false
+	users := &mockUserRepository{
+		createFn: func(_ context.Context, u *domain.User) (*domain.User, error) {
+			u.ID = "user-1"
+			return u, nil
+		},
+		setEmailVerifyTokenFn: func(context.Context, string, string, time.Time) error {
+			tokenStored = true
+			return nil
+		},
+	}
+	release := make(chan struct{})
+	started := make(chan struct{})
+	sender := &mockEmailSender{sendFn: func(context.Context, email.Message) error {
+		close(started)
+		<-release
+		return nil
+	}}
+	svc := newUnitServiceWithEmail(t, users, sender, "https://app.example.com/verify-email")
+
+	type result struct {
+		info *api.UserInfo
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		info, err := svc.Register(context.Background(), "new@example.com", "valid-password-12345", "New User")
+		done <- result{info, err}
+	}()
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		assert.Equal(t, "user-1", r.info.ID)
+		assert.True(t, tokenStored, "the verification token must be persisted before Register returns")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Register blocked on verification email delivery")
+	}
+	<-started
+	close(release)
+	svc.waitBackground()
+	require.Len(t, sender.sent, 1)
+	assert.Equal(t, "new@example.com", sender.sent[0].To)
+}
+
 func TestSendEmailAsync_SurvivesRequestCancellation(t *testing.T) {
 	sender := &mockEmailSender{sendFn: func(ctx context.Context, _ email.Message) error { return ctx.Err() }}
 	svc := newRegisterService(t, &mockUserRepository{}, sender, true, audit.NopLogger{})
