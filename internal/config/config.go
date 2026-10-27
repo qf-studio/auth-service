@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qf-studio/auth-service/internal/secretbox"
 )
 
 // Config holds all configuration for the auth service, parsed from environment variables.
@@ -32,6 +34,16 @@ type Config struct {
 	Admin        AdminConfig
 	Audit        AuditConfig
 	GRPC         GRPCConfig
+	Encryption   EncryptionConfig
+}
+
+// EncryptionConfig holds the key that protects secrets stored in the database
+// (TOTP seeds, webhook signing secrets).
+type EncryptionConfig struct {
+	// Key: DATA_ENCRYPTION_KEY, 32 bytes, base64. Optional: when empty,
+	// secrets are stored in plaintext and startup logs a WARN. With
+	// CONFIG_STRICT=true and APP_ENV=production a missing key fails startup.
+	Key []byte
 }
 
 // gRPC caller-authentication modes (GRPC_AUTH_MODE).
@@ -176,6 +188,10 @@ type AppConfig struct {
 	AdminPort  int
 	GRPCPort   int
 	LogLevel   string
+
+	// Strict (CONFIG_STRICT, default false) turns production configuration
+	// gaps that are otherwise only warnings into startup errors.
+	Strict bool
 }
 
 // PostgresConfig holds PostgreSQL connection parameters.
@@ -387,6 +403,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	encCfg, err := loadEncryption(l)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
@@ -394,6 +414,10 @@ func Load() (*Config, error) {
 
 	if app.Env != "development" && app.Env != "staging" && app.Env != "production" {
 		return nil, fmt.Errorf("APP_ENV: unsupported value %q (must be development, staging, or production)", app.Env)
+	}
+
+	if app.Strict && app.Env == "production" && len(encCfg.Key) == 0 {
+		return nil, fmt.Errorf("DATA_ENCRYPTION_KEY: required when CONFIG_STRICT=true and APP_ENV=production")
 	}
 
 	return &Config{
@@ -417,6 +441,7 @@ func Load() (*Config, error) {
 		Admin:        adminCfg,
 		Audit:        auditCfg,
 		GRPC:         grpcCfg,
+		Encryption:   encCfg,
 	}, nil
 }
 
@@ -518,13 +543,33 @@ func loadApp(l *loader) (AppConfig, error) {
 		return AppConfig{}, err
 	}
 
+	strict, err := l.optBool("CONFIG_STRICT", false)
+	if err != nil {
+		return AppConfig{}, err
+	}
+
 	return AppConfig{
 		Env:        appEnv,
 		PublicPort: publicPort,
 		AdminPort:  adminPort,
 		GRPCPort:   grpcPort,
 		LogLevel:   logLevel,
+		Strict:     strict,
 	}, nil
+}
+
+// loadEncryption reads DATA_ENCRYPTION_KEY. Unset is allowed here (Load
+// enforces it under CONFIG_STRICT); a set but malformed key is always an error.
+func loadEncryption(l *loader) (EncryptionConfig, error) {
+	raw := l.optStr("DATA_ENCRYPTION_KEY", "")
+	if raw == "" {
+		return EncryptionConfig{}, nil
+	}
+	key, err := secretbox.ParseKey(raw)
+	if err != nil {
+		return EncryptionConfig{}, fmt.Errorf("DATA_ENCRYPTION_KEY: %w", err)
+	}
+	return EncryptionConfig{Key: key}, nil
 }
 
 func loadPostgres(l *loader) (PostgresConfig, error) {

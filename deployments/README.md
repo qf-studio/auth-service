@@ -142,6 +142,7 @@ All secrets are stored in `.env.<environment>` files on the host:
 | `REDIS_PASSWORD` | Cache password | Manual — use a strong random password |
 | `PASSWORD_PEPPER` | Argon2id HMAC pepper | `./scripts/generate-secret.sh --name PASSWORD_PEPPER` |
 | `SYSTEM_SECRETS` | Client credential secrets (comma-separated, newest first) | `./scripts/generate-secret.sh --name SYSTEM_SECRETS` |
+| `DATA_ENCRYPTION_KEY` | AES-256 key (32 bytes, base64) sealing TOTP and webhook secrets at rest; optional, see [Data-at-rest encryption](#data-at-rest-encryption) | `./scripts/generate-secret.sh --name DATA_ENCRYPTION_KEY --bytes 32 --format base64` |
 | `ADMIN_API_TOKENS` | Bearer tokens for `/admin/*` on :4001 (comma-separated, each ≥ 32 bytes) | `./scripts/generate-secret.sh --name ADMIN_API_TOKENS --bytes 32 --format hex` |
 | `JWT_PRIVATE_KEY_PATH` | Path to PEM private key | `./scripts/generate-keys.sh` |
 
@@ -153,6 +154,22 @@ Security practices:
 - Rotate `ADMIN_API_TOKENS` with two values live at once: deploy `<new>,<old>`, switch admin callers (and `SMOKE_ADMIN_TOKEN`) to `<new>`, then deploy `<new>` alone
 - **Audit persistence (GH-527):** audit events are now written to `audit_logs` (zap logging continues). Migration `000023` adds `audit_logs.user_agent` — run `/auth-migrate up` before rolling the new image. `AUDIT_RETENTION_DAYS` (default `365`, `0` = keep forever) controls the daily purge; no secret is involved. Dropped events (full buffer or DB error) are exported as `audit_events_dropped_total{reason}`
 - **Deployment order (GH-524):** every `/admin/*` route requires `Authorization: Bearer <token>`. Add `ADMIN_API_TOKENS` to the task definition / `.env.<environment>` **before** deploying this release. If it is unset the service still starts (public API unaffected) and logs one `ERROR`, but every `/admin/*` route returns `503 admin_api_disabled`. `/health` stays unauthenticated
+
+### Data-at-rest encryption
+
+GH-531 stops keeping bearer-grade values in the database or Redis in a usable form:
+
+- **One-time tokens are digests.** Email verification, email change and email revert tokens (Postgres) and password-reset tokens (Redis key `pw_reset:<sha256>`) are stored as SHA-256 hex digests and looked up by digest. No key or migration is involved. **Deploy impact:** every link issued before the deploy (pending verification, email-change, revert and reset emails) stops working; users request a new one.
+- **TOTP secrets and webhook signing secrets are encrypted** with AES-256-GCM when `DATA_ENCRYPTION_KEY` is set (stored as `v1:<nonce>:<ciphertext>`, base64). Without the key they remain plaintext and startup logs a WARN. With `CONFIG_STRICT=true` and `APP_ENV=production`, a missing key fails startup.
+
+Rollout:
+
+1. Generate the key and store it with the other secrets: `./scripts/generate-secret.sh --name DATA_ENCRYPTION_KEY --bytes 32 --format base64 --out .env.production`.
+2. Deploy with `DATA_ENCRYPTION_KEY` set. New secrets are encrypted immediately; legacy plaintext rows keep working, and a TOTP secret is rewritten encrypted the first time it is read.
+3. Encrypt the remaining rows once: `DATA_ENCRYPTION_KEY=... /auth-migrate encrypt-secrets` (same `DATABASE_URL` / `POSTGRES_*` variables as `up`). It is idempotent and safe on a live database.
+4. Optionally set `CONFIG_STRICT=true` so production refuses to start without the key.
+
+Do not remove or change the key while encrypted rows exist: they cannot be decrypted without it, and the service returns an error for those users/webhooks rather than falling back. There is no key rotation yet (the `v1:` prefix leaves room for it).
 
 ### Phase 3: HashiCorp Vault (Upgrade Path)
 

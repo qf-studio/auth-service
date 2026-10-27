@@ -209,6 +209,8 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `GRPC_PORT` | `4002` | gRPC port |
 | `GRPC_AUTH_MODE` | `warn` | gRPC caller authentication: `off`, `warn` (allow, log a rate-limited WARN per method for unauthenticated calls) or `enforce` (reject with `Unauthenticated`). The gRPC health service is always allowed. See [gRPC Caller Authentication](deployments/README.md#grpc-caller-authentication) for the rollout order |
 | `GRPC_CLIENT_TOKENS` | _(empty)_ | Comma-separated bearer service tokens accepted on the gRPC port, each at least 32 bytes; at least one is required when `GRPC_AUTH_MODE=enforce`. Clients send `authorization: Bearer <token>` (`authclient.WithServiceToken`) |
+| `DATA_ENCRYPTION_KEY` | _(empty)_ | 32-byte key, base64 (`./scripts/generate-secret.sh --name DATA_ENCRYPTION_KEY --bytes 32 --format base64`). Encrypts TOTP secrets and webhook signing secrets at rest with AES-256-GCM (`v1:<nonce>:<ciphertext>`). When unset they stay plaintext and startup logs a WARN. A set but malformed key fails startup. Losing or changing the key makes encrypted secrets unreadable (users must re-enrol MFA), so back it up. After first setting it, run `migrate encrypt-secrets` once to encrypt existing rows (see [deployments/README.md](deployments/README.md#data-at-rest-encryption)) |
+| `CONFIG_STRICT` | `false` | When `true` and `APP_ENV=production`, configuration gaps that are otherwise warnings fail startup. Currently: a missing `DATA_ENCRYPTION_KEY` |
 | `LOG_LEVEL` | `info` | Log level |
 | `POSTGRES_PORT` | `5432` | PostgreSQL port |
 | `POSTGRES_SSLMODE` | `disable` | PostgreSQL SSL mode |

@@ -12,16 +12,20 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/secretbox"
 )
 
 // PostgresMFARepository implements MFARepository using pgx against PostgreSQL.
 type PostgresMFARepository struct {
 	pool *pgxpool.Pool
+	box  *secretbox.Box
 }
 
 // NewPostgresMFARepository creates a new PostgreSQL-backed MFA repository.
-func NewPostgresMFARepository(pool *pgxpool.Pool) *PostgresMFARepository {
-	return &PostgresMFARepository{pool: pool}
+// box seals TOTP secrets at rest; a nil box stores them in plaintext (the
+// DATA_ENCRYPTION_KEY-unset behaviour).
+func NewPostgresMFARepository(pool *pgxpool.Pool, box *secretbox.Box) *PostgresMFARepository {
+	return &PostgresMFARepository{pool: pool, box: box}
 }
 
 // SaveSecret inserts a new MFA secret for a user.
@@ -31,9 +35,14 @@ func (r *PostgresMFARepository) SaveSecret(ctx context.Context, secret *domain.M
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, tenant_id, user_id, type, secret, confirmed, confirmed_at, created_at, updated_at, deleted_at`
 
+	sealed, err := r.box.Encrypt(secret.Secret)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt mfa secret: %w", err)
+	}
+
 	out := &domain.MFASecret{}
-	err := r.pool.QueryRow(ctx, query,
-		secret.ID, secret.TenantID, secret.UserID, secret.Type, secret.Secret,
+	err = r.pool.QueryRow(ctx, query,
+		secret.ID, secret.TenantID, secret.UserID, secret.Type, sealed,
 		secret.Confirmed, secret.ConfirmedAt,
 		secret.CreatedAt, secret.UpdatedAt,
 	).Scan(
@@ -48,6 +57,8 @@ func (r *PostgresMFARepository) SaveSecret(ctx context.Context, secret *domain.M
 		}
 		return nil, fmt.Errorf("insert mfa secret: %w", err)
 	}
+	// Callers get the usable secret back, never the stored ciphertext.
+	out.Secret = secret.Secret
 
 	return out, nil
 }
@@ -72,7 +83,36 @@ func (r *PostgresMFARepository) GetSecret(ctx context.Context, tenantID uuid.UUI
 		return nil, fmt.Errorf("get mfa secret: %w", err)
 	}
 
+	stored := out.Secret
+	out.Secret, err = r.box.Decrypt(stored)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt mfa secret for user %s: %w", userID, err)
+	}
+
+	// A legacy plaintext row is sealed on first read once a key is configured.
+	// Best effort: the secret is already in hand, and the one-shot
+	// EncryptExistingSecrets job covers rows that are never read.
+	if r.box.Enabled() && !secretbox.IsEncrypted(stored) {
+		if err := r.sealSecretRow(ctx, out.ID, stored, out.Secret); err != nil {
+			// Not fatal: verification must still work.
+			return out, nil
+		}
+	}
+
 	return out, nil
+}
+
+// sealSecretRow replaces a legacy plaintext secret with its sealed form. The
+// compare-and-set on the old value keeps a concurrent re-enrolment safe.
+func (r *PostgresMFARepository) sealSecretRow(ctx context.Context, id, oldValue, plaintext string) error {
+	sealed, err := r.box.Encrypt(plaintext)
+	if err != nil {
+		return fmt.Errorf("encrypt mfa secret: %w", err)
+	}
+	if _, err := r.pool.Exec(ctx, `UPDATE mfa_secrets SET secret = $1 WHERE id = $2 AND secret = $3`, sealed, id, oldValue); err != nil {
+		return fmt.Errorf("rewrite mfa secret: %w", err)
+	}
+	return nil
 }
 
 // ConfirmSecret marks the user's MFA secret as confirmed.

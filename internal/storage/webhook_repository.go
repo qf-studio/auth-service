@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/secretbox"
 )
 
 // WebhookRepository defines persistence operations for webhook management.
@@ -73,11 +74,27 @@ func scanWebhookDelivery(row pgx.Row) (*domain.WebhookDelivery, error) {
 // PostgresWebhookRepository implements WebhookRepository using PostgreSQL.
 type PostgresWebhookRepository struct {
 	pool *pgxpool.Pool
+	box  *secretbox.Box
 }
 
 // NewPostgresWebhookRepository creates a new PostgreSQL-backed webhook repository.
-func NewPostgresWebhookRepository(pool *pgxpool.Pool) *PostgresWebhookRepository {
-	return &PostgresWebhookRepository{pool: pool}
+// box seals signing secrets at rest; a nil box stores them in plaintext (the
+// DATA_ENCRYPTION_KEY-unset behaviour). The domain field is still named
+// SecretHash, but it holds the raw HMAC signing secret, which has to be
+// readable to sign deliveries; callers always see the decrypted value.
+func NewPostgresWebhookRepository(pool *pgxpool.Pool, box *secretbox.Box) *PostgresWebhookRepository {
+	return &PostgresWebhookRepository{pool: pool, box: box}
+}
+
+// open decrypts the signing secret of a freshly scanned webhook in place.
+// Legacy plaintext values pass through unchanged.
+func (r *PostgresWebhookRepository) open(wh *domain.Webhook) error {
+	secret, err := r.box.Decrypt(wh.SecretHash)
+	if err != nil {
+		return fmt.Errorf("decrypt webhook %s secret: %w", wh.ID, err)
+	}
+	wh.SecretHash = secret
+	return nil
 }
 
 // List returns a paginated list of webhooks for a tenant, optionally filtered to active only.
@@ -113,6 +130,9 @@ func (r *PostgresWebhookRepository) List(ctx context.Context, tenantID uuid.UUID
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan webhook: %w", err)
 		}
+		if err := r.open(wh); err != nil {
+			return nil, 0, err
+		}
 		webhooks = append(webhooks, wh)
 	}
 	if err := rows.Err(); err != nil {
@@ -128,6 +148,9 @@ func (r *PostgresWebhookRepository) FindByID(ctx context.Context, tenantID uuid.
 	wh, err := scanWebhook(r.pool.QueryRow(ctx, query, id, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("find webhook %s: %w", id, err)
+	}
+	if err := r.open(wh); err != nil {
+		return nil, err
 	}
 	return wh, nil
 }
@@ -150,6 +173,9 @@ func (r *PostgresWebhookRepository) FindActiveByEventType(ctx context.Context, t
 		); err != nil {
 			return nil, fmt.Errorf("scan webhook: %w", err)
 		}
+		if err := r.open(wh); err != nil {
+			return nil, err
+		}
 		webhooks = append(webhooks, wh)
 	}
 	if err := rows.Err(); err != nil {
@@ -166,12 +192,20 @@ func (r *PostgresWebhookRepository) Create(ctx context.Context, wh *domain.Webho
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING %s`, webhookColumns)
 
+	sealed, err := r.box.Encrypt(wh.SecretHash)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt webhook secret: %w", err)
+	}
+
 	result, err := scanWebhook(r.pool.QueryRow(ctx, query,
-		wh.ID, wh.TenantID, wh.URL, wh.SecretHash, wh.EventTypes,
+		wh.ID, wh.TenantID, wh.URL, sealed, wh.EventTypes,
 		wh.Active, wh.FailureCount, wh.CreatedAt, wh.UpdatedAt,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("insert webhook: %w", err)
+	}
+	if err := r.open(result); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -191,6 +225,9 @@ func (r *PostgresWebhookRepository) Update(ctx context.Context, wh *domain.Webho
 			return nil, fmt.Errorf("webhook %s: %w", wh.ID, ErrNotFound)
 		}
 		return nil, fmt.Errorf("update webhook: %w", err)
+	}
+	if err := r.open(result); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/oidc"
 	"github.com/qf-studio/auth-service/internal/password"
 	"github.com/qf-studio/auth-service/internal/rbac"
+	"github.com/qf-studio/auth-service/internal/secretbox"
 	"github.com/qf-studio/auth-service/internal/session"
 	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/internal/token"
@@ -87,6 +88,19 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		return fmt.Errorf("postgres connection failed: %w", err)
 	}
 	defer pgPool.Close()
+
+	// ── Data encryption (TOTP + webhook secrets at rest) ─────────────────
+	// Optional: without DATA_ENCRYPTION_KEY secrets stay plaintext. config.Load
+	// already refuses to start with CONFIG_STRICT=true in production.
+	var secretBox *secretbox.Box
+	if len(cfg.Encryption.Key) > 0 {
+		secretBox, err = secretbox.New(cfg.Encryption.Key)
+		if err != nil {
+			return fmt.Errorf("data encryption init failed: %w", err)
+		}
+	} else {
+		log.Warn("DATA_ENCRYPTION_KEY is not set: TOTP secrets and webhook signing secrets are stored in plaintext")
+	}
 
 	// ── Repositories ─────────────────────────────────────────────────────
 	userRepo := storage.NewPostgresUserRepository(pgPool)
@@ -177,7 +191,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	// ── MFA ──────────────────────────────────────────────────────────────
-	mfaRepo := storage.NewPostgresMFARepository(pgPool)
+	mfaRepo := storage.NewPostgresMFARepository(pgPool, secretBox)
 	mfaStore := storage.NewRedisMFAStore(redisClient)
 	mfaCfg := mfa.Config{
 		Issuer:          cfg.MFA.Issuer,
@@ -260,7 +274,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	apiKeyRepo := storage.NewPostgresAPIKeyRepository(pgPool)
 
 	// ── Webhook repositories ─────────────────────────────────────────────
-	webhookRepo := storage.NewPostgresWebhookRepository(pgPool)
+	webhookRepo := storage.NewPostgresWebhookRepository(pgPool, secretBox)
 	webhookDeliveryRepo := storage.NewPostgresWebhookDeliveryRepository(pgPool)
 
 	// ── Webhook dispatcher ───────────────────────────────────────────────

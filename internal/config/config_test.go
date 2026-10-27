@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"net"
 	"strings"
 	"testing"
@@ -917,6 +918,50 @@ func TestLoad_GRPCAuth(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantMode, cfg.GRPC.AuthMode)
 			assert.Equal(t, tt.wantTokens, cfg.GRPC.ClientTokens)
+		})
+	}
+}
+
+func TestLoad_DataEncryptionKey(t *testing.T) {
+	validKey := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	tests := []struct {
+		name    string
+		appEnv  string
+		strict  string
+		key     string
+		wantKey bool
+		wantErr string
+	}{
+		{name: "unset, not strict", appEnv: "production"},
+		{name: "unset, strict outside production", appEnv: "staging", strict: "true"},
+		{name: "unset, CONFIG_STRICT=false in production", appEnv: "production", strict: "false"},
+		{name: "unset, strict in production", appEnv: "production", strict: "true", wantErr: "DATA_ENCRYPTION_KEY"},
+		{name: "valid, strict in production", appEnv: "production", strict: "true", key: validKey, wantKey: true},
+		{name: "valid, not strict", appEnv: "development", key: validKey, wantKey: true},
+		{name: "not base64", appEnv: "development", key: "!!!not-base64!!!", wantErr: "DATA_ENCRYPTION_KEY"},
+		{name: "wrong length", appEnv: "development", key: base64.StdEncoding.EncodeToString(make([]byte, 16)), wantErr: "32 bytes"},
+		{name: "invalid CONFIG_STRICT", appEnv: "development", strict: "maybe", wantErr: "CONFIG_STRICT"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := requiredEnv()
+			env["APP_ENV"] = tt.appEnv
+			env["CONFIG_STRICT"] = tt.strict
+			env["DATA_ENCRYPTION_KEY"] = tt.key
+			setEnv(t, env)
+
+			cfg, err := Load()
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantKey {
+				assert.Len(t, cfg.Encryption.Key, 32)
+			} else {
+				assert.Empty(t, cfg.Encryption.Key)
+			}
 		})
 	}
 }

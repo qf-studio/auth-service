@@ -115,7 +115,7 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *api.CreateWebho
 		ID:           uuid.New(),
 		TenantID:     tenantID,
 		URL:          req.URL,
-		SecretHash:   secret, // stored as the raw secret for HMAC signing
+		SecretHash:   secret, // raw HMAC signing secret; the repository seals it at rest (DATA_ENCRYPTION_KEY)
 		EventTypes:   eventTypes,
 		Active:       true,
 		FailureCount: 0,

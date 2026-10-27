@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/secretbox"
 )
 
 // UserRepository defines the persistence operations for user accounts.
@@ -182,12 +183,14 @@ func (r *PostgresUserRepository) findByColumn(ctx context.Context, tenantID uuid
 	return user, nil
 }
 
-// SetEmailVerifyToken stores a verification token and expiry for a user.
+// SetEmailVerifyToken stores a verification token and expiry for a user. Only
+// the SHA-256 digest of the token is persisted (GH-531); the Consume* methods
+// digest the presented token before comparing.
 func (r *PostgresUserRepository) SetEmailVerifyToken(ctx context.Context, tenantID uuid.UUID, userID string, token string, expiresAt time.Time) error {
 	query := `UPDATE users SET email_verify_token = $1, email_verify_token_expires_at = $2, updated_at = $3
 		WHERE id = $4 AND tenant_id = $5 AND deleted_at IS NULL`
 
-	tag, err := r.pool.Exec(ctx, query, token, expiresAt, time.Now().UTC(), userID, tenantID)
+	tag, err := r.pool.Exec(ctx, query, secretbox.Digest(token), expiresAt, time.Now().UTC(), userID, tenantID)
 	if err != nil {
 		return fmt.Errorf("set email verify token: %w", err)
 	}
@@ -215,7 +218,7 @@ func (r *PostgresUserRepository) ConsumeEmailVerifyToken(ctx context.Context, te
 		WHERE email_verify_token = $1 AND tenant_id = $2 AND deleted_at IS NULL`
 
 	user := &domain.User{}
-	err := r.pool.QueryRow(ctx, selectQuery, token, tenantID).Scan(
+	err := r.pool.QueryRow(ctx, selectQuery, secretbox.Digest(token), tenantID).Scan(
 		&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Name, &user.Roles,
 		&user.Locked, &user.LockedAt, &user.LockedReason,
 		&user.EmailVerified, &user.EmailVerifyToken, &user.EmailVerifyTokenExpiresAt,
@@ -372,7 +375,7 @@ func (r *PostgresUserRepository) SetPendingEmailChange(ctx context.Context, tena
 		    updated_at = $6
 		WHERE id = $7 AND tenant_id = $8`
 
-	if _, err := tx.Exec(ctx, updateQuery, pendingEmail, changeToken, changeExpiresAt, revertToken, revertExpiresAt, now, userID, tenantID); err != nil {
+	if _, err := tx.Exec(ctx, updateQuery, pendingEmail, secretbox.Digest(changeToken), changeExpiresAt, secretbox.Digest(revertToken), revertExpiresAt, now, userID, tenantID); err != nil {
 		return fmt.Errorf("set pending email change: %w", err)
 	}
 
@@ -422,7 +425,7 @@ func (r *PostgresUserRepository) ConsumeEmailChangeToken(ctx context.Context, te
 		FOR UPDATE`, emailChangeSelectColumns)
 
 	user := &domain.User{}
-	if err := scanUserForEmailChange(tx.QueryRow(ctx, selectQuery, token, tenantID), user); err != nil {
+	if err := scanUserForEmailChange(tx.QueryRow(ctx, selectQuery, secretbox.Digest(token), tenantID), user); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("email change token: %w", ErrNotFound)
 		}
@@ -486,7 +489,7 @@ func (r *PostgresUserRepository) ConsumeEmailRevertToken(ctx context.Context, te
 		FOR UPDATE`, emailChangeSelectColumns)
 
 	user := &domain.User{}
-	if err := scanUserForEmailChange(tx.QueryRow(ctx, selectQuery, token, tenantID), user); err != nil {
+	if err := scanUserForEmailChange(tx.QueryRow(ctx, selectQuery, secretbox.Digest(token), tenantID), user); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("email revert token: %w", ErrNotFound)
 		}

@@ -101,6 +101,8 @@ These are NIST mandates — not suggestions:
 - **Access tokens**: Signature only in DB (full token never stored)
 - **Refresh tokens**: Signature in Redis with metadata, TTL-based expiry
 - **API keys**: Hashed (Argon2id), never stored in plaintext
+- **Email verify/change/revert and password-reset tokens (GH-531)**: SHA-256 hex digest only (`secretbox.Digest`); the reset digest is the Redis key
+- **TOTP and webhook signing secrets (GH-531)**: AES-256-GCM `v1:<nonce>:<ct>` via `DATA_ENCRYPTION_KEY` (`internal/secretbox`); plaintext + startup WARN when unset, startup error with `CONFIG_STRICT=true` in production. Legacy plaintext is read as-is and sealed on first read (TOTP) or by `migrate encrypt-secrets`
 
 ### Authorization code reuse (GH-542)
 Redeeming an OIDC authorization code twice revokes what the first redemption issued (RFC 6749 §4.1.2, OAuth 2.1 §4.1.3), scoped to that code only:

@@ -70,7 +70,7 @@ func TestBreachedPassword_AllFlows(t *testing.T) {
 			return err
 		}},
 		{"confirm_password_reset", "password_reset", func(t *testing.T, svc *Service, mr *miniredis.Miniredis) error {
-			require.NoError(t, mr.Set(resetTokenPrefix+"tok", "alice@example.com"))
+			require.NoError(t, mr.Set(resetTokenKey("tok"), "alice@example.com"))
 			return svc.ConfirmPasswordReset(context.Background(), "tok", breachTestNewPassword)
 		}},
 		{"change_password", "password_change", func(_ *testing.T, svc *Service, _ *miniredis.Miniredis) error {

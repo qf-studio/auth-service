@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/qf-studio/auth-service/internal/domain"
+	"github.com/qf-studio/auth-service/internal/secretbox"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
 
@@ -126,11 +127,11 @@ func TestPostgresUserRepository_EmailChangeRevertWindow_Concurrent(t *testing.T)
 
 		if confirmErr == nil {
 			require.ErrorIs(t, requestErr, storage.ErrEmailRevertWindowActive)
-			assert.Equal(t, revertTok, *revert, "confirmed change's revert token must survive")
+			assert.Equal(t, secretbox.Digest(revertTok), *revert, "confirmed change's revert token must survive")
 		} else {
 			require.NoError(t, requestErr)
 			assert.ErrorIs(t, confirmErr, storage.ErrNotFound)
-			assert.Equal(t, user.ID+"-revert2", *revert)
+			assert.Equal(t, secretbox.Digest(user.ID+"-revert2"), *revert)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -10,12 +11,14 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
+	"github.com/qf-studio/auth-service/internal/secretbox"
+	"github.com/qf-studio/auth-service/internal/storage"
 	"github.com/qf-studio/auth-service/migrations"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: migrate <up|down|version|force <N>>")
+		fmt.Fprintln(os.Stderr, "usage: migrate <up|down|version|force <N>|encrypt-secrets>")
 		os.Exit(1)
 	}
 
@@ -23,6 +26,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if os.Args[1] == "encrypt-secrets" {
+		if err := encryptSecrets(dsn); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	m, err := newMigrate(dsn)
@@ -35,6 +46,38 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// encryptSecrets seals legacy plaintext TOTP and webhook secrets using
+// DATA_ENCRYPTION_KEY (GH-531). Idempotent and safe to run against a live
+// database; run it once after the key is first configured.
+func encryptSecrets(dsn string) error {
+	raw := os.Getenv("DATA_ENCRYPTION_KEY")
+	if raw == "" {
+		return fmt.Errorf("DATA_ENCRYPTION_KEY must be set")
+	}
+	key, err := secretbox.ParseKey(raw)
+	if err != nil {
+		return fmt.Errorf("DATA_ENCRYPTION_KEY: %w", err)
+	}
+	box, err := secretbox.New(key)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	pool, err := storage.NewPostgresPool(dsn, 2)
+	if err != nil {
+		return fmt.Errorf("postgres connection failed: %w", err)
+	}
+	defer pool.Close()
+
+	report, err := storage.EncryptExistingSecrets(ctx, pool, box)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("encrypted %d mfa secret(s), %d webhook secret(s)\n", report.MFASecrets, report.Webhooks)
+	return nil
 }
 
 // databaseURL returns a postgres:// connection URL from DATABASE_URL or from

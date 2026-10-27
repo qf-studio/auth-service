@@ -22,6 +22,7 @@ import (
 	"github.com/qf-studio/auth-service/internal/email"
 	"github.com/qf-studio/auth-service/internal/hibp"
 	"github.com/qf-studio/auth-service/internal/password"
+	"github.com/qf-studio/auth-service/internal/secretbox"
 	"github.com/qf-studio/auth-service/internal/storage"
 )
 
@@ -324,6 +325,13 @@ func (s *Service) sendEmailAsync(ctx context.Context, msg email.Message, onFail 
 			onFail()
 		}
 	}()
+}
+
+// resetTokenKey is the Redis key for a reset token. The key holds the SHA-256
+// digest, never the token itself, so a Redis dump or KEYS scan yields nothing
+// that can be replayed against /auth/password/reset/confirm (GH-531).
+func resetTokenKey(token string) string {
+	return resetTokenPrefix + secretbox.Digest(token)
 }
 
 // waitBackground blocks until all detached email sends have finished.
@@ -676,7 +684,7 @@ func (s *Service) ResetPassword(ctx context.Context, emailAddr string) error {
 		return fmt.Errorf("generate reset token: %w", err)
 	}
 
-	key := resetTokenPrefix + token
+	key := resetTokenKey(token)
 	if err := s.redis.Set(ctx, key, emailAddr, resetTokenTTL).Err(); err != nil {
 		s.logger.Error("failed to store reset token in redis", zap.Error(err))
 		return fmt.Errorf("store reset token: %w", err)
@@ -717,7 +725,7 @@ func (s *Service) ResetPassword(ctx context.Context, emailAddr string) error {
 // ConfirmPasswordReset validates the reset token from Redis, updates the password,
 // and revokes all sessions for the user.
 func (s *Service) ConfirmPasswordReset(ctx context.Context, token, newPassword string) error {
-	key := resetTokenPrefix + token
+	key := resetTokenKey(token)
 
 	// Retrieve and delete the token atomically.
 	email, err := s.redis.GetDel(ctx, key).Result()

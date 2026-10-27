@@ -49,7 +49,7 @@ func newTestBackupCodes(userID string, n int) []domain.BackupCode {
 func TestPostgresMFARepository_SaveSecret(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -75,7 +75,7 @@ func TestPostgresMFARepository_SaveSecret(t *testing.T) {
 func TestPostgresMFARepository_SaveSecret_DuplicateType(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 
 	user := newTestUser()
@@ -95,7 +95,7 @@ func TestPostgresMFARepository_SaveSecret_DuplicateType(t *testing.T) {
 func TestPostgresMFARepository_GetSecret(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -115,7 +115,7 @@ func TestPostgresMFARepository_GetSecret(t *testing.T) {
 
 func TestPostgresMFARepository_GetSecret_NotFound(t *testing.T) {
 	pool := testPool(t)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -127,7 +127,7 @@ func TestPostgresMFARepository_GetSecret_NotFound(t *testing.T) {
 func TestPostgresMFARepository_ConfirmSecret(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -150,7 +150,7 @@ func TestPostgresMFARepository_ConfirmSecret(t *testing.T) {
 
 func TestPostgresMFARepository_ConfirmSecret_NotFound(t *testing.T) {
 	pool := testPool(t)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -162,7 +162,7 @@ func TestPostgresMFARepository_ConfirmSecret_NotFound(t *testing.T) {
 func TestPostgresMFARepository_DeleteSecret(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -185,7 +185,7 @@ func TestPostgresMFARepository_DeleteSecret(t *testing.T) {
 
 func TestPostgresMFARepository_DeleteSecret_NotFound(t *testing.T) {
 	pool := testPool(t)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -197,7 +197,7 @@ func TestPostgresMFARepository_DeleteSecret_NotFound(t *testing.T) {
 func TestPostgresMFARepository_SaveAndGetBackupCodes(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -223,7 +223,7 @@ func TestPostgresMFARepository_SaveAndGetBackupCodes(t *testing.T) {
 func TestPostgresMFARepository_SaveBackupCodes_ReplacesUnused(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -254,7 +254,7 @@ func TestPostgresMFARepository_SaveBackupCodes_ReplacesUnused(t *testing.T) {
 func TestPostgresMFARepository_ConsumeBackupCode(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -277,7 +277,7 @@ func TestPostgresMFARepository_ConsumeBackupCode(t *testing.T) {
 
 func TestPostgresMFARepository_ConsumeBackupCode_NotFound(t *testing.T) {
 	pool := testPool(t)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -289,7 +289,7 @@ func TestPostgresMFARepository_ConsumeBackupCode_NotFound(t *testing.T) {
 func TestPostgresMFARepository_GetMFAStatus_NoMFA(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -309,7 +309,7 @@ func TestPostgresMFARepository_GetMFAStatus_NoMFA(t *testing.T) {
 func TestPostgresMFARepository_GetMFAStatus_Enrolled(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 
@@ -345,7 +345,7 @@ func TestPostgresMFARepository_GetMFAStatus_Enrolled(t *testing.T) {
 func TestPostgresMFARepository_DeleteSecret_AllowsReenrollment(t *testing.T) {
 	pool := testPool(t)
 	userRepo := storage.NewPostgresUserRepository(pool)
-	repo := storage.NewPostgresMFARepository(pool)
+	repo := storage.NewPostgresMFARepository(pool, nil)
 	ctx := context.Background()
 	tid := domain.DefaultTenantID
 

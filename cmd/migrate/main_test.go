@@ -101,3 +101,15 @@ func TestRunArgumentParsing(t *testing.T) {
 		})
 	}
 }
+
+func TestEncryptSecrets_RequiresValidKey(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "")
+	err := encryptSecrets("postgres://unused")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DATA_ENCRYPTION_KEY")
+
+	t.Setenv("DATA_ENCRYPTION_KEY", "not-a-valid-key")
+	err = encryptSecrets("postgres://unused")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DATA_ENCRYPTION_KEY")
+}

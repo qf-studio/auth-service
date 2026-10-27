@@ -1006,7 +1006,7 @@ func TestConfirmPasswordReset_ValidToken(t *testing.T) {
 	ctx := context.Background()
 
 	token := "test-reset-token-abc123"
-	key := resetTokenPrefix + token
+	key := resetTokenKey(token)
 	err := svc.redis.Set(ctx, key, "user@example.com", resetTokenTTL).Err()
 	require.NoError(t, err)
 
@@ -1032,7 +1032,7 @@ func TestConfirmPasswordReset_TokenUsedOnce(t *testing.T) {
 	ctx := context.Background()
 
 	token := "one-time-token"
-	key := resetTokenPrefix + token
+	key := resetTokenKey(token)
 	err := svc.redis.Set(ctx, key, "user@example.com", resetTokenTTL).Err()
 	require.NoError(t, err)
 
@@ -1044,8 +1044,28 @@ func TestConfirmPasswordReset_TokenUsedOnce(t *testing.T) {
 	assert.ErrorIs(t, err, api.ErrUnauthorized)
 }
 
+// tokenFromLink extracts the value of the token query parameter from the first
+// URL in an email body.
+func tokenFromLink(t *testing.T, body string) string {
+	t.Helper()
+	const marker = "?token="
+	i := strings.Index(body, marker)
+	require.GreaterOrEqual(t, i, 0, "no token link in email body: %q", body)
+	rest := body[i+len(marker):]
+	if j := strings.IndexAny(rest, " \n\r"); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
+}
+
 func TestResetPassword_FullFlow(t *testing.T) {
-	svc := newIntegrationService(t)
+	users := &mockUserRepository{
+		findByEmailFn: func(_ context.Context, addr string) (*domain.User, error) {
+			return &domain.User{ID: "user-1", Email: addr}, nil
+		},
+	}
+	sender := &mockEmailSender{}
+	svc := newIntegrationServiceWithDeps(t, users, sender, "https://app.example.com/reset")
 	ctx := context.Background()
 
 	err := svc.ResetPassword(ctx, "alice@example.com")
@@ -1055,7 +1075,11 @@ func TestResetPassword_FullFlow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
 
-	token := keys[0][len(resetTokenPrefix):]
+	// The Redis key holds a digest, so the usable token only exists in the
+	// emailed link.
+	svc.waitBackground()
+	token := tokenFromLink(t, sender.sent[0].Body)
+	assert.Equal(t, resetTokenKey(token), keys[0])
 
 	err = svc.ConfirmPasswordReset(ctx, token, "brand-new-password-12345")
 	require.NoError(t, err)
@@ -1088,8 +1112,11 @@ func TestResetPassword_KnownUser_SendsResetLink(t *testing.T) {
 	keys, err := svc.redis.Keys(ctx, resetTokenPrefix+"*").Result()
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
-	token := keys[0][len(resetTokenPrefix):]
 
+	// The emailed token is the raw value; Redis only ever sees its digest.
+	token := tokenFromLink(t, msg.Body)
+	assert.Equal(t, resetTokenKey(token), keys[0])
+	assert.NotContains(t, keys[0], token, "raw token must not appear in the Redis key")
 	assert.Contains(t, msg.Body, "https://app.example.com/reset?token="+token)
 }
 
