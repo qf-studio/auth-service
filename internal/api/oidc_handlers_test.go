@@ -3,6 +3,8 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -210,22 +212,90 @@ func TestOIDCToken_MissingFields(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestOIDCToken_ExchangeError(t *testing.T) {
-	svc := &mockOIDCProviderService{
-		exchangeCodeFn: func(_ context.Context, _ *api.CodeExchangeRequest) (*api.OIDCTokenResponse, error) {
-			return nil, api.ErrUnauthorized
-		},
+func TestOIDCToken_ExchangeErrors_RFC6749Shape(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"invalid grant", fmt.Errorf("code bound to client abc: %w", api.ErrInvalidGrant), http.StatusBadRequest, "invalid_grant"},
+		{"invalid client", fmt.Errorf("client abc suspended: %w", api.ErrInvalidClient), http.StatusUnauthorized, "invalid_client"},
+		{"internal", fmt.Errorf("redis: connection refused: %w", api.ErrInternalError), http.StatusInternalServerError, "server_error"},
+		{"unclassified", errors.New("pq: relation users does not exist"), http.StatusInternalServerError, "server_error"},
 	}
-	router := newOIDCTestRouter(svc)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &mockOIDCProviderService{
+				exchangeCodeFn: func(_ context.Context, _ *api.CodeExchangeRequest) (*api.OIDCTokenResponse, error) {
+					return nil, tt.err
+				},
+			}
+			router := newOIDCTestRouter(svc)
 
-	body := map[string]string{
-		"grant_type":   "authorization_code",
-		"code":         "bad_code",
-		"redirect_uri": "https://app.example.com/cb",
-		"client_id":    "client-1",
+			w := doRequest(router, http.MethodPost, "/oauth/token", map[string]string{
+				"grant_type":   "authorization_code",
+				"code":         "bad_code",
+				"redirect_uri": "https://app.example.com/cb",
+				"client_id":    "client-1",
+			})
+			assert.Equal(t, tt.wantStatus, w.Code)
+			assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+
+			var body map[string]string
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			assert.Equal(t, tt.wantCode, body["error"])
+			assert.NotEmpty(t, body["error_description"])
+			assert.Len(t, body, 2, "only error and error_description")
+			assert.NotContains(t, w.Body.String(), "abc")
+			assert.NotContains(t, w.Body.String(), "redis")
+			assert.NotContains(t, w.Body.String(), "relation")
+		})
 	}
-	w := doRequest(router, http.MethodPost, "/oauth/token", body)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// Every cause of one error code renders the identical body.
+func TestOIDCToken_SameErrorCodeSameBody(t *testing.T) {
+	causes := []error{
+		fmt.Errorf("code_verifier does not match: %w", api.ErrInvalidGrant),
+		fmt.Errorf("authorization code was not issued to this client: %w", api.ErrInvalidGrant),
+		fmt.Errorf("redirect_uri mismatch: %w", api.ErrInvalidGrant),
+	}
+	var first string
+	for i, cause := range causes {
+		svc := &mockOIDCProviderService{
+			exchangeCodeFn: func(_ context.Context, _ *api.CodeExchangeRequest) (*api.OIDCTokenResponse, error) {
+				return nil, cause
+			},
+		}
+		w := doRequest(newOIDCTestRouter(svc), http.MethodPost, "/oauth/token", map[string]string{
+			"grant_type": "authorization_code", "code": "c", "redirect_uri": "https://app.example.com/cb", "client_id": "client-1",
+		})
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		if i == 0 {
+			first = w.Body.String()
+			continue
+		}
+		assert.Equal(t, first, w.Body.String())
+	}
+}
+
+func TestOIDCToken_BadRequestBodiesAreGeneric(t *testing.T) {
+	router := newOIDCTestRouter(&mockOIDCProviderService{})
+
+	w := doRequest(router, http.MethodPost, "/oauth/token", map[string]string{"grant_type": "authorization_code"})
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var body map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "invalid_request", body["error"])
+	assert.NotContains(t, body["error_description"], "Key:", "no validator internals")
+
+	w = doRequest(router, http.MethodPost, "/oauth/token", map[string]string{
+		"grant_type": "client_credentials", "code": "c", "redirect_uri": "https://app.example.com/cb", "client_id": "client-1",
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "unsupported_grant_type", body["error"])
 }
 
 // ── UserInfo Tests ──────��─────────────────────���────────────────────��───────

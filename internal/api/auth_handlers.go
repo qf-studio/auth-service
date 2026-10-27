@@ -41,7 +41,7 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 
 	result, err := h.auth.Login(c.Request.Context(), req.Email, req.Password)
 	if err != nil {
-		handleServiceError(c, err)
+		respondLoginError(c, err)
 		return
 	}
 
@@ -61,6 +61,23 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// respondLoginError writes the login failure response. Every authentication
+// failure carries one of three fixed bodies, never the service error text:
+// account locked/suspended (the service only returns these after the password
+// was verified) or the generic "invalid credentials" (GH-528).
+func respondLoginError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, domain.ErrAccountLocked):
+		domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized, domain.ErrAccountLocked.Error())
+	case errors.Is(err, domain.ErrAccountSuspended):
+		domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized, domain.ErrAccountSuspended.Error())
+	case errors.Is(err, ErrUnauthorized):
+		domain.RespondWithError(c, http.StatusUnauthorized, domain.CodeUnauthorized, domain.ErrInvalidCredentials.Error())
+	default:
+		handleServiceError(c, err)
+	}
 }
 
 // ResetPassword handles POST /auth/password/reset.
@@ -273,6 +290,13 @@ var (
 	ErrConflict      = errors.New("conflict")
 	ErrForbidden     = errors.New("forbidden")
 	ErrInternalError = errors.New("internal error")
+
+	// ErrInvalidClient and ErrInvalidGrant are the RFC 6749 §5.2 token
+	// endpoint failures. Services return them bare (the specifics are logged
+	// server-side) and the token handler renders the fixed
+	// {error, error_description} body.
+	ErrInvalidClient = errors.New("invalid client")
+	ErrInvalidGrant  = errors.New("invalid grant")
 
 	// ErrBadRequest indicates the request was well-formed but semantically
 	// invalid for the current state (e.g. accepting consent for a scope that

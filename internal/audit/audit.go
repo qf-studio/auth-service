@@ -15,6 +15,7 @@ const (
 	EventLoginSuccess             = "login_success"
 	EventLoginFailure             = "login_failure"
 	EventRegister                 = "register"
+	EventRegisterDuplicate        = "register_duplicate"
 	EventLogout                   = "logout"
 	EventLogoutAll                = "logout_all"
 	EventPasswordChange           = "password_change"

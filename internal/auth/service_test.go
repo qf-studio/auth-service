@@ -1079,6 +1079,7 @@ func TestResetPassword_KnownUser_SendsResetLink(t *testing.T) {
 
 	err := svc.ResetPassword(ctx, "alice@example.com")
 	require.NoError(t, err)
+	svc.waitBackground()
 
 	require.Len(t, sender.sent, 1, "expected exactly one email to be sent")
 	msg := sender.sent[0]
@@ -1127,6 +1128,7 @@ func TestResetPassword_EmailSendFailure_StillReturnsNil(t *testing.T) {
 
 	err := svc.ResetPassword(context.Background(), "alice@example.com")
 	require.NoError(t, err, "delivery failure must not become an enumeration oracle")
+	svc.waitBackground()
 	assert.Len(t, sender.sent, 1, "send should still have been attempted")
 }
 
@@ -2373,6 +2375,7 @@ func TestMailBodies_HumanizedExpiry(t *testing.T) {
 			name: "password reset",
 			trigger: func(t *testing.T, svc *Service, _ *mockEmailSender) {
 				require.NoError(t, svc.ResetPassword(ctx, "alice@example.com"))
+				svc.waitBackground()
 			},
 			want: []string{"expires in " + humanizeDuration(resetTokenTTL)},
 		},

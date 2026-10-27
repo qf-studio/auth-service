@@ -327,7 +327,7 @@ func TestOIDCFlow_Integration(t *testing.T) {
 
 		_, err = stack.provider.ExchangeCode(ctx, exchangeReq)
 		require.Error(t, err, "reused code must be rejected")
-		require.True(t, errors.Is(err, api.ErrUnauthorized), "got %v", err)
+		require.True(t, errors.Is(err, api.ErrInvalidGrant), "got %v", err)
 	})
 
 	t.Run("wrong PKCE verifier is rejected", func(t *testing.T) {
@@ -358,7 +358,7 @@ func TestOIDCFlow_Integration(t *testing.T) {
 			ClientID: client.ID, CodeVerifier: oauth.GenerateVerifier(), // wrong verifier
 		})
 		require.Error(t, err)
-		require.True(t, errors.Is(err, api.ErrUnauthorized), "got %v", err)
+		require.True(t, errors.Is(err, api.ErrInvalidGrant), "got %v", err)
 	})
 
 	t.Run("plain code_challenge_method is rejected at authorize via redirect error", func(t *testing.T) {
@@ -429,7 +429,7 @@ func TestOIDCFlow_Integration(t *testing.T) {
 			CodeVerifier: verifier,
 		})
 		require.Error(t, err, "confidential client must present its secret")
-		require.True(t, errors.Is(err, api.ErrUnauthorized), "got %v", err)
+		require.True(t, errors.Is(err, api.ErrInvalidClient), "got %v", err)
 
 		// Re-issue a fresh code: the failed exchange above did not consume
 		// the code (secret check happens before code consumption), so the

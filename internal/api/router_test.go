@@ -287,6 +287,31 @@ func TestRegister_Success(t *testing.T) {
 	assert.Equal(t, "Alice", resp.Name)
 }
 
+// A duplicate registration is returned by the service as a normal success
+// (GH-528), so the handler answers it exactly like a new account.
+func TestRegister_DuplicateLooksLikeSuccess(t *testing.T) {
+	fresh := &mockAuthService{}
+	dup := &mockAuthService{
+		registerFn: func(_ context.Context, email, _, name string) (*api.UserInfo, error) {
+			return &api.UserInfo{ID: "usr_placeholder", Email: email, Name: name}, nil
+		},
+	}
+	body := map[string]string{"email": "alice@example.com", "password": "super-secure-password-123", "name": "Alice"}
+
+	wFresh := doRequest(newTestRouter(fresh, &mockTokenService{}), http.MethodPost, "/auth/register", body)
+	wDup := doRequest(newTestRouter(dup, &mockTokenService{}), http.MethodPost, "/auth/register", body)
+
+	assert.Equal(t, wFresh.Code, wDup.Code)
+	assert.Equal(t, http.StatusCreated, wDup.Code)
+	var a, b map[string]any
+	require.NoError(t, json.Unmarshal(wFresh.Body.Bytes(), &a))
+	require.NoError(t, json.Unmarshal(wDup.Body.Bytes(), &b))
+	for k := range a {
+		assert.Contains(t, b, k)
+	}
+	assert.Len(t, b, len(a))
+}
+
 func TestRegister_ValidationError(t *testing.T) {
 	router := newTestRouter(&mockAuthService{}, &mockTokenService{})
 
@@ -368,6 +393,38 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 	w := doRequest(router, http.MethodPost, "/auth/login", body)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// TestLogin_ErrorBodiesAreFixed covers GH-528: whatever text the service wraps
+// around a failure, the client only ever sees one of three fixed messages.
+func TestLogin_ErrorBodiesAreFixed(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantMsg string
+	}{
+		{"generic failure", fmt.Errorf("%w: %w", domain.ErrInvalidCredentials, api.ErrUnauthorized), "invalid credentials"},
+		{"bare unauthorized", fmt.Errorf("lookup detail: %w", api.ErrUnauthorized), "invalid credentials"},
+		{"locked after correct password", fmt.Errorf("%w: %w", domain.ErrAccountLocked, api.ErrUnauthorized), "account locked"},
+		{"suspended after correct password", fmt.Errorf("%w: %w", domain.ErrAccountSuspended, api.ErrUnauthorized), "account suspended"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authSvc := &mockAuthService{
+				loginFn: func(_ context.Context, _, _ string) (*api.AuthResult, error) { return nil, tt.err },
+			}
+			router := newTestRouter(authSvc, &mockTokenService{})
+
+			w := doRequest(router, http.MethodPost, "/auth/login", map[string]string{
+				"email": "alice@example.com", "password": "super-secure-password-123",
+			})
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			var resp domain.ErrorResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, tt.wantMsg, resp.Error)
+			assert.Equal(t, domain.CodeUnauthorized, resp.Code)
+		})
+	}
 }
 
 func TestLogin_AccountThrottled(t *testing.T) {

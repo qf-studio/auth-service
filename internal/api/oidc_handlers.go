@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -49,23 +50,46 @@ func (h *OIDCHandlers) Authorize(c *gin.Context) {
 	c.Redirect(http.StatusFound, resp.RedirectTo)
 }
 
+// tokenErrorResponse is the RFC 6749 §5.2 error body.
+type tokenErrorResponse struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
+// respondTokenError writes an RFC 6749 §5.2 error. The description is a fixed
+// string per error code: nothing about which check failed (client, code
+// binding, redirect URI, PKCE) reaches the caller (GH-528).
+func respondTokenError(c *gin.Context, status int, code, description string) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("Pragma", "no-cache")
+	c.AbortWithStatusJSON(status, tokenErrorResponse{Error: code, ErrorDescription: description})
+}
+
 // Token handles POST /oauth/token for the authorization_code grant type.
 // Exchanges an authorization code for access, refresh, and ID tokens.
+// Failures use the RFC 6749 §5.2 body shape.
 func (h *OIDCHandlers) Token(c *gin.Context) {
 	var req CodeExchangeRequest
 	if err := c.ShouldBind(&req); err != nil {
-		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "invalid token request: "+err.Error())
+		respondTokenError(c, http.StatusBadRequest, "invalid_request", "The request is missing a required parameter or is malformed.")
 		return
 	}
 
 	if req.GrantType != "authorization_code" {
-		domain.RespondWithError(c, http.StatusBadRequest, domain.CodeBadRequest, "unsupported grant_type: only authorization_code is supported on this endpoint")
+		respondTokenError(c, http.StatusBadRequest, "unsupported_grant_type", "Only the authorization_code grant is supported on this endpoint.")
 		return
 	}
 
 	resp, err := h.oidc.ExchangeCode(c.Request.Context(), &req)
 	if err != nil {
-		handleServiceError(c, err)
+		switch {
+		case errors.Is(err, ErrInvalidClient):
+			respondTokenError(c, http.StatusUnauthorized, "invalid_client", "Client authentication failed.")
+		case errors.Is(err, ErrInvalidGrant):
+			respondTokenError(c, http.StatusBadRequest, "invalid_grant", "The authorization code is invalid, expired, or was not issued for this request.")
+		default:
+			respondTokenError(c, http.StatusInternalServerError, "server_error", "The server encountered an unexpected error.")
+		}
 		return
 	}
 
