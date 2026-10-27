@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/domain"
 )
@@ -372,6 +373,10 @@ type Services struct {
 	OIDC    OIDCProviderService
 	Broker  BrokerTokenService
 	SAML    SAMLService
+
+	// Logger receives non-fatal handler errors (e.g. session bookkeeping
+	// failures). Nil means no logging.
+	Logger *zap.Logger
 
 	// TrustedProxyCIDRs lists the reverse proxies (TRUSTED_PROXY_CIDRS) whose
 	// X-Forwarded-For is used to derive the client IP (see

@@ -160,7 +160,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	})
 
 	// ── Session ──────────────────────────────────────────────────────────
-	sessionStore := session.NewMemoryStore()
+	// Redis-backed so every task behind the load balancer sees the same sessions;
+	// each expires with the refresh token it belongs to.
+	sessionStore := session.NewRedisStore(redisClient, cfg.JWT.RefreshTokenTTL)
 	sessionSvc := session.NewService(sessionStore)
 
 	// ── DPoP ─────────────────────────────────────────────────────────────
@@ -244,6 +246,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Broker:            brokerTokenSvc,
 		SAML:              samlSvc,
 		TrustedProxyCIDRs: cfg.Proxy.TrustedCIDRs,
+		Logger:            log,
 	}
 
 	// ── Health ─────────────────────────────────────────────────────────────

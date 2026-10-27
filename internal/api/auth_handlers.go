@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/domain"
 )
@@ -14,12 +15,17 @@ import (
 type AuthHandlers struct {
 	auth    AuthService
 	session SessionService
+	log     *zap.Logger
 }
 
 // NewAuthHandlers creates a new AuthHandlers with the given AuthService
-// and an optional SessionService for session creation on login.
-func NewAuthHandlers(auth AuthService, session SessionService) *AuthHandlers {
-	return &AuthHandlers{auth: auth, session: session}
+// and an optional SessionService for session creation on login. A nil logger
+// is replaced by a no-op logger.
+func NewAuthHandlers(auth AuthService, session SessionService, log *zap.Logger) *AuthHandlers {
+	if log == nil {
+		log = zap.NewNop()
+	}
+	return &AuthHandlers{auth: auth, session: session, log: log}
 }
 
 // Register handles POST /auth/register.
@@ -52,13 +58,7 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 	}
 
 	// Create a session record if the session service is available.
-	if h.session != nil && result.UserID != "" {
-		ip := c.ClientIP()
-		ua := c.GetHeader("User-Agent")
-		// Session creation is best-effort; login should not fail if session
-		// tracking is unavailable.
-		_, _ = h.session.CreateSession(c.Request.Context(), result.UserID, ip, ua)
-	}
+	recordSession(c, h.session, h.log, result.UserID)
 
 	c.JSON(http.StatusOK, result)
 }

@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/qf-studio/auth-service/internal/api"
 	"github.com/qf-studio/auth-service/internal/domain"
@@ -67,6 +69,10 @@ func (m *mockSessionService) DeleteAllSessions(ctx context.Context, userID strin
 // newSessionTestRouter builds a public router with session support and a
 // simple auth middleware that reads X-User-ID for testing.
 func newSessionTestRouter(sessionSvc api.SessionService) *gin.Engine {
+	return newSessionTestRouterWith(&mockAuthService{}, sessionSvc, nil)
+}
+
+func newSessionTestRouterWith(authSvc api.AuthService, sessionSvc api.SessionService, mfaSvc api.MFAService, log ...*zap.Logger) *gin.Engine {
 	authMW := func(c *gin.Context) {
 		userID := c.GetHeader("X-User-ID")
 		if userID == "" {
@@ -77,9 +83,13 @@ func newSessionTestRouter(sessionSvc api.SessionService) *gin.Engine {
 		c.Next()
 	}
 	svc := &api.Services{
-		Auth:    &mockAuthService{},
+		Auth:    authSvc,
 		Token:   &mockTokenService{},
 		Session: sessionSvc,
+		MFA:     mfaSvc,
+	}
+	if len(log) > 0 {
+		svc.Logger = log[0]
 	}
 	mw := &api.MiddlewareStack{Auth: authMW}
 	return mustRouter(api.NewPublicRouter(svc, mw, health.NewService()))
@@ -296,4 +306,177 @@ func TestLogin_SessionCreationFailure_DoesNotBlockLogin(t *testing.T) {
 
 	// Login should succeed even if session creation fails.
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- Terminate all revokes tokens ---
+
+func TestDeleteAllSessions_RevokesTokensBeforeDeletingSessions(t *testing.T) {
+	var calls []string
+	authSvc := &mockAuthService{
+		logoutAllFn: func(_ context.Context, userID string) error {
+			calls = append(calls, "logout-all:"+userID)
+			return nil
+		},
+	}
+	sessionSvc := &mockSessionService{
+		deleteAllSessionsFn: func(_ context.Context, userID string) error {
+			calls = append(calls, "delete-sessions:"+userID)
+			return nil
+		},
+	}
+	r := newSessionTestRouterWith(authSvc, sessionSvc, nil)
+
+	w := doRequest(r, http.MethodDelete, "/auth/sessions", nil, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, []string{"logout-all:user-42", "delete-sessions:user-42"}, calls)
+}
+
+func TestDeleteAllSessions_RevocationFailureKeepsSessions(t *testing.T) {
+	authSvc := &mockAuthService{
+		logoutAllFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("redis down: %w", api.ErrInternalError)
+		},
+	}
+	sessionSvc := &mockSessionService{
+		deleteAllSessionsFn: func(_ context.Context, _ string) error {
+			t.Fatal("sessions must not be deleted when token revocation failed")
+			return nil
+		},
+	}
+	r := newSessionTestRouterWith(authSvc, sessionSvc, nil)
+
+	w := doRequest(r, http.MethodDelete, "/auth/sessions", nil, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestDeleteSession_DoesNotRevokeTokens(t *testing.T) {
+	authSvc := &mockAuthService{
+		logoutAllFn: func(_ context.Context, _ string) error {
+			t.Fatal("deleting one session must not revoke every token")
+			return nil
+		},
+	}
+	r := newSessionTestRouterWith(authSvc, &mockSessionService{}, nil)
+
+	w := doRequest(r, http.MethodDelete, "/auth/sessions/sess-1", nil, "X-User-ID", "user-42")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- Session creation errors are logged, never swallowed ---
+
+func TestLogin_SessionCreationFailure_IsLogged(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	authSvc := &mockAuthService{
+		loginFn: func(_ context.Context, _, _ string) (*api.AuthResult, error) {
+			return &api.AuthResult{AccessToken: "qf_at_test", RefreshToken: "qf_rt_test", UserID: "user-1"}, nil
+		},
+	}
+	sessionSvc := &mockSessionService{
+		createSessionFn: func(_ context.Context, _, _, _ string) (*api.SessionInfo, error) {
+			return nil, fmt.Errorf("session store unavailable")
+		},
+	}
+	r := newSessionTestRouterWith(authSvc, sessionSvc, nil, zap.New(core))
+
+	w := doRequest(r, http.MethodPost, "/auth/login", map[string]string{
+		"email":    "alice@example.com",
+		"password": "super-secure-password-123",
+	})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	entries := logs.FilterMessage("failed to create session record").All()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "user-1", entries[0].ContextMap()["user_id"])
+	assert.Contains(t, entries[0].ContextMap()["error"], "session store unavailable")
+}
+
+func TestLogin_MFARequired_CreatesNoSession(t *testing.T) {
+	authSvc := &mockAuthService{
+		loginFn: func(_ context.Context, _, _ string) (*api.AuthResult, error) {
+			return &api.AuthResult{MFARequired: true, MFAToken: "mfa-challenge", UserID: "user-1"}, nil
+		},
+	}
+	sessionSvc := &mockSessionService{
+		createSessionFn: func(_ context.Context, _, _, _ string) (*api.SessionInfo, error) {
+			t.Fatal("no session before the MFA challenge is passed")
+			return nil, nil
+		},
+	}
+	r := newSessionTestRouterWith(authSvc, sessionSvc, nil)
+
+	w := doRequest(r, http.MethodPost, "/auth/login", map[string]string{
+		"email":    "alice@example.com",
+		"password": "super-secure-password-123",
+	})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestMFAVerify_CreatesSession(t *testing.T) {
+	var gotUserID, gotIP, gotUA string
+	sessionSvc := &mockSessionService{
+		createSessionFn: func(_ context.Context, userID, ip, ua string) (*api.SessionInfo, error) {
+			gotUserID, gotIP, gotUA = userID, ip, ua
+			return &api.SessionInfo{ID: "sess-mfa", UserID: userID}, nil
+		},
+	}
+	mfaSvc := &mockMFAService{
+		completeMFALoginFn: func(_ context.Context, _, _, _ string) (*api.AuthResult, error) {
+			return &api.AuthResult{AccessToken: "qf_at_mfa", RefreshToken: "qf_rt_mfa", UserID: "user-7"}, nil
+		},
+	}
+	r := newSessionTestRouterWith(&mockAuthService{}, sessionSvc, mfaSvc)
+
+	w := doRequest(r, http.MethodPost, "/auth/mfa/verify",
+		map[string]string{"mfa_token": "mfa-challenge", "code": "123456", "code_type": "totp"},
+		"User-Agent", "MFATestAgent/2.0")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "user-7", gotUserID)
+	assert.NotEmpty(t, gotIP)
+	assert.Equal(t, "MFATestAgent/2.0", gotUA)
+}
+
+func TestMFAVerify_SessionCreationFailure_IsLoggedAndDoesNotBlock(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	sessionSvc := &mockSessionService{
+		createSessionFn: func(_ context.Context, _, _, _ string) (*api.SessionInfo, error) {
+			return nil, fmt.Errorf("session store unavailable")
+		},
+	}
+	mfaSvc := &mockMFAService{
+		completeMFALoginFn: func(_ context.Context, _, _, _ string) (*api.AuthResult, error) {
+			return &api.AuthResult{AccessToken: "qf_at_mfa", UserID: "user-7"}, nil
+		},
+	}
+	r := newSessionTestRouterWith(&mockAuthService{}, sessionSvc, mfaSvc, zap.New(core))
+
+	w := doRequest(r, http.MethodPost, "/auth/mfa/verify",
+		map[string]string{"mfa_token": "mfa-challenge", "code": "123456", "code_type": "totp"})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 1, logs.FilterMessage("failed to create session record").Len())
+}
+
+func TestMFAVerify_Failure_CreatesNoSession(t *testing.T) {
+	sessionSvc := &mockSessionService{
+		createSessionFn: func(_ context.Context, _, _, _ string) (*api.SessionInfo, error) {
+			t.Fatal("a failed MFA challenge must not create a session")
+			return nil, nil
+		},
+	}
+	mfaSvc := &mockMFAService{
+		completeMFALoginFn: func(_ context.Context, _, _, _ string) (*api.AuthResult, error) {
+			return nil, api.ErrUnauthorized
+		},
+	}
+	r := newSessionTestRouterWith(&mockAuthService{}, sessionSvc, mfaSvc)
+
+	w := doRequest(r, http.MethodPost, "/auth/mfa/verify",
+		map[string]string{"mfa_token": "mfa-challenge", "code": "000000", "code_type": "totp"})
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
