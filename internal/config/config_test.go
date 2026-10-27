@@ -2,10 +2,12 @@ package config
 
 import (
 	"net"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -374,8 +376,36 @@ func TestPostgresConfig_DSN(t *testing.T) {
 		Password: "mypass",
 		SSLMode:  "require",
 	}
-	expected := "host=db.example.com port=5432 dbname=mydb user=myuser password=mypass sslmode=require"
-	assert.Equal(t, expected, c.DSN())
+	assert.Equal(t, "postgres://myuser:mypass@db.example.com:5432/mydb?sslmode=require", c.DSN())
+}
+
+func TestPostgresConfig_DSN_SpecialCharacters(t *testing.T) {
+	c := PostgresConfig{ //nolint:gosec // fake test credential
+		Host:     "db.example.com",
+		Port:     5432,
+		DB:       "mydb",
+		User:     "my user",
+		Password: "p@ss word's:/?#%&=",
+		SSLMode:  "verify-full",
+	}
+
+	u, err := url.Parse(c.DSN())
+	require.NoError(t, err)
+	assert.Equal(t, "db.example.com:5432", u.Host)
+	assert.Equal(t, "/mydb", u.Path)
+	assert.Equal(t, "verify-full", u.Query().Get("sslmode"))
+	assert.Equal(t, "my user", u.User.Username())
+	pw, _ := u.User.Password()
+	assert.Equal(t, "p@ss word's:/?#%&=", pw)
+
+	// pgx must parse it back to exactly the original credentials.
+	pgCfg, err := pgx.ParseConfig(c.DSN())
+	require.NoError(t, err)
+	assert.Equal(t, "db.example.com", pgCfg.Host)
+	assert.Equal(t, uint16(5432), pgCfg.Port)
+	assert.Equal(t, "mydb", pgCfg.Database)
+	assert.Equal(t, "my user", pgCfg.User)
+	assert.Equal(t, "p@ss word's:/?#%&=", pgCfg.Password)
 }
 
 func TestRedisConfig_Addr(t *testing.T) {
@@ -919,4 +949,94 @@ func TestLoad_GRPCAuth(t *testing.T) {
 			assert.Equal(t, tt.wantTokens, cfg.GRPC.ClientTokens)
 		})
 	}
+}
+
+func TestLoad_CORSWildcardWithCredentialsRejected(t *testing.T) {
+	tests := []struct {
+		name        string
+		origins     string
+		credentials string
+		wantErr     bool
+	}{
+		{"wildcard + credentials", "*", "true", true},
+		{"wildcard among origins + credentials", "https://a.example.com, *", "true", true},
+		{"wildcard without credentials", "*", "false", false},
+		{"explicit origins + credentials", "https://a.example.com", "true", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := requiredEnv()
+			env["CORS_ALLOWED_ORIGINS"] = tt.origins
+			env["CORS_ALLOW_CREDENTIALS"] = tt.credentials
+			setEnv(t, env)
+
+			_, err := Load()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "CORS_ALLOW_CREDENTIALS")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestLoad_HTTPTimeouts(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		setEnv(t, requiredEnv())
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, 15*time.Second, cfg.App.ReadTimeout)
+		assert.Equal(t, 30*time.Second, cfg.App.WriteTimeout)
+		assert.Equal(t, 120*time.Second, cfg.App.IdleTimeout)
+	})
+
+	t.Run("overrides", func(t *testing.T) {
+		env := requiredEnv()
+		env["HTTP_READ_TIMEOUT"] = "5s"
+		env["HTTP_WRITE_TIMEOUT"] = "1m"
+		env["HTTP_IDLE_TIMEOUT"] = "90s"
+		setEnv(t, env)
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, 5*time.Second, cfg.App.ReadTimeout)
+		assert.Equal(t, time.Minute, cfg.App.WriteTimeout)
+		assert.Equal(t, 90*time.Second, cfg.App.IdleTimeout)
+	})
+
+	for _, key := range []string{"HTTP_READ_TIMEOUT", "HTTP_WRITE_TIMEOUT", "HTTP_IDLE_TIMEOUT"} {
+		for _, bad := range []string{"soon", "0s", "-5s"} {
+			t.Run(key+"="+bad, func(t *testing.T) {
+				env := requiredEnv()
+				env[key] = bad
+				setEnv(t, env)
+				_, err := Load()
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), key)
+			})
+		}
+	}
+}
+
+func TestLoad_ConfigStrictAndRedisTLS(t *testing.T) {
+	setEnv(t, requiredEnv())
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.False(t, cfg.App.Strict)
+	assert.False(t, cfg.Redis.TLS)
+
+	env := requiredEnv()
+	env["CONFIG_STRICT"] = "true"
+	env["REDIS_TLS"] = "true"
+	setEnv(t, env)
+	cfg, err = Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.App.Strict)
+	assert.True(t, cfg.Redis.TLS)
+
+	env["CONFIG_STRICT"] = "maybe"
+	setEnv(t, env)
+	_, err = Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CONFIG_STRICT")
 }

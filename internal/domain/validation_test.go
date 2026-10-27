@@ -599,3 +599,42 @@ func TestValidateRequest_EmptyBody(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+func TestValidateRequest_PasswordMaxLength(t *testing.T) {
+	tests := []struct {
+		name     string
+		length   int
+		wantCode int
+	}{
+		{"at max", domain.MaxPasswordLength, http.StatusOK},
+		{"above max", domain.MaxPasswordLength + 1, http.StatusUnprocessableEntity},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := domain.NewValidator()
+			router := gin.New()
+			router.POST("/register", domain.ValidateRequest(v, func() interface{} {
+				return &domain.RegisterRequest{}
+			}), func(c *gin.Context) {
+				c.JSON(http.StatusOK, gin.H{"status": "ok"})
+			})
+
+			body, err := json.Marshal(map[string]string{
+				"email":    "user@example.com",
+				"password": strings.Repeat("a", tt.length),
+				"name":     "Test",
+			})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/register", bytes.NewBuffer(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			if tt.wantCode != http.StatusOK {
+				assert.Contains(t, w.Body.String(), "must be between 15 and 256 characters")
+			}
+		})
+	}
+}

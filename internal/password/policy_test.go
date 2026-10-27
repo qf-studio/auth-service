@@ -1,6 +1,7 @@
 package password_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -49,10 +50,22 @@ func TestPolicyValidator_ValidatePassword(t *testing.T) {
 			wantErr:  nil,
 		},
 		{
-			name:     "no max length means unlimited",
+			name:     "zero max length defaults to 256 bytes",
 			policy:   domain.PasswordPolicy{MinLength: 5, MaxLength: 0},
-			password: "a-very-long-password-that-should-be-fine-because-there-is-no-max",
+			password: strings.Repeat("a", domain.MaxPasswordLength),
 			wantErr:  nil,
+		},
+		{
+			name:     "zero max length rejects above 256 bytes",
+			policy:   domain.PasswordPolicy{MinLength: 5, MaxLength: 0},
+			password: strings.Repeat("a", domain.MaxPasswordLength+1),
+			wantErr:  domain.ErrPasswordTooLong,
+		},
+		{
+			name:     "max length above the cap is clamped to 256 bytes",
+			policy:   domain.PasswordPolicy{MinLength: 5, MaxLength: 10000},
+			password: strings.Repeat("a", domain.MaxPasswordLength+1),
+			wantErr:  domain.ErrPasswordTooLong,
 		},
 		{
 			name:     "default min length applied when zero",
@@ -172,7 +185,7 @@ func TestPolicyValidator_CheckHistory(t *testing.T) {
 func TestDefaultPolicy(t *testing.T) {
 	p := password.DefaultPolicy()
 	assert.Equal(t, domain.NistMinPasswordLength, p.MinLength)
-	assert.Equal(t, 0, p.MaxLength)
+	assert.Equal(t, 256, p.MaxLength)
 	assert.Equal(t, 0, p.MaxAgeDays)
 	assert.Equal(t, 0, p.HistoryCount)
 }

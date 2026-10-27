@@ -10,7 +10,7 @@ import (
 func DefaultPolicy() domain.PasswordPolicy {
 	return domain.PasswordPolicy{
 		MinLength:    domain.NistMinPasswordLength,
-		MaxLength:    0, // no upper limit
+		MaxLength:    domain.MaxPasswordLength,
 		MaxAgeDays:   0, // no expiration
 		HistoryCount: 0, // no reuse check
 	}
@@ -27,6 +27,9 @@ func NewPolicyValidator(policy domain.PasswordPolicy, hasher Hasher) *PolicyVali
 	if policy.MinLength <= 0 {
 		policy.MinLength = domain.NistMinPasswordLength
 	}
+	if policy.MaxLength <= 0 || policy.MaxLength > domain.MaxPasswordLength {
+		policy.MaxLength = domain.MaxPasswordLength
+	}
 	return &PolicyValidator{
 		policy: policy,
 		hasher: hasher,
@@ -38,7 +41,7 @@ func (v *PolicyValidator) ValidatePassword(password string) error {
 	if len(password) < v.policy.MinLength {
 		return domain.ErrPasswordTooShort
 	}
-	if v.policy.MaxLength > 0 && len(password) > v.policy.MaxLength {
+	if len(password) > v.policy.MaxLength {
 		return domain.ErrPasswordTooLong
 	}
 	return nil

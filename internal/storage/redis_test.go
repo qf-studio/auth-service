@@ -11,7 +11,7 @@ import (
 
 func TestNewRedisClient_InvalidAddr(t *testing.T) {
 	// Unreachable address — ping must fail within 5 s.
-	client, err := storage.NewRedisClient("localhost:19999", "", 0)
+	client, err := storage.NewRedisClient("localhost:19999", "", 0, false)
 	assert.Nil(t, client)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "redis ping failed")

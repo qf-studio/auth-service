@@ -210,11 +210,16 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `GRPC_AUTH_MODE` | `warn` | gRPC caller authentication: `off`, `warn` (allow, log a rate-limited WARN per method for unauthenticated calls) or `enforce` (reject with `Unauthenticated`). The gRPC health service is always allowed. See [gRPC Caller Authentication](deployments/README.md#grpc-caller-authentication) for the rollout order |
 | `GRPC_CLIENT_TOKENS` | _(empty)_ | Comma-separated bearer service tokens accepted on the gRPC port, each at least 32 bytes; at least one is required when `GRPC_AUTH_MODE=enforce`. Clients send `authorization: Bearer <token>` (`authclient.WithServiceToken`) |
 | `LOG_LEVEL` | `info` | Log level |
+| `CONFIG_STRICT` | `false` | Production guardrails, checked at startup. With `APP_ENV=production` the service expects `POSTGRES_SSLMODE` ∈ {`require`,`verify-ca`,`verify-full`}, `REDIS_PASSWORD` set, `REDIS_TLS=true`, `PASSWORD_PEPPER` and every `SYSTEM_SECRETS` entry ≥ 32 bytes and not starting with `change-me`/`change_me`, and `EMAIL_ENABLED=true`. `false` logs one `WARN` per violated rule; `true` refuses to start. Other `APP_ENV` values only ever warn. Flip to `true` once the WARN lines are gone |
+| `HTTP_READ_TIMEOUT` | `15s` | Public/admin HTTP server `ReadTimeout` (whole request including body) |
+| `HTTP_WRITE_TIMEOUT` | `30s` | Public/admin HTTP server `WriteTimeout`; keep it at or above `REQUEST_TIMEOUT` |
+| `HTTP_IDLE_TIMEOUT` | `120s` | Public/admin HTTP server keep-alive `IdleTimeout` |
 | `POSTGRES_PORT` | `5432` | PostgreSQL port |
-| `POSTGRES_SSLMODE` | `disable` | PostgreSQL SSL mode |
+| `POSTGRES_SSLMODE` | `disable` | PostgreSQL SSL mode. Production should use `require`, `verify-ca` or `verify-full` (see `CONFIG_STRICT`) |
 | `POSTGRES_MAX_CONNS` | `10` | Maximum PostgreSQL connections |
 | `REDIS_PORT` | `6379` | Redis port |
-| `REDIS_PASSWORD` | _(empty)_ | Redis password |
+| `REDIS_PASSWORD` | _(empty)_ | Redis password (expected in production, see `CONFIG_STRICT`) |
+| `REDIS_TLS` | `false` | Connect to Redis over TLS, verifying the server certificate against the system roots (TLS 1.2+) |
 | `REDIS_DB` | `0` | Redis database number |
 | `JWT_ALGORITHM` | `ES256` | JWT signing algorithm (`ES256` or `EdDSA`) |
 | `ACCESS_TOKEN_TTL` | `15m` | Access token lifetime |
@@ -230,11 +235,11 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `CORS_ALLOWED_METHODS` | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | Allowed HTTP methods |
 | `CORS_ALLOWED_HEADERS` | `Authorization,Content-Type,X-Request-ID` | Allowed headers |
 | `CORS_EXPOSE_HEADERS` | `X-Request-ID` | Exposed headers |
-| `CORS_ALLOW_CREDENTIALS` | `false` | Allow credentials |
+| `CORS_ALLOW_CREDENTIALS` | `false` | Allow credentials. Startup fails if combined with `CORS_ALLOWED_ORIGINS=*` |
 | `CORS_MAX_AGE` | `12h` | Preflight cache duration |
 | `REQUEST_MAX_BODY_SIZE` | `1048576` | Max request body in bytes (1 MiB) |
 | `REQUEST_TIMEOUT` | `30s` | Request timeout |
-| `EMAIL_ENABLED` | `false` | Enable email delivery (`false` uses a console logger, no external calls) |
+| `EMAIL_ENABLED` | `false` | Enable email delivery (`false` uses a console logger that logs recipient and subject only, never the body, and makes no external calls; expected `true` in production) |
 | `EMAIL_SERVICE_URL` | _(empty)_ | Email service base URL (required when `EMAIL_ENABLED=true`) |
 | `EMAIL_API_KEY` | _(empty)_ | Email service API key (required when `EMAIL_ENABLED=true`) |
 | `EMAIL_SENDER_ADDRESS` | _(empty)_ | From address for outgoing mail (required when `EMAIL_ENABLED=true`) |

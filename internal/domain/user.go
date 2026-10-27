@@ -42,7 +42,7 @@ func (u *User) IsActive() bool {
 // PasswordPolicy defines configurable password requirements.
 type PasswordPolicy struct {
 	MinLength    int // minimum password length (default: NistMinPasswordLength)
-	MaxLength    int // maximum password length (0 = no limit)
+	MaxLength    int // maximum password length in bytes (<= 0 or above MaxPasswordLength = MaxPasswordLength)
 	MaxAgeDays   int // password expiration in days (0 = never expires)
 	HistoryCount int // number of previous passwords to check for reuse (0 = disabled)
 }

@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net"
+	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -176,6 +179,16 @@ type AppConfig struct {
 	AdminPort  int
 	GRPCPort   int
 	LogLevel   string
+
+	// Strict (CONFIG_STRICT, default false) turns the production guardrails
+	// checked by Config.Validate from startup warnings into a startup error.
+	Strict bool
+
+	// HTTP server timeouts (HTTP_READ_TIMEOUT, HTTP_WRITE_TIMEOUT,
+	// HTTP_IDLE_TIMEOUT) applied to both the public and admin listeners.
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	IdleTimeout  time.Duration
 }
 
 // PostgresConfig holds PostgreSQL connection parameters.
@@ -189,12 +202,18 @@ type PostgresConfig struct {
 	MaxConns int
 }
 
-// DSN returns a PostgreSQL connection string.
+// DSN returns a PostgreSQL connection URL. Built with net/url so credentials
+// containing spaces, quotes or other reserved characters are escaped instead
+// of corrupting (or injecting into) the connection string.
 func (c PostgresConfig) DSN() string {
-	return fmt.Sprintf(
-		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
-		c.Host, c.Port, c.DB, c.User, c.Password, c.SSLMode,
-	)
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(c.User, c.Password),
+		Host:     net.JoinHostPort(c.Host, strconv.Itoa(c.Port)),
+		Path:     "/" + c.DB,
+		RawQuery: url.Values{"sslmode": {c.SSLMode}}.Encode(),
+	}
+	return u.String()
 }
 
 // RedisConfig holds Redis connection parameters.
@@ -203,6 +222,7 @@ type RedisConfig struct {
 	Port     int
 	Password string
 	DB       int
+	TLS      bool // REDIS_TLS: connect over TLS, verifying the server against system roots
 }
 
 // Addr returns the host:port string expected by go-redis.
@@ -288,6 +308,22 @@ func (*loader) optInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s: invalid integer %q: %w", key, v, err)
 	}
 	return n, nil
+}
+
+// optDuration parses a positive duration (supports the "d" suffix).
+func (*loader) optDuration(key string, fallback time.Duration) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	d, err := parseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s: must be positive, got %q", key, v)
+	}
+	return d, nil
 }
 
 func (*loader) optBool(key string, fallback bool) (bool, error) {
@@ -518,12 +554,34 @@ func loadApp(l *loader) (AppConfig, error) {
 		return AppConfig{}, err
 	}
 
+	strict, err := l.optBool("CONFIG_STRICT", false)
+	if err != nil {
+		return AppConfig{}, err
+	}
+
+	readTimeout, err := l.optDuration("HTTP_READ_TIMEOUT", DefaultHTTPReadTimeout)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	writeTimeout, err := l.optDuration("HTTP_WRITE_TIMEOUT", DefaultHTTPWriteTimeout)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	idleTimeout, err := l.optDuration("HTTP_IDLE_TIMEOUT", DefaultHTTPIdleTimeout)
+	if err != nil {
+		return AppConfig{}, err
+	}
+
 	return AppConfig{
-		Env:        appEnv,
-		PublicPort: publicPort,
-		AdminPort:  adminPort,
-		GRPCPort:   grpcPort,
-		LogLevel:   logLevel,
+		Env:          appEnv,
+		PublicPort:   publicPort,
+		AdminPort:    adminPort,
+		GRPCPort:     grpcPort,
+		LogLevel:     logLevel,
+		Strict:       strict,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
+		IdleTimeout:  idleTimeout,
 	}, nil
 }
 
@@ -566,12 +624,17 @@ func loadRedis(l *loader) (RedisConfig, error) {
 	if err != nil {
 		return RedisConfig{}, err
 	}
+	redisTLS, err := l.optBool("REDIS_TLS", false)
+	if err != nil {
+		return RedisConfig{}, err
+	}
 
 	return RedisConfig{
 		Host:     redisHost,
 		Port:     redisPort,
 		Password: redisPassword,
 		DB:       redisDB,
+		TLS:      redisTLS,
 	}, nil
 }
 
@@ -701,8 +764,15 @@ func loadCORS(l *loader) (CORSConfig, error) {
 		return CORSConfig{}, fmt.Errorf("CORS_MAX_AGE: %w", err)
 	}
 
+	origins := splitCSV(corsRaw)
+	// The CORS middleware reflects the request Origin, so a wildcard plus
+	// credentials would let any site make credentialed cross-origin calls.
+	if allowCredentials && slices.Contains(origins, "*") {
+		return CORSConfig{}, errors.New("CORS_ALLOW_CREDENTIALS=true cannot be combined with CORS_ALLOWED_ORIGINS=*; list explicit origins")
+	}
+
 	return CORSConfig{
-		AllowedOrigins:   splitCSV(corsRaw),
+		AllowedOrigins:   origins,
 		AllowedMethods:   splitCSV(allowedMethods),
 		AllowedHeaders:   splitCSV(allowedHeaders),
 		ExposeHeaders:    splitCSV(exposeHeaders),
