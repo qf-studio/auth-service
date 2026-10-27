@@ -15,6 +15,10 @@ import (
 // No composition rules (uppercase, symbols, etc.) are enforced.
 const NistMinPasswordLength = 15
 
+// MaxPasswordLength is the maximum password length in bytes. NIST SP 800-63-4
+// requires accepting at least 64 characters; the cap bounds Argon2id input.
+const MaxPasswordLength = 256
+
 // --- Request structs ---
 
 // RegisterRequest is the validated request body for user registration.
@@ -148,7 +152,7 @@ func validateScope(fl validator.FieldLevel) bool {
 // minimum 15 characters, no composition rules, no periodic rotation.
 func validateNistPassword(fl validator.FieldLevel) bool {
 	password := fl.Field().String()
-	return len(password) >= NistMinPasswordLength
+	return len(password) >= NistMinPasswordLength && len(password) <= MaxPasswordLength
 }
 
 // validateProfileName enforces the display name policy for PUT /auth/me:
@@ -217,7 +221,7 @@ func validationMessage(fe validator.FieldError) string {
 	case "email":
 		return "must be a valid email address"
 	case "nist_password":
-		return fmt.Sprintf("must be at least %d characters", NistMinPasswordLength)
+		return fmt.Sprintf("must be between %d and %d characters", NistMinPasswordLength, MaxPasswordLength)
 	case "min":
 		return fmt.Sprintf("must be at least %s characters", fe.Param())
 	case "max":

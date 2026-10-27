@@ -41,7 +41,12 @@ func TestConsoleSender_Send(t *testing.T) {
 	}
 	assert.Equal(t, "alice@example.com", fields["to"])
 	assert.Equal(t, "Hello", fields["subject"])
-	assert.Equal(t, "World", fields["body"])
+	_, hasBody := fields["body"]
+	assert.False(t, hasBody, "body must not be logged")
+	for _, f := range entry.Context {
+		assert.NotContains(t, f.String, "World", "body must not leak into field %q", f.Key)
+	}
+	assert.NotContains(t, entry.Message, "World")
 }
 
 // ── HTTPSender ────────────────────────────────────────────────────────────────

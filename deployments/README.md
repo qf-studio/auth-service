@@ -277,6 +277,7 @@ cp .env.production.example .env.production
 - **Security headers** — HSTS (2 years + preload), X-Content-Type-Options, X-Frame-Options: DENY, restrictive CSP
 - **TLS 1.3** — Caddy auto-provisions certificates via Let's Encrypt
 - **PostgreSQL SSL** — `POSTGRES_SSLMODE=require` enforces encrypted DB connections
+- **Startup guardrails** — see [Production Guardrails (`CONFIG_STRICT`)](#production-guardrails-config_strict)
 
 #### Running Behind an AWS ALB (TLS-terminating load balancer)
 
@@ -780,6 +781,29 @@ Full list of configuration variables. See `.env.staging.example` and `.env.produ
 | `REDIS_PORT` | Redis port | `6379` | `6379` |
 | `REDIS_PASSWORD` | Redis password | *(required)* | *(required)* |
 | `REDIS_DB` | Redis database number | `0` | `0` |
+| `REDIS_TLS` | Connect to Redis over TLS (system root CAs, TLS 1.2+). The bundled Compose Redis is plaintext, so leave `false` there; set `true` for managed Redis such as ElastiCache with in-transit encryption | `false` | `false` |
+
+### Production Guardrails (`CONFIG_STRICT`)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CONFIG_STRICT` | `false`: log one `WARN` (`config guardrail violated`) per violated rule at startup. `true`: with `APP_ENV=production`, refuse to start on any violation. Non-production environments only ever warn | `false` |
+| `HTTP_READ_TIMEOUT` | `ReadTimeout` of the public and admin HTTP servers | `15s` |
+| `HTTP_WRITE_TIMEOUT` | `WriteTimeout` of the public and admin HTTP servers (keep ≥ `REQUEST_TIMEOUT`) | `30s` |
+| `HTTP_IDLE_TIMEOUT` | `IdleTimeout` of the public and admin HTTP servers | `120s` |
+
+Rules checked (messages name the variable, never its value):
+
+- `POSTGRES_SSLMODE` is `require`, `verify-ca` or `verify-full`
+- `REDIS_PASSWORD` is set and `REDIS_TLS=true`
+- `PASSWORD_PEPPER` and every `SYSTEM_SECRETS` entry are at least 32 bytes and do not start with `change-me` / `change_me`
+- `EMAIL_ENABLED=true`
+
+Rollout: deploy with `CONFIG_STRICT` unset, fix whatever the `WARN` lines report
+(grep the logs for `config guardrail violated`), then set `CONFIG_STRICT=true`.
+Two settings are rejected at load regardless of `CONFIG_STRICT`: wildcard
+`CORS_ALLOWED_ORIGINS=*` together with `CORS_ALLOW_CREDENTIALS=true`, and a
+non-positive `HTTP_*_TIMEOUT`.
 
 ### Authentication
 

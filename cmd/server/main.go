@@ -53,6 +53,15 @@ func main() {
 	}
 	log := logger.GetLogger()
 
+	warnings, err := cfg.Validate()
+	if err != nil {
+		log.Fatal("config validation failed", zap.Error(err))
+	}
+	for _, w := range warnings {
+		log.Warn("config guardrail violated; set CONFIG_STRICT=true once resolved",
+			zap.String("violation", w), zap.String("app_env", cfg.App.Env))
+	}
+
 	if err := run(log, cfg); err != nil {
 		log.Fatal("service failed", zap.Error(err))
 	}
@@ -75,7 +84,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	// ── Redis ─────────────────────────────────────────────────────────────
-	redisClient, err := storage.NewRedisClient(cfg.Redis.Addr(), cfg.Redis.Password, cfg.Redis.DB)
+	redisClient, err := storage.NewRedisClient(cfg.Redis.Addr(), cfg.Redis.Password, cfg.Redis.DB, cfg.Redis.TLS)
 	if err != nil {
 		return fmt.Errorf("redis connection failed: %w", err)
 	}
@@ -372,11 +381,17 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Addr:              fmt.Sprintf(":%d", cfg.App.PublicPort),
 		Handler:           publicRouter,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       cfg.App.ReadTimeout,
+		WriteTimeout:      cfg.App.WriteTimeout,
+		IdleTimeout:       cfg.App.IdleTimeout,
 	}
 	adminSrv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.App.AdminPort),
 		Handler:           adminRouter,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       cfg.App.ReadTimeout,
+		WriteTimeout:      cfg.App.WriteTimeout,
+		IdleTimeout:       cfg.App.IdleTimeout,
 	}
 
 	// Closers are released in order after HTTP drains: Redis first.
