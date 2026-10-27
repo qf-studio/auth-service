@@ -186,6 +186,8 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `ADMIN_API_TOKENS` | _(empty)_ | Comma-separated bearer tokens (each ≥ 32 bytes; two accepted at once for rotation) required on every `/admin/*` route. Empty disables the admin API (`503 admin_api_disabled`) without stopping the service. |
 | `AUDIT_RETENTION_DAYS` | `365` | Audit events are persisted to `audit_logs` (batched, up to 100 events / 1 s) as well as logged; rows older than this many days are deleted daily. `0` keeps rows forever. |
 | `GRPC_PORT` | `4002` | gRPC port |
+| `GRPC_AUTH_MODE` | `warn` | gRPC caller authentication: `off`, `warn` (allow, log a rate-limited WARN per method for unauthenticated calls) or `enforce` (reject with `Unauthenticated`). The gRPC health service is always allowed. See [gRPC Caller Authentication](deployments/README.md#grpc-caller-authentication) for the rollout order |
+| `GRPC_CLIENT_TOKENS` | _(empty)_ | Comma-separated bearer service tokens accepted on the gRPC port, each at least 32 bytes; at least one is required when `GRPC_AUTH_MODE=enforce`. Clients send `authorization: Bearer <token>` (`authclient.WithServiceToken`) |
 | `LOG_LEVEL` | `info` | Log level |
 | `POSTGRES_PORT` | `5432` | PostgreSQL port |
 | `POSTGRES_SSLMODE` | `disable` | PostgreSQL SSL mode |

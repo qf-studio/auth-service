@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
@@ -60,7 +61,7 @@ func (m *mockAuthServer) IntrospectToken(ctx context.Context, req *authv1.Intros
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
-func setupClient(t *testing.T, srv authv1.AuthServiceServer) *authclient.Client {
+func setupClient(t *testing.T, srv authv1.AuthServiceServer, opts ...authclient.Option) *authclient.Client {
 	t.Helper()
 
 	lis := bufconn.Listen(bufSize)
@@ -83,7 +84,7 @@ func setupClient(t *testing.T, srv authv1.AuthServiceServer) *authclient.Client 
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	return authclient.NewFromConn(conn, authclient.WithInsecure())
+	return authclient.NewFromConn(conn, append([]authclient.Option{authclient.WithInsecure()}, opts...)...)
 }
 
 // ── ValidateToken tests ───────────────────────────────────────────────────────
@@ -268,4 +269,38 @@ func TestGetUser_NotFound(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+// ── WithServiceToken tests ────────────────────────────────────────────────────
+
+func TestWithServiceToken_SendsAuthorizationHeader(t *testing.T) {
+	var got []string
+	srv := &mockAuthServer{
+		validateFn: func(ctx context.Context, _ *authv1.ValidateTokenRequest) (*authv1.ValidateTokenResponse, error) {
+			md, _ := metadata.FromIncomingContext(ctx)
+			got = md.Get("authorization")
+			return &authv1.ValidateTokenResponse{Valid: true}, nil
+		},
+	}
+	client := setupClient(t, srv, authclient.WithServiceToken("fake-service-token-for-tests"))
+
+	_, err := client.ValidateToken(context.Background(), "qf_at_fake")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Bearer fake-service-token-for-tests"}, got)
+}
+
+func TestWithoutServiceToken_OmitsAuthorizationHeader(t *testing.T) {
+	var got []string
+	srv := &mockAuthServer{
+		validateFn: func(ctx context.Context, _ *authv1.ValidateTokenRequest) (*authv1.ValidateTokenResponse, error) {
+			md, _ := metadata.FromIncomingContext(ctx)
+			got = md.Get("authorization")
+			return &authv1.ValidateTokenResponse{Valid: true}, nil
+		},
+	}
+	client := setupClient(t, srv)
+
+	_, err := client.ValidateToken(context.Background(), "qf_at_fake")
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }

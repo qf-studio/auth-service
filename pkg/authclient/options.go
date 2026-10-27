@@ -22,6 +22,7 @@ type options struct {
 	backoffFactor  float64
 	tlsConfig      *tls.Config
 	insecure       bool
+	serviceToken   string
 }
 
 func defaultOptions() options {
@@ -67,5 +68,15 @@ func WithTLS(cfg *tls.Config) Option {
 func WithInsecure() Option {
 	return func(o *options) {
 		o.insecure = true
+	}
+}
+
+// WithServiceToken attaches "authorization: Bearer <token>" to every RPC. The
+// token must be one of the auth service's GRPC_CLIENT_TOKENS; it is required
+// once the server runs with GRPC_AUTH_MODE=enforce. Pair it with WithTLS: over
+// WithInsecure the token travels in cleartext.
+func WithServiceToken(token string) Option {
+	return func(o *options) {
+		o.serviceToken = token
 	}
 }

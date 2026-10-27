@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	authv1 "github.com/qf-studio/auth-service/proto/auth/v1"
@@ -110,6 +111,9 @@ func (c *Client) do(ctx context.Context, fn func(ctx context.Context) error) err
 
 	for attempt := 0; attempt <= c.opts.maxRetries; attempt++ {
 		callCtx, cancel := c.withTimeout(ctx)
+		if c.opts.serviceToken != "" {
+			callCtx = metadata.AppendToOutgoingContext(callCtx, "authorization", "Bearer "+c.opts.serviceToken)
+		}
 		lastErr = fn(callCtx)
 		cancel()
 

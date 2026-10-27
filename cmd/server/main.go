@@ -336,6 +336,12 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 
 	// ── gRPC server ──────────────────────────────────────────────────────
+	if cfg.GRPC.AuthMode != config.GRPCAuthEnforce {
+		log.Warn("grpc caller authentication is not enforced; set GRPC_AUTH_MODE=enforce once all consumers send a service token",
+			zap.String("grpc_auth_mode", cfg.GRPC.AuthMode),
+			zap.Int("grpc_client_tokens", len(cfg.GRPC.ClientTokens)),
+		)
+	}
 	grpcSrv, err := grpcserver.NewServer(grpcserver.ServerDeps{
 		TokenSvc:  tokenSvc,
 		UserRepo:  userRepo,
@@ -344,6 +350,9 @@ func run(log *zap.Logger, cfg *config.Config) error {
 		Port:      cfg.App.GRPCPort,
 		Metrics:   metricsCollector,
 		RBACSvc:   rbacSvc,
+
+		AuthMode:     grpcserver.AuthMode(cfg.GRPC.AuthMode),
+		ClientTokens: cfg.GRPC.ClientTokens,
 	})
 	if err != nil {
 		return fmt.Errorf("grpc server init failed: %w", err)

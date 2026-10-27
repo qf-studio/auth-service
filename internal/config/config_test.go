@@ -869,3 +869,54 @@ func TestLoad_AuditRetentionDays(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_GRPCDefaults(t *testing.T) {
+	setEnv(t, requiredEnv())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, GRPCAuthWarn, cfg.GRPC.AuthMode)
+	assert.Empty(t, cfg.GRPC.ClientTokens)
+}
+
+func TestLoad_GRPCAuth(t *testing.T) {
+	const (
+		tokA = "fake-grpc-client-token-aaaaaaaaaaaaaaaa"
+		tokB = "fake-grpc-client-token-bbbbbbbbbbbbbbbb"
+	)
+	tests := []struct {
+		name       string
+		mode       string
+		tokens     string
+		wantMode   string
+		wantTokens []string
+		wantErr    string
+	}{
+		{name: "enforce with tokens", mode: "enforce", tokens: tokA + ", " + tokB, wantMode: "enforce", wantTokens: []string{tokA, tokB}},
+		{name: "mode is case-insensitive", mode: "OFF", wantMode: "off"},
+		{name: "warn with token", mode: "warn", tokens: tokA, wantMode: "warn", wantTokens: []string{tokA}},
+		{name: "unknown mode", mode: "strict", wantErr: "GRPC_AUTH_MODE"},
+		{name: "enforce without tokens", mode: "enforce", wantErr: "GRPC_CLIENT_TOKENS"},
+		{name: "short token", mode: "warn", tokens: "too-short", wantErr: "shorter than 32 bytes"},
+		{name: "short second token", mode: "warn", tokens: tokA + ",short", wantErr: "entry 2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := requiredEnv()
+			env["GRPC_AUTH_MODE"] = tt.mode
+			env["GRPC_CLIENT_TOKENS"] = tt.tokens
+			setEnv(t, env)
+
+			cfg, err := Load()
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.NotContains(t, err.Error(), "too-short", "token values must not appear in errors")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMode, cfg.GRPC.AuthMode)
+			assert.Equal(t, tt.wantTokens, cfg.GRPC.ClientTokens)
+		})
+	}
+}
