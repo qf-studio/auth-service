@@ -155,7 +155,7 @@ func TestWebhookRepository_SecretEncryptedAtRest(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	wh := &domain.Webhook{
+	wh := &domain.Webhook{ //nolint:gosec // G101: obviously fake test secret
 		ID: uuid.New(), TenantID: domain.DefaultTenantID, URL: "https://example.test/hook",
 		SecretHash: "whsec_fake_secret", EventTypes: []string{"user.created"}, Active: true,
 		CreatedAt: now, UpdatedAt: now,

@@ -37,7 +37,7 @@ func Digest(token string) string {
 }
 
 // Box encrypts and decrypts secrets. A nil *Box is valid and passes values
-// through unchanged: that is the documented behaviour when no key is set.
+// through unchanged: that is the documented behavior when no key is set.
 type Box struct {
 	aead cipher.AEAD
 }

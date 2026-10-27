@@ -23,7 +23,7 @@ type PostgresMFARepository struct {
 
 // NewPostgresMFARepository creates a new PostgreSQL-backed MFA repository.
 // box seals TOTP secrets at rest; a nil box stores them in plaintext (the
-// DATA_ENCRYPTION_KEY-unset behaviour).
+// DATA_ENCRYPTION_KEY-unset behavior).
 func NewPostgresMFARepository(pool *pgxpool.Pool, box *secretbox.Box) *PostgresMFARepository {
 	return &PostgresMFARepository{pool: pool, box: box}
 }
@@ -93,10 +93,7 @@ func (r *PostgresMFARepository) GetSecret(ctx context.Context, tenantID uuid.UUI
 	// Best effort: the secret is already in hand, and the one-shot
 	// EncryptExistingSecrets job covers rows that are never read.
 	if r.box.Enabled() && !secretbox.IsEncrypted(stored) {
-		if err := r.sealSecretRow(ctx, out.ID, stored, out.Secret); err != nil {
-			// Not fatal: verification must still work.
-			return out, nil
-		}
+		_ = r.sealSecretRow(ctx, out.ID, stored, out.Secret) // failure is not fatal: the secret is already decrypted for this call
 	}
 
 	return out, nil

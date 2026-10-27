@@ -79,7 +79,7 @@ type PostgresWebhookRepository struct {
 
 // NewPostgresWebhookRepository creates a new PostgreSQL-backed webhook repository.
 // box seals signing secrets at rest; a nil box stores them in plaintext (the
-// DATA_ENCRYPTION_KEY-unset behaviour). The domain field is still named
+// DATA_ENCRYPTION_KEY-unset behavior). The domain field is still named
 // SecretHash, but it holds the raw HMAC signing secret, which has to be
 // readable to sign deliveries; callers always see the decrypted value.
 func NewPostgresWebhookRepository(pool *pgxpool.Pool, box *secretbox.Box) *PostgresWebhookRepository {
