@@ -371,7 +371,7 @@ func TestLogin_SessionCreationFailure_IsLogged(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
 	authSvc := &mockAuthService{
 		loginFn: func(_ context.Context, _, _ string) (*api.AuthResult, error) {
-			return &api.AuthResult{AccessToken: "qf_at_test", RefreshToken: "qf_rt_test", UserID: "user-1"}, nil
+			return &api.AuthResult{UserID: "user-1"}, nil
 		},
 	}
 	sessionSvc := &mockSessionService{
@@ -425,7 +425,7 @@ func TestMFAVerify_CreatesSession(t *testing.T) {
 	}
 	mfaSvc := &mockMFAService{
 		completeMFALoginFn: func(_ context.Context, _, _, _ string) (*api.AuthResult, error) {
-			return &api.AuthResult{AccessToken: "qf_at_mfa", RefreshToken: "qf_rt_mfa", UserID: "user-7"}, nil
+			return &api.AuthResult{UserID: "user-7"}, nil
 		},
 	}
 	r := newSessionTestRouterWith(&mockAuthService{}, sessionSvc, mfaSvc)
@@ -449,7 +449,7 @@ func TestMFAVerify_SessionCreationFailure_IsLoggedAndDoesNotBlock(t *testing.T) 
 	}
 	mfaSvc := &mockMFAService{
 		completeMFALoginFn: func(_ context.Context, _, _, _ string) (*api.AuthResult, error) {
-			return &api.AuthResult{AccessToken: "qf_at_mfa", UserID: "user-7"}, nil
+			return &api.AuthResult{UserID: "user-7"}, nil
 		},
 	}
 	r := newSessionTestRouterWith(&mockAuthService{}, sessionSvc, mfaSvc, zap.New(core))
