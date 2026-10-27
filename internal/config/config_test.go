@@ -380,7 +380,7 @@ func TestPostgresConfig_DSN(t *testing.T) {
 }
 
 func TestPostgresConfig_DSN_SpecialCharacters(t *testing.T) {
-	c := PostgresConfig{
+	c := PostgresConfig{ //nolint:gosec // fake test credential
 		Host:     "db.example.com",
 		Port:     5432,
 		DB:       "mydb",
