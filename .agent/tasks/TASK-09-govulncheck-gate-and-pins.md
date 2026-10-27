@@ -1,8 +1,8 @@
 # TASK-09: ci: pin the Go toolchain, add a govulncheck gate, and pin actions and base images
 
 **Created:** 2026-10-26
-**Status:** 🚀 Dispatched to Pilot (label `pilot` added 2026-10-26 after #538 merged as #549)
-**Last Updated:** 2026-10-26
+**Status:** ✅ Merged as #553 (not reviewed by Navigator)
+**Last Updated:** 2026-10-27
 
 ## Context
 

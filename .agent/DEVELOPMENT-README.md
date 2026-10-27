@@ -3,7 +3,7 @@
 **Project**: Authentication service for QuantFlow Studio ecosystem
 **Tech Stack**: Go 1.24+, Gin, PostgreSQL (pgx/v5), Redis (go-redis/v9), JWT (ES256/EdDSA)
 **Repo**: github.com/qf-studio/auth-service
-**Updated**: 2026-10-26
+**Updated**: 2026-10-27
 
 ---
 
@@ -53,15 +53,16 @@
 
 ## Current Focus
 
-### Status (2026-10-26)
-**Live at `auth.quantflow.studio`** (AWS ECS, see Deployment). Releases: **v0.76.1** (2026-10-26, deploy awaiting approval), v0.76.0 (2026-10-26, deployed), v0.74.0, v0.73.0. Train daily 16:00 Berlin; manual `v*` cuts are safe.
+### Status (2026-10-27)
+**Live at `auth.quantflow.studio`** (AWS ECS, see Deployment). Releases: **v0.76.1** (2026-10-26, deployed: ECS task def :15, 2/2), v0.76.0, v0.74.0, v0.73.0. Train daily 16:00 Berlin (15:00Z in winter time, 14:00Z in summer time); manual `v*` cuts are safe. Every deploy waits for the `aws-quantflow` required reviewer.
 
 **Hardening batch 2026-10-26** (security review 004; local-only report `tasks/TASK-02-security-review-004.md`, not committed — public repo):
 - v0.76.0 (PR #523, Navigator): refresh-token lifecycle, client IP from trusted proxies only, email-revert window, MFA disable step-up, login/MFA attempt limits.
 - v0.76.1 (Pilot wave 1 + follow-ups): #544 OIDC scopes/PKCE/userinfo, #545 webhook target restrictions, #546 breached-password check, #547 dependency bumps (Go 1.26), #548 DPoP-bound refresh tokens, #549 deploy-workflow input handling, #550 OIDC refresh only with `offline_access`, #551 login-accept checks + audit.
-- On main after v0.76.1: #553 toolchain pin, govulncheck CI gate, action SHA + image digest pins, Dependabot.
-- **Next**: review merged #548/#550/#551 (merged by autopilot, not yet reviewed), then label `pilot` on #542 (needs #550) and wave 2 #524–#527; wave 3 #528–#531 after wave 2; #540 after #524/#525/#530.
-- Ops before wave-2/3 releases deploy: `ADMIN_API_TOKENS` (#524), gRPC client tokens (#525), `REDIS_PASSWORD` + `DATA_ENCRYPTION_KEY` then `CONFIG_STRICT=true` (#530/#531).
+- On main after v0.76.1 (next release, reviewed by Navigator): #553 toolchain pin + govulncheck gate + pins + Dependabot; wave 2 #566 admin bearer (#524), #567 gRPC auth off/warn/enforce, default `warn` (#525), #569 email normalization + migration `000022` (#526), #571 audit persistence + migration `000023` (#527); #570 rejects `CHANGE_ME` admin tokens; #572 code-reuse revocation (#542).
+- **Deploy gate for the next release**: run the read-only email case-collision check first (TASK-11, #573: needs a temporary IAM grant from Nelya). `000022` fails on collisions.
+- Wave 3 #528–#531 dispatched to Pilot 2026-10-27 (bare paths in #529/#530 fixed first). #540 after #530 merges. 12 Dependabot PRs open (#554–#565); do not merge #554 (golang 1.27 image vs `toolchain go1.26.10`).
+- Ops (TASK-10, #568, Nelya): `ADMIN_API_TOKENS` (else `/admin/*` 503), `GRPC_CLIENT_TOKENS` then `GRPC_AUTH_MODE=enforce`, `REDIS_PASSWORD` + `REDIS_TLS`, `DATA_ENCRYPTION_KEY`, then `CONFIG_STRICT=true`. Blocker: the stack template in S3 is KMS-encrypted.
 - Breaking for clients since v0.76.0: `POST /auth/mfa/disable` needs `{password, code}`; login 429 after repeated failures; email change inside the revert window → 409; OIDC code flow needs PKCE for all clients and `offline_access` for a refresh token; `go` minimum for `pkg/authclient` consumers is now 1.26.
 
 **Open issues (non-hardening)**:
@@ -102,12 +103,12 @@
 | [gh-431](./tasks/gh-431.md) | OIDC provider services implementation (children gh-467→470) | ✅ Complete (v0.70.0) |
 | [gh-473](./tasks/gh-473.md) | Token-type hardening: gRPC qf_at_ gate + client_type claim gate | ✅ Complete (v0.70.0, PR #476) |
 | [TASK-01](./tasks/TASK-01-e2e-canary-strategy.md) | E2E & canary test strategy | 🚀 L1 done; canary #496 awaiting token |
-| TASK-02 (local only) | Security review 004 report — commit after waves 2–3 merge | 🚧 Waves 2–3 pending |
+| TASK-02 (local only) | Security review 004 report — commit after waves 2–3 merge | 🚧 Wave 2 merged; wave 3 dispatched |
 | [TASK-03](./tasks/TASK-03-workflow-inputs-via-env.md) | Deploy workflow inputs via env + validation (#538) | ✅ #549 |
 | [TASK-04](./tasks/TASK-04-dpop-bound-refresh-tokens.md) | DPoP-bound refresh tokens (#539) | ✅ #548 (reviewed) |
-| [TASK-05](./tasks/TASK-05-dpop-use-full-validator.md) | Full `dpop.Validator` (#540) | 📋 after #524/#525/#530 |
+| [TASK-05](./tasks/TASK-05-dpop-use-full-validator.md) | Full `dpop.Validator` (#540) | 📋 after #530 (#524/#525 merged) |
 | [TASK-06](./tasks/TASK-06-oidc-refresh-only-with-offline-access.md) | OIDC refresh only with `offline_access` (#541) | ✅ #550 (reviewed) |
-| [TASK-07](./tasks/TASK-07-oidc-revoke-tokens-on-code-reuse.md) | Revoke tokens on code reuse (#542) | 🚀 `pilot` labeled |
+| [TASK-07](./tasks/TASK-07-oidc-revoke-tokens-on-code-reuse.md) | Revoke tokens on code reuse (#542) | ✅ #572 (reviewed) |
 | [TASK-08](./tasks/TASK-08-oidc-login-accept-checks.md) | Login-accept checks + audit (#543) | ✅ #551 (reviewed) |
 | [TASK-09](./tasks/TASK-09-govulncheck-gate-and-pins.md) | Toolchain pin, govulncheck gate, pins (#552) | ✅ #553 |
 | [TASK-10](./tasks/TASK-10-prod-secrets-for-hardening-waves.md) | Prod secrets/settings for waves 2–3 (#568, Nelya) | 📋 Assigned |

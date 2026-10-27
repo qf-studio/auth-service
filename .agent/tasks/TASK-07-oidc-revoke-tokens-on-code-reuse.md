@@ -1,8 +1,8 @@
 # TASK-07: fix(oidc): revoke tokens issued from an authorization code when the code is redeemed again
 
 **Created:** 2026-10-26
-**Status:** 📋 Filed as #542 without the `pilot` label — add it after #541 merges
-**Last Updated:** 2026-10-26
+**Status:** ✅ Merged as #572 (reviewed 2026-10-27: clean)
+**Last Updated:** 2026-10-27
 
 ## Context
 

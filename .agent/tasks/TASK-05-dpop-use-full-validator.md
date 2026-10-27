@@ -1,8 +1,8 @@
 # TASK-05: fix(dpop): validate DPoP proofs with the full dpop.Validator (ath, alg allow-list, one-shot nonces)
 
 **Created:** 2026-10-26
-**Status:** 📋 Filed as #540 without the `pilot` label — add it after #524, #525 and #530 merge
-**Last Updated:** 2026-10-26
+**Status:** 📋 Filed as #540 without the `pilot` label — add it after #530 merges (#524 and #525 merged 2026-10-27)
+**Last Updated:** 2026-10-27
 
 ## Context
 

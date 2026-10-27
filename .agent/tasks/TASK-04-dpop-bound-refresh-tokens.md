@@ -1,8 +1,8 @@
 # TASK-04: fix(dpop): keep refresh tokens bound to the DPoP key they were issued with
 
 **Created:** 2026-10-26
-**Status:** 🚀 Dispatched to Pilot (label `pilot`)
-**Last Updated:** 2026-10-26
+**Status:** ✅ Merged as #548 (reviewed 2026-10-26: clean; shipped in v0.76.1)
+**Last Updated:** 2026-10-27
 
 ## Context
 
