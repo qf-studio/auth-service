@@ -4,18 +4,26 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/qf-studio/auth-service/internal/domain"
 )
 
 // MFAHandlers groups HTTP handlers for MFA endpoints.
 type MFAHandlers struct {
-	mfa MFAService
+	mfa     MFAService
+	session SessionService
+	log     *zap.Logger
 }
 
-// NewMFAHandlers creates a new MFAHandlers with the given MFAService.
-func NewMFAHandlers(mfa MFAService) *MFAHandlers {
-	return &MFAHandlers{mfa: mfa}
+// NewMFAHandlers creates a new MFAHandlers with the given MFAService and an
+// optional SessionService for session creation once the MFA challenge passes.
+// A nil logger is replaced by a no-op logger.
+func NewMFAHandlers(mfa MFAService, session SessionService, log *zap.Logger) *MFAHandlers {
+	if log == nil {
+		log = zap.NewNop()
+	}
+	return &MFAHandlers{mfa: mfa, session: session, log: log}
 }
 
 // Setup handles POST /auth/mfa/setup.
@@ -88,6 +96,8 @@ func (h *MFAHandlers) Verify(c *gin.Context) {
 		handleServiceError(c, err)
 		return
 	}
+
+	recordSession(c, h.session, h.log, result.UserID)
 
 	c.JSON(http.StatusOK, result)
 }

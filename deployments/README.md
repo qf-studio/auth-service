@@ -49,7 +49,7 @@ Covers staging and production environments, secrets management, monitoring, roll
 | Service | Version | Notes |
 |---------|---------|-------|
 | PostgreSQL | 16+ | `postgres:16-alpine` image. Staging: exposed on port 5432. Production: internal-only. |
-| Redis | 7+ | `redis:7-alpine` image. Staging: exposed on port 6379. Production: internal-only, AOF persistence. |
+| Redis | 7+ | `redis:7-alpine` image. Staging: exposed on port 6379. Production: internal-only, AOF persistence. User sessions (`GET`/`DELETE /auth/sessions`) are stored under `session:*`, so every service task must use the same Redis; each session expires after `REFRESH_TOKEN_TTL`. `DELETE /auth/sessions` also revokes the user's refresh tokens. |
 
 ### TLS Certificate
 
