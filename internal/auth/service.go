@@ -358,15 +358,20 @@ func (s *Service) issueEmailVerification(ctx context.Context, tenantID uuid.UUID
 		Subject: "Verify your email",
 		Body:    fmt.Sprintf("Use the link below to verify your email address:\n\n%s\n\nThis link expires in %s.", link, humanizeDuration(verifyTokenTTL)),
 	}
-	if sendErr := s.email.Send(ctx, msg); sendErr != nil {
-		s.logger.Error("failed to send email verification email", zap.String("user_id", user.ID), zap.Error(sendErr))
-		s.audit.LogEvent(ctx, audit.Event{
+	// Sent in the background, like the duplicate-registration notice, so a new
+	// registration and one for an existing address take the same time (GH-528).
+	// The token above is persisted first, so the link is valid once delivered.
+	auditCtx := context.WithoutCancel(ctx)
+	userID, userEmail := user.ID, user.Email
+	s.sendEmailAsync(ctx, msg, func() {
+		s.logger.Error("failed to send email verification email", zap.String("user_id", userID))
+		s.audit.LogEvent(auditCtx, audit.Event{
 			Type:     audit.EventEmailVerifyEmailFailed,
-			ActorID:  user.ID,
-			TargetID: user.ID,
-			Metadata: map[string]string{"email": user.Email},
+			ActorID:  userID,
+			TargetID: userID,
+			Metadata: map[string]string{"email": userEmail},
 		})
-	}
+	})
 }
 
 // VerifyEmail marks a user's email as verified using the token from the

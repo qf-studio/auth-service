@@ -1364,6 +1364,7 @@ func TestRegister_IssuesEmailVerificationTokenAndSendsLink(t *testing.T) {
 	before := time.Now().UTC()
 	info, err := svc.Register(context.Background(), "test@example.com", "valid-password-12345", "Test User")
 	require.NoError(t, err)
+	svc.waitBackground() // the verification email is sent in the background (GH-528)
 
 	assert.Equal(t, "user-1", tokenUserID)
 	assert.Len(t, tokenValue, resetTokenBytes*2, "hex-encoded 32-byte token")
@@ -1392,6 +1393,7 @@ func TestRegister_EmailSendFailure_RegistrationStillSucceeds(t *testing.T) {
 	info, err := svc.Register(context.Background(), "test@example.com", "valid-password-12345", "Test User")
 	require.NoError(t, err, "a verification email delivery failure must not fail registration")
 	assert.Equal(t, "test@example.com", info.Email)
+	svc.waitBackground() // the verification email is sent in the background (GH-528)
 	assert.Len(t, sender.sent, 1, "send should still have been attempted")
 }
 
@@ -2397,6 +2399,7 @@ func TestMailBodies_HumanizedExpiry(t *testing.T) {
 			sender := &mockEmailSender{}
 			svc, _ := newMiniredisService(t, users, sender)
 			tt.trigger(t, svc, sender)
+			svc.waitBackground() // some mails are sent in the background (GH-528)
 
 			require.Len(t, sender.sent, len(tt.want))
 			for i, msg := range sender.sent {
