@@ -836,3 +836,36 @@ func TestLoad_AdminAPITokens(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_AuditRetentionDays(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int
+		wantErr string
+	}{
+		{"unset defaults to 365", "", 365, ""},
+		{"explicit", "30", 30, ""},
+		{"zero keeps forever", "0", 0, ""},
+		{"negative rejected", "-1", 0, "AUDIT_RETENTION_DAYS"},
+		{"not a number", "abc", 0, "AUDIT_RETENTION_DAYS"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := requiredEnv()
+			if tc.value != "" {
+				env["AUDIT_RETENTION_DAYS"] = tc.value
+			}
+			setEnv(t, env)
+
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, cfg.Audit.RetentionDays)
+		})
+	}
+}

@@ -184,6 +184,7 @@ All configuration is via environment variables. See [`internal/config/config.go`
 | `PUBLIC_PORT` | `4000` | Public API port |
 | `ADMIN_PORT` | `4001` | Admin API port |
 | `ADMIN_API_TOKENS` | _(empty)_ | Comma-separated bearer tokens (each ≥ 32 bytes; two accepted at once for rotation) required on every `/admin/*` route. Empty disables the admin API (`503 admin_api_disabled`) without stopping the service. |
+| `AUDIT_RETENTION_DAYS` | `365` | Audit events are persisted to `audit_logs` (batched, up to 100 events / 1 s) as well as logged; rows older than this many days are deleted daily. `0` keeps rows forever. |
 | `GRPC_PORT` | `4002` | gRPC port |
 | `LOG_LEVEL` | `info` | Log level |
 | `POSTGRES_PORT` | `5432` | PostgreSQL port |

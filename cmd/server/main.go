@@ -94,8 +94,17 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	clientRepo := storage.NewPostgresClientRepository(pgPool)
 	consentGrantRepo := storage.NewPostgresConsentGrantRepository(pgPool)
 
+	// ── Metrics ───────────────────────────────────────────────────────────
+	metricsCollector := metrics.New()
+
 	// ── Audit ─────────────────────────────────────────────────────────────
-	auditSvc := audit.NewService(log, 1024)
+	// Events go to zap and, in batches, to audit_logs; failures and buffer
+	// overflow are counted in metricsCollector.
+	auditSvc := audit.NewServiceWithOptions(log, 1024, audit.Options{
+		Sink:          storage.NewPostgresAuditSink(pgPool),
+		Drops:         metricsCollector,
+		RetentionDays: cfg.Audit.RetentionDays,
+	})
 
 	// ── Services ─────────────────────────────────────────────────────────
 	hasher := password.New([]byte(cfg.Argon2.Pepper))
@@ -243,9 +252,6 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	}
 	healthSvc := health.NewService(healthCheckers...)
 
-	// ── Metrics ───────────────────────────────────────────────────────────
-	metricsCollector := metrics.New()
-
 	// ── Repositories (admin) ─────────────────────────────────────────────
 	adminUserRepo := storage.NewPostgresAdminUserRepository(pgPool)
 	apiKeyRepo := storage.NewPostgresAPIKeyRepository(pgPool)
@@ -260,6 +266,7 @@ func run(log *zap.Logger, cfg *config.Config) error {
 	// ── Admin services ────────────────────────────────────────────────────
 	adminUserSvc := admin.NewUserService(adminUserRepo, hasher, log, auditSvc)
 	adminUserSvc.SetBreachChecker(hibpClient)
+	adminUserSvc.SetAuditReadRepo(storage.NewPostgresAuditReadRepository(pgPool))
 	adminClientSvc := admin.NewClientService(clientRepo, hasher, log, auditSvc)
 	adminTokenSvc := admin.NewTokenService(tokenSvc, sessionTokenRepo, "auth-service", log, auditSvc)
 	adminAPIKeySvc := admin.NewAPIKeyService(apiKeyRepo, log, auditSvc)

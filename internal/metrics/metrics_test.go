@@ -14,6 +14,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRecordAuditDropped(t *testing.T) {
+	c := New()
+
+	c.RecordAuditDropped("buffer_full", 1)
+	c.RecordAuditDropped("sink_error", 3)
+	c.RecordAuditDropped("sink_error", 2)
+	c.RecordAuditDropped("sink_error", 0) // ignored
+
+	snap, ok := c.JSONExport().(JSONSnapshot)
+	require.True(t, ok)
+	assert.Equal(t, int64(1), snap.AuditDropped["buffer_full"])
+	assert.Equal(t, int64(5), snap.AuditDropped["sink_error"])
+
+	out := c.PrometheusExport()
+	assert.Contains(t, out, `audit_events_dropped_total{reason="buffer_full"} 1`)
+	assert.Contains(t, out, `audit_events_dropped_total{reason="sink_error"} 5`)
+}
+
+func TestPrometheusExport_NoAuditDropped(t *testing.T) {
+	assert.NotContains(t, New().PrometheusExport(), "audit_events_dropped_total")
+}
+
 func TestNew(t *testing.T) {
 	c := New()
 	assert.NotNil(t, c)

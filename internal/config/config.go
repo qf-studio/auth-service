@@ -30,6 +30,7 @@ type Config struct {
 	HIBP         HIBPConfig
 	Proxy        ProxyConfig
 	Admin        AdminConfig
+	Audit        AuditConfig
 }
 
 // TenantConfig holds multi-tenancy resolution settings.
@@ -98,6 +99,16 @@ type HIBPConfig struct {
 
 // MinAdminTokenBytes is the minimum length of each ADMIN_API_TOKENS value.
 const MinAdminTokenBytes = 32
+
+// DefaultAuditRetentionDays is the audit_logs retention when AUDIT_RETENTION_DAYS is unset.
+const DefaultAuditRetentionDays = 365
+
+// AuditConfig holds audit log persistence settings.
+type AuditConfig struct {
+	// RetentionDays: AUDIT_RETENTION_DAYS, audit_logs rows older than this are
+	// deleted daily (default 365). 0 keeps rows forever.
+	RetentionDays int
+}
 
 // AdminConfig holds admin API (:4001) authentication settings.
 type AdminConfig struct {
@@ -350,6 +361,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	auditCfg, err := loadAudit(l)
+	if err != nil {
+		return nil, err
+	}
+
 	if len(l.missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(l.missing, ", "))
 	}
@@ -377,6 +393,7 @@ func Load() (*Config, error) {
 		HIBP:         hibpCfg,
 		Proxy:        proxyCfg,
 		Admin:        adminCfg,
+		Audit:        auditCfg,
 	}, nil
 }
 
@@ -407,9 +424,20 @@ func loadAdmin(l *loader) (AdminConfig, error) {
 	return AdminConfig{APITokens: tokens}, nil
 }
 
+// loadAudit reads AUDIT_RETENTION_DAYS (0 disables pruning).
+func loadAudit(l *loader) (AuditConfig, error) {
+	days, err := l.optInt("AUDIT_RETENTION_DAYS", DefaultAuditRetentionDays)
+	if err != nil {
+		return AuditConfig{}, err
+	}
+	if days < 0 {
+		return AuditConfig{}, fmt.Errorf("AUDIT_RETENTION_DAYS: must be >= 0, got %d", days)
+	}
+	return AuditConfig{RetentionDays: days}, nil
+}
+
 // loadProxy reads TRUSTED_PROXY_CIDRS and parses each entry as a CIDR. It has
 // no required fields, so it never contributes to l.missing.
-
 func loadProxy(l *loader) (ProxyConfig, error) {
 	raw := l.optStr("TRUSTED_PROXY_CIDRS", "")
 	entries := splitCSV(raw)
