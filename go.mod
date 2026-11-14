@@ -24,7 +24,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/redis v0.43.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/crypto v0.57.0
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
